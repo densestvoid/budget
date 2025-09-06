@@ -69,7 +69,7 @@ resource "digitalocean_droplet" "budget_app" {
   tags = ["budget", "app", "production"]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    database_url = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "sqlite:///app/data/budget.db"
+    database_url = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "postgres://budget_user:budget_password@postgres:5432/budget?sslmode=disable"
     app_port     = var.app_port
     auto_terminate_minutes = var.auto_terminate_minutes
     github_repo = var.github_repo

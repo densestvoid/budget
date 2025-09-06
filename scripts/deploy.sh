@@ -169,8 +169,16 @@ run_migrations() {
     
     # Run migrations on the server
     ssh -o StrictHostKeyChecking=no root@$APP_IP << 'EOF'
-        # Run migrations using the deployed application
-        su - budget -c "cd /home/budget && docker-compose exec app ./budget migrate"
+        # Wait for PostgreSQL to be ready
+        su - budget -c "
+            cd /home/budget
+            echo 'Waiting for PostgreSQL to be ready...'
+            timeout 60 bash -c 'until docker-compose exec -T postgres pg_isready -U budget_user -d budget; do sleep 2; done'
+            
+            # Run migrations using the deployed application
+            echo 'Running database migrations...'
+            docker-compose exec -T app ./budget migrate || echo 'Migration command not available, skipping...'
+        "
 EOF
     
     print_success "Database migrations completed"

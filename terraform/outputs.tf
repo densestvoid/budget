@@ -14,18 +14,18 @@ output "app_private_ip" {
 # Database outputs (only if managed database is used)
 output "database_host" {
   description = "Database host (private) - only available if use_managed_db is true"
-  value       = var.use_managed_db ? digitalocean_database_cluster.budget_db[0].private_host : "SQLite (local file)"
+  value       = var.use_managed_db ? digitalocean_database_cluster.budget_db[0].private_host : "PostgreSQL (containerized)"
   sensitive   = true
 }
 
 output "database_type" {
   description = "Database type being used"
-  value       = var.use_managed_db ? "PostgreSQL (managed)" : "SQLite (local)"
+  value       = var.use_managed_db ? "PostgreSQL (managed)" : "PostgreSQL (containerized)"
 }
 
 output "database_connection_string" {
   description = "Database connection string"
-  value       = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "sqlite:///app/data/budget.db"
+  value       = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "postgres://budget_user:budget_password@postgres:5432/budget?sslmode=disable"
   sensitive   = true
 }
 
@@ -54,7 +54,7 @@ output "application_url" {
 # Cost optimization info
 output "estimated_monthly_cost" {
   description = "Estimated monthly cost in USD"
-  value       = var.use_managed_db ? "$19 (droplet $4 + database $15)" : "$4 (droplet only with SQLite)"
+  value       = var.use_managed_db ? "$19 (droplet $4 + database $15)" : "$4 (droplet only with containerized PostgreSQL)"
 }
 
 # Auto-termination info

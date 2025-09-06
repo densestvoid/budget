@@ -188,13 +188,16 @@ jobs:
           # Run migrations
           su - budget -c "
             cd /home/budget
+            # Wait for PostgreSQL to be ready
+            echo 'Waiting for PostgreSQL to be ready...'
+            timeout 60 bash -c 'until docker-compose exec -T postgres pg_isready -U budget_user -d budget; do sleep 2; done'
+            
             # Wait for app to be ready
             timeout 60 bash -c 'while ! curl -f http://localhost:8080/health; do sleep 2; done'
             
-            # Run migrations if using a container with migration support
-            if docker ps | grep budget-app; then
-              docker exec budget-app ./budget migrate || echo 'Migration command not available, skipping...'
-            fi
+            # Run migrations using the deployed application
+            echo 'Running database migrations...'
+            docker-compose exec -T app ./budget migrate || echo 'Migration command not available, skipping...'
           "
         EOF
     
@@ -250,9 +253,9 @@ jobs:
             body: `## 🚀 Deployment Preview
             
             This PR would trigger a deployment with the following configuration:
-            - **Cost**: ~$4/month (cost-optimized with SQLite)
+            - **Cost**: ~$4/month (cost-optimized with containerized PostgreSQL)
             - **Auto-termination**: 30 minutes
-            - **Database**: SQLite (local file)
+            - **Database**: PostgreSQL (containerized, not accessible from outside)
             - **Instance**: 512MB RAM droplet
             
             Deployment will be triggered when this PR is merged to main.

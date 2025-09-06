@@ -7,7 +7,7 @@ This guide walks you through deploying the Budget App to DigitalOcean using Terr
 The deployment creates the **cheapest possible** setup:
 - **VPC**: Private network for secure communication (FREE)
 - **Droplet**: 512MB RAM Ubuntu 22.04 server ($4/month)
-- **SQLite Database**: Local file-based database (FREE)
+- **PostgreSQL Database**: Containerized PostgreSQL (FREE - runs on same droplet)
 - **Direct Access**: No load balancer to save costs (saves $12/month)
 - **Auto-Termination**: Automatically shuts down after 30 minutes
 - **Firewall**: Security rules for the application (FREE)
@@ -65,7 +65,7 @@ do_token = "your-digitalocean-api-token-here"
 # Cost-optimized settings
 region       = "nyc1"
 droplet_size = "s-1vcpu-512mb-10gb"    # Cheapest at $4/month
-use_managed_db = false                  # Use SQLite to save $15/month
+use_managed_db = false                  # Use containerized PostgreSQL to save $15/month
 
 # Auto-termination
 auto_terminate_minutes = 30             # Auto-shutdown after 30 min
@@ -122,8 +122,8 @@ If you prefer to run steps individually:
 ## 💰 Cost Optimization Features
 
 ### Database Options
-- **SQLite (default)**: FREE - Local file database, perfect for testing/demos
-- **Managed PostgreSQL**: $15/month - Only enable if you need production-grade features
+- **Containerized PostgreSQL (default)**: FREE - PostgreSQL running in Docker container, only accessible from application
+- **Managed PostgreSQL**: $15/month - Only enable if you need production-grade features with backups and high availability
 
 ### Droplet Sizes (Cost-Optimized)
 - `s-1vcpu-512mb-10gb`: **Ultra-cheap** (512MB RAM) - $4/month ⭐ **RECOMMENDED**
@@ -225,7 +225,7 @@ The current setup uses a single droplet. For multiple droplets:
 
 ### Ultra-Cost-Optimized (Default)
 - **Droplet**: $4/month (512MB RAM)
-- **Database**: FREE (SQLite)
+- **Database**: FREE (containerized PostgreSQL)
 - **Load Balancer**: REMOVED (saves $12/month)
 - **Total**: **$4/month** or **$0.13/day**
 

@@ -10,7 +10,7 @@ packages:
   - wget
   - unzip
   - nginx
-  - sqlite3
+  - postgresql-client  # For PostgreSQL access
   - at  # For scheduling auto-termination
 
 # Create budget user
@@ -39,6 +39,27 @@ write_files:
     content: |
       version: '3.8'
       services:
+        postgres:
+          image: postgres:16-alpine
+          container_name: budget-postgres
+          restart: unless-stopped
+          environment:
+            POSTGRES_DB: budget
+            POSTGRES_USER: budget_user
+            POSTGRES_PASSWORD: budget_password
+            POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+          volumes:
+            - postgres_data:/var/lib/postgresql/data
+          networks:
+            - budget-network
+          healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U budget_user -d budget"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+          # No ports exposed - only accessible from within Docker network
+
         app:
           image: budget-app:latest
           container_name: budget-app
@@ -47,8 +68,9 @@ write_files:
             - "${app_port}:${app_port}"
           env_file:
             - .env
-          volumes:
-            - ./data:/app/data  # For SQLite database persistence
+          depends_on:
+            postgres:
+              condition: service_healthy
           networks:
             - budget-network
           healthcheck:
@@ -75,6 +97,10 @@ write_files:
       networks:
         budget-network:
           driver: bridge
+
+      volumes:
+        postgres_data:
+          driver: local
     owner: budget:budget
     permissions: '0644'
 
@@ -234,9 +260,9 @@ runcmd:
   - systemctl enable health-server.service
   - systemctl start health-server.service
 
-  # Create data directory for SQLite
-  - mkdir -p /home/budget/data
-  - chown -R budget:budget /home/budget/data
+  # Create directory for PostgreSQL data persistence
+  - mkdir -p /home/budget/postgres_data
+  - chown -R budget:budget /home/budget/postgres_data
 
   # Schedule auto-termination
   - systemctl enable atd

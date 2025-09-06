@@ -34,7 +34,7 @@ This branch contains a **cost-optimized** Terraform configuration for deploying 
 ## 💰 Ultra-Cost-Optimized Features
 
 - **$4/month total cost** (cheapest possible DigitalOcean setup)
-- **SQLite database** (FREE - no managed database costs)
+- **Containerized PostgreSQL** (FREE - runs on same droplet, only accessible from app)
 - **No load balancer** (saves $12/month)
 - **512MB RAM droplet** (smallest available)
 - **Auto-termination** after 30 minutes
@@ -42,7 +42,7 @@ This branch contains a **cost-optimized** Terraform configuration for deploying 
 
 ## Architecture
 ```
-Internet → Application Droplet (512MB) → SQLite Database (local)
+Internet → Application Droplet (512MB) → PostgreSQL Container (internal only)
               ↓
          VPC (Private Network)
 ```

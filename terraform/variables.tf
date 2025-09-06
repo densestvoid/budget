@@ -33,9 +33,9 @@ variable "droplet_size" {
   }
 }
 
-# Use SQLite instead of managed PostgreSQL for cost optimization
+# Use containerized PostgreSQL instead of managed PostgreSQL for cost optimization
 variable "use_managed_db" {
-  description = "Whether to use managed database (expensive) or SQLite (cheap)"
+  description = "Whether to use managed database (expensive) or containerized PostgreSQL (cheap)"
   type        = bool
   default     = false
 }
