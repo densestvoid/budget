@@ -1,0 +1,107 @@
+version: '3'
+
+tasks:
+  deps:
+    desc: Download and tidy dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
+
+  build:
+    desc: Build the application
+    deps: [deps]
+    cmds:
+      - go build -o bin/budget main.go
+
+  run:
+    desc: Run the built application
+    deps: [build]
+    cmds:
+      - ./bin/budget serve
+
+  dev:
+    desc: Run the application in development mode
+    deps: [deps]
+    cmds:
+      - go run main.go serve
+
+  watch:
+    desc: Run the application with live reload using air
+    deps: [deps]
+    cmds:
+      - go tool air
+
+  test:
+    desc: Run tests
+    deps: [deps]
+    cmds:
+      - go test ./...
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf bin/
+      - go clean
+
+  lint:
+    desc: Run all linting and security checks
+    cmds:
+      - go tool golangci-lint run
+      - go tool staticcheck ./...
+      - go tool gosec ./...
+      - go tool govulncheck ./...
+
+  lint-golangci:
+    desc: Run golangci-lint
+    cmds:
+      - go tool golangci-lint run
+
+  lint-staticcheck:
+    desc: Run staticcheck
+    cmds:
+      - go tool staticcheck ./...
+
+  lint-gosec:
+    desc: Run gosec security checks
+    cmds:
+      - go tool gosec ./...
+
+  lint-govulncheck:
+    desc: Run govulncheck
+    cmds:
+      - go tool govulncheck ./...
+
+  migrate-up:
+    desc: Run database migrations up
+    cmds:
+      - go run main.go migrate
+
+  migrate-down:
+    desc: Rollback database migrations
+    cmds:
+      - go run main.go migrate down
+
+  migrate-status:
+    desc: Show migration status
+    cmds:
+      - go run main.go migrate status
+
+  docker-build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t budget-app .
+
+  docker-run:
+    desc: Run with Docker Compose
+    cmds:
+      - docker-compose up --build
+
+  help:
+    desc: Show available tasks
+    cmds:
+      - go tool task --list
+
+  cli-help:
+    desc: Show CLI help
+    cmds:
+      - go run main.go --help 

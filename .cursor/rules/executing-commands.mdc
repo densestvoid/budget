@@ -1,0 +1,10 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+This rule should be referenced when attempting to execute commands.
+
+This is a Go project. Tools are installed using the Go 1.24 pattern, `go tool <tool-name>`. Tools should be run using this pattern. Check the available tools with `go tool`.
+Task is used to define common operations that need performed. Check the available tasks with `go tool task --list-all`.
+Goose is used to perform all database changes. Never directly modify the database by exec-ing migration files.

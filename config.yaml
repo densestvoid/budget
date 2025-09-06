@@ -1,0 +1,19 @@
+# Budget App Configuration
+
+# Server configuration
+port: "8080"
+env: "development"
+
+# Database configuration
+database:
+  url: "postgres://postgres:password@db:5432/budget?sslmode=disable"
+
+# Logging configuration
+log:
+  level: "info"
+  format: "json"
+
+# Application settings
+app:
+  name: "Budget App"
+  version: "1.0.0" 
