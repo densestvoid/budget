@@ -7,6 +7,7 @@ on:
       - develop
       - 'feature/*'
       - 'hotfix/*'
+      - 'automated-deployment'  # Include our deployment branch
   pull_request:
     branches:
       - main
