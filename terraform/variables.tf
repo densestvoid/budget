@@ -19,23 +19,30 @@ variable "region" {
   }
 }
 
-# Droplet configuration
+# Droplet configuration - optimized for minimal cost
 variable "droplet_size" {
   description = "Size of the application droplet"
   type        = string
-  default     = "s-1vcpu-1gb"
+  default     = "s-1vcpu-512mb-10gb"  # Cheapest option at $4/month
   validation {
     condition = contains([
-      "s-1vcpu-1gb", "s-1vcpu-2gb", "s-2vcpu-2gb", "s-2vcpu-4gb",
+      "s-1vcpu-512mb-10gb", "s-1vcpu-1gb", "s-1vcpu-2gb", "s-2vcpu-2gb", "s-2vcpu-4gb",
       "s-4vcpu-8gb", "s-6vcpu-16gb", "s-8vcpu-32gb"
     ], var.droplet_size)
     error_message = "Droplet size must be a valid DigitalOcean size."
   }
 }
 
-# Database configuration
+# Use SQLite instead of managed PostgreSQL for cost optimization
+variable "use_managed_db" {
+  description = "Whether to use managed database (expensive) or SQLite (cheap)"
+  type        = bool
+  default     = false
+}
+
+# Database configuration - only used if use_managed_db is true
 variable "db_size" {
-  description = "Size of the database cluster"
+  description = "Size of the database cluster (only used if use_managed_db is true)"
   type        = string
   default     = "db-s-1vcpu-1gb"
   validation {
@@ -85,4 +92,24 @@ variable "log_level" {
   description = "Application log level"
   type        = string
   default     = "info"
+}
+
+# Auto-termination configuration
+variable "auto_terminate_minutes" {
+  description = "Number of minutes after which to automatically terminate the deployment"
+  type        = number
+  default     = 30
+}
+
+# GitHub deployment configuration
+variable "github_repo" {
+  description = "GitHub repository for deployment triggers"
+  type        = string
+  default     = ""
+}
+
+variable "github_branch" {
+  description = "GitHub branch that triggered this deployment"
+  type        = string
+  default     = "main"
 }

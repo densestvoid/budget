@@ -10,6 +10,8 @@ packages:
   - wget
   - unzip
   - nginx
+  - sqlite3
+  - at  # For scheduling auto-termination
 
 # Create budget user
 users:
@@ -27,6 +29,9 @@ write_files:
       PORT=${app_port}
       ENV=production
       LOG_LEVEL=info
+      GITHUB_REPO=${github_repo}
+      GITHUB_BRANCH=${github_branch}
+      AUTO_TERMINATE_MINUTES=${auto_terminate_minutes}
     owner: budget:budget
     permissions: '0600'
   
@@ -42,6 +47,8 @@ write_files:
             - "${app_port}:${app_port}"
           env_file:
             - .env
+          volumes:
+            - ./data:/app/data  # For SQLite database persistence
           networks:
             - budget-network
           healthcheck:
@@ -163,6 +170,28 @@ write_files:
       WantedBy=multi-user.target
     permissions: '0644'
 
+  - path: /home/budget/auto-terminate.sh
+    content: |
+      #!/bin/bash
+      echo "Auto-termination triggered after ${auto_terminate_minutes} minutes"
+      echo "Deployment info: Repo=${github_repo}, Branch=${github_branch}"
+      
+      # Stop the application gracefully
+      cd /home/budget
+      docker-compose down
+      
+      # Send termination signal to the droplet (this will destroy it)
+      # Using DigitalOcean metadata service to get droplet ID
+      DROPLET_ID=$(curl -s http://169.254.169.254/metadata/v1/id)
+      
+      # Log the termination
+      echo "$(date): Auto-termination executed for droplet $DROPLET_ID" >> /var/log/auto-terminate.log
+      
+      # Shutdown the system
+      shutdown -h now
+    owner: budget:budget
+    permissions: '0755'
+
 runcmd:
   - systemctl enable docker
   - systemctl start docker
@@ -205,4 +234,15 @@ runcmd:
   - systemctl enable health-server.service
   - systemctl start health-server.service
 
-final_message: "Budget app server setup complete. Ready for deployment!"
+  # Create data directory for SQLite
+  - mkdir -p /home/budget/data
+  - chown -R budget:budget /home/budget/data
+
+  # Schedule auto-termination
+  - systemctl enable atd
+  - systemctl start atd
+  - |
+    echo "/home/budget/auto-terminate.sh" | at now + ${auto_terminate_minutes} minutes
+    echo "Auto-termination scheduled for ${auto_terminate_minutes} minutes from now"
+
+final_message: "Budget app server setup complete. Auto-termination scheduled for ${auto_terminate_minutes} minutes. Ready for deployment!"

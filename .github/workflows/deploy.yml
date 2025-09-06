@@ -1,0 +1,261 @@
+name: Deploy Budget App to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/*'
+      - 'hotfix/*'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  # DigitalOcean configuration
+  DO_TOKEN: ${{ secrets.DO_TOKEN }}
+  
+  # SSH configuration
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+  
+  # Deployment configuration
+  DEPLOYMENT_TIMEOUT: 30  # minutes
+
+jobs:
+  deploy:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    
+    # Only run on pushes to branches (not PRs) to save costs
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Create SSH key files
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+        chmod 600 ~/.ssh/id_rsa
+        chmod 644 ~/.ssh/id_rsa.pub
+    
+    - name: Generate unique deployment name
+      run: |
+        # Create a unique name for this deployment
+        BRANCH_NAME=$(echo ${{ github.ref_name }} | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
+        COMMIT_SHORT=$(echo ${{ github.sha }} | cut -c1-8)
+        DEPLOYMENT_NAME="budget-${BRANCH_NAME}-${COMMIT_SHORT}"
+        echo "DEPLOYMENT_NAME=${DEPLOYMENT_NAME}" >> $GITHUB_ENV
+        echo "Deployment name: ${DEPLOYMENT_NAME}"
+    
+    - name: Create Terraform variables file
+      run: |
+        cd terraform
+        cat > terraform.tfvars << EOF
+        # DigitalOcean Configuration
+        do_token = "${{ secrets.DO_TOKEN }}"
+        
+        # Cost-optimized configuration
+        region = "nyc1"
+        droplet_size = "s-1vcpu-512mb-10gb"
+        use_managed_db = false
+        
+        # SSH Configuration
+        ssh_public_key_path = "~/.ssh/id_rsa.pub"
+        ssh_private_key_path = "~/.ssh/id_rsa"
+        
+        # Application Configuration
+        app_port = "8080"
+        app_env = "production"
+        log_level = "info"
+        
+        # Auto-termination
+        auto_terminate_minutes = 30
+        
+        # GitHub Integration
+        github_repo = "${{ github.repository }}"
+        github_branch = "${{ github.ref_name }}"
+        EOF
+    
+    - name: Build Go application
+      run: |
+        echo "Building Go application..."
+        mkdir -p build
+        CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o build/budget main.go
+        
+        # Copy necessary files
+        cp Dockerfile.prod build/Dockerfile
+        cp -r templates build/ 2>/dev/null || true
+        cp config.yaml build/ 2>/dev/null || true
+    
+    - name: Build Docker image
+      run: |
+        cd build
+        docker build -t budget-app:latest .
+        cd ..
+        
+        # Save Docker image for deployment
+        docker save budget-app:latest | gzip > build/budget-app.tar.gz
+    
+    - name: Initialize Terraform
+      run: |
+        cd terraform
+        terraform init
+    
+    - name: Plan Terraform deployment
+      run: |
+        cd terraform
+        terraform plan -out=tfplan
+    
+    - name: Apply Terraform deployment
+      run: |
+        cd terraform
+        terraform apply -auto-approve tfplan
+        
+        # Get deployment outputs
+        APP_IP=$(terraform output -raw app_ip_address)
+        APP_URL=$(terraform output -raw application_url)
+        COST=$(terraform output -raw estimated_monthly_cost)
+        
+        echo "APP_IP=${APP_IP}" >> $GITHUB_ENV
+        echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+        echo "ESTIMATED_COST=${COST}" >> $GITHUB_ENV
+        
+        echo "✅ Infrastructure deployed successfully!"
+        echo "📍 Application IP: ${APP_IP}"
+        echo "🌐 Application URL: ${APP_URL}"
+        echo "💰 Estimated cost: ${COST}"
+    
+    - name: Wait for server to be ready
+      run: |
+        echo "Waiting for server to be ready..."
+        timeout 300 bash -c '
+          while ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${{ env.APP_IP }} "echo Server is ready"; do
+            echo "Waiting for SSH access..."
+            sleep 10
+          done
+        '
+    
+    - name: Deploy application to server
+      run: |
+        echo "Deploying application to server..."
+        
+        # Copy Docker image to server
+        scp -o StrictHostKeyChecking=no build/budget-app.tar.gz root@${{ env.APP_IP }}:/tmp/
+        
+        # Deploy on server
+        ssh -o StrictHostKeyChecking=no root@${{ env.APP_IP }} << 'EOF'
+          # Load Docker image
+          docker load < /tmp/budget-app.tar.gz
+          
+          # Switch to budget user and deploy
+          su - budget -c "
+            cd /home/budget
+            if [ -f docker-compose.yml ]; then
+              docker-compose down 2>/dev/null || true
+              docker-compose up -d
+            else
+              echo 'Docker compose file not found, running container manually...'
+              docker run -d --name budget-app -p 8080:8080 --env-file .env budget-app:latest
+            fi
+          "
+          
+          # Clean up
+          rm /tmp/budget-app.tar.gz
+        EOF
+    
+    - name: Run database migrations
+      run: |
+        echo "Running database migrations..."
+        ssh -o StrictHostKeyChecking=no root@${{ env.APP_IP }} << 'EOF'
+          # Run migrations
+          su - budget -c "
+            cd /home/budget
+            # Wait for app to be ready
+            timeout 60 bash -c 'while ! curl -f http://localhost:8080/health; do sleep 2; done'
+            
+            # Run migrations if using a container with migration support
+            if docker ps | grep budget-app; then
+              docker exec budget-app ./budget migrate || echo 'Migration command not available, skipping...'
+            fi
+          "
+        EOF
+    
+    - name: Verify deployment
+      run: |
+        echo "Verifying deployment..."
+        
+        # Test health endpoint
+        timeout 60 bash -c '
+          while ! curl -f http://${{ env.APP_IP }}:8080/health; do
+            echo "Waiting for application to be healthy..."
+            sleep 5
+          done
+        '
+        
+        echo "✅ Deployment verification successful!"
+        echo "🚀 Application is running at: ${{ env.APP_URL }}"
+    
+    - name: Update deployment status
+      run: |
+        echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Application URL:** ${{ env.APP_URL }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Estimated Cost:** ${{ env.ESTIMATED_COST }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Auto-termination:** 30 minutes" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ **Note:** This deployment will automatically terminate after 30 minutes to save costs." >> $GITHUB_STEP_SUMMARY
+    
+    - name: Cleanup on failure
+      if: failure()
+      run: |
+        echo "Deployment failed, cleaning up..."
+        cd terraform
+        terraform destroy -auto-approve || echo "Cleanup may have failed, please check DigitalOcean console"
+
+  # Job to comment on PRs with deployment info
+  comment-pr:
+    name: Comment on PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Comment on PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🚀 Deployment Preview
+            
+            This PR would trigger a deployment with the following configuration:
+            - **Cost**: ~$4/month (cost-optimized with SQLite)
+            - **Auto-termination**: 30 minutes
+            - **Database**: SQLite (local file)
+            - **Instance**: 512MB RAM droplet
+            
+            Deployment will be triggered when this PR is merged to main.
+            
+            ⚠️ **Note**: Deployments auto-terminate after 30 minutes to save costs.`
+          })

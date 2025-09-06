@@ -22,8 +22,9 @@ resource "digitalocean_vpc" "budget_vpc" {
   tags = ["budget", "production"]
 }
 
-# Create a managed PostgreSQL database
+# Create a managed PostgreSQL database (only if use_managed_db is true)
 resource "digitalocean_database_cluster" "budget_db" {
+  count      = var.use_managed_db ? 1 : 0
   name       = "budget-db"
   engine     = "pg"
   version    = "16"
@@ -36,15 +37,17 @@ resource "digitalocean_database_cluster" "budget_db" {
   tags = ["budget", "database", "production"]
 }
 
-# Create a database within the cluster
+# Create a database within the cluster (only if use_managed_db is true)
 resource "digitalocean_database_db" "budget_database" {
-  cluster_id = digitalocean_database_cluster.budget_db.id
+  count      = var.use_managed_db ? 1 : 0
+  cluster_id = digitalocean_database_cluster.budget_db[0].id
   name       = "budget"
 }
 
-# Create a database user
+# Create a database user (only if use_managed_db is true)
 resource "digitalocean_database_user" "budget_user" {
-  cluster_id = digitalocean_database_cluster.budget_db.id
+  count      = var.use_managed_db ? 1 : 0
+  cluster_id = digitalocean_database_cluster.budget_db[0].id
   name       = "budget_app"
 }
 
@@ -66,8 +69,11 @@ resource "digitalocean_droplet" "budget_app" {
   tags = ["budget", "app", "production"]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    database_url = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+    database_url = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "sqlite:///app/data/budget.db"
     app_port     = var.app_port
+    auto_terminate_minutes = var.auto_terminate_minutes
+    github_repo = var.github_repo
+    github_branch = var.github_branch
   })
 
   connection {
@@ -85,37 +91,7 @@ resource "digitalocean_droplet" "budget_app" {
   }
 }
 
-# Create a Load Balancer
-resource "digitalocean_loadbalancer" "budget_lb" {
-  name   = "budget-lb"
-  region = var.region
-
-  forwarding_rule {
-    entry_protocol  = "http"
-    entry_port      = 80
-    target_protocol = "http"
-    target_port     = var.app_port
-  }
-
-  forwarding_rule {
-    entry_protocol  = "https"
-    entry_port      = 443
-    target_protocol = "http"
-    target_port     = var.app_port
-    tls_passthrough = false
-  }
-
-  healthcheck {
-    protocol = "http"
-    port     = var.app_port
-    path     = "/health"
-  }
-
-  droplet_ids = [digitalocean_droplet.budget_app.id]
-  vpc_uuid    = digitalocean_vpc.budget_vpc.id
-
-  tags = ["budget", "loadbalancer", "production"]
-}
+# No load balancer for cost optimization - direct access to droplet
 
 # Create a domain record (optional)
 resource "digitalocean_domain" "budget_domain" {
@@ -128,7 +104,7 @@ resource "digitalocean_record" "budget_a_record" {
   domain = digitalocean_domain.budget_domain[0].id
   type   = "A"
   name   = "@"
-  value  = digitalocean_loadbalancer.budget_lb.ip
+  value  = digitalocean_droplet.budget_app.ipv4_address
   ttl    = 3600
 }
 
@@ -156,7 +132,7 @@ resource "digitalocean_firewall" "budget_firewall" {
   inbound_rule {
     protocol         = "tcp"
     port_range       = var.app_port
-    source_addresses = ["10.10.0.0/16"] # Only from VPC
+    source_addresses = ["0.0.0.0/0", "::/0"] # Allow direct access since no load balancer
   }
 
   inbound_rule {

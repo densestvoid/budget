@@ -9,49 +9,23 @@ output "app_private_ip" {
   value       = digitalocean_droplet.budget_app.ipv4_address_private
 }
 
-# Load balancer outputs
-output "load_balancer_ip" {
-  description = "IP address of the load balancer"
-  value       = digitalocean_loadbalancer.budget_lb.ip
-}
+# No load balancer in cost-optimized setup
 
-output "load_balancer_status" {
-  description = "Status of the load balancer"
-  value       = digitalocean_loadbalancer.budget_lb.status
-}
-
-# Database outputs
+# Database outputs (only if managed database is used)
 output "database_host" {
-  description = "Database host (private)"
-  value       = digitalocean_database_cluster.budget_db.private_host
+  description = "Database host (private) - only available if use_managed_db is true"
+  value       = var.use_managed_db ? digitalocean_database_cluster.budget_db[0].private_host : "SQLite (local file)"
   sensitive   = true
 }
 
-output "database_port" {
-  description = "Database port"
-  value       = digitalocean_database_cluster.budget_db.port
-}
-
-output "database_name" {
-  description = "Database name"
-  value       = digitalocean_database_db.budget_database.name
-}
-
-output "database_user" {
-  description = "Database username"
-  value       = digitalocean_database_user.budget_user.name
-  sensitive   = true
-}
-
-output "database_password" {
-  description = "Database password"
-  value       = digitalocean_database_user.budget_user.password
-  sensitive   = true
+output "database_type" {
+  description = "Database type being used"
+  value       = var.use_managed_db ? "PostgreSQL (managed)" : "SQLite (local)"
 }
 
 output "database_connection_string" {
-  description = "Full database connection string"
-  value       = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+  description = "Database connection string"
+  value       = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "sqlite:///app/data/budget.db"
   sensitive   = true
 }
 
@@ -74,5 +48,17 @@ output "domain_name" {
 
 output "application_url" {
   description = "Application URL"
-  value       = var.domain_name != "" ? "https://${var.domain_name}" : "http://${digitalocean_loadbalancer.budget_lb.ip}"
+  value       = var.domain_name != "" ? "http://${var.domain_name}:${var.app_port}" : "http://${digitalocean_droplet.budget_app.ipv4_address}:${var.app_port}"
+}
+
+# Cost optimization info
+output "estimated_monthly_cost" {
+  description = "Estimated monthly cost in USD"
+  value       = var.use_managed_db ? "$19 (droplet $4 + database $15)" : "$4 (droplet only with SQLite)"
+}
+
+# Auto-termination info
+output "auto_termination_info" {
+  description = "Auto-termination configuration"
+  value       = "Deployment will auto-terminate after ${var.auto_terminate_minutes} minutes"
 }

@@ -1,10 +1,11 @@
 # DigitalOcean Configuration
 do_token = "your-digitalocean-api-token-here"
 
-# Infrastructure Configuration
+# Infrastructure Configuration - Cost Optimized
 region       = "nyc1"                    # Change to your preferred region
-droplet_size = "s-1vcpu-1gb"            # Droplet size for the application
-db_size      = "db-s-1vcpu-1gb"         # Database cluster size
+droplet_size = "s-1vcpu-512mb-10gb"     # Cheapest droplet at $4/month
+use_managed_db = false                   # Use SQLite instead of managed DB to save $15/month
+db_size      = "db-s-1vcpu-1gb"         # Only used if use_managed_db = true
 
 # SSH Configuration
 ssh_public_key_path  = "~/.ssh/id_rsa.pub"
@@ -17,3 +18,10 @@ log_level = "info"
 
 # Domain Configuration (optional)
 # domain_name = "your-domain.com"
+
+# Auto-termination Configuration
+auto_terminate_minutes = 30             # Automatically terminate after 30 minutes
+
+# GitHub Integration (set by GitHub Actions)
+# github_repo = "user/repo"
+# github_branch = "main"

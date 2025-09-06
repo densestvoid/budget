@@ -109,15 +109,19 @@ get_deployment_info() {
     cd $TERRAFORM_DIR
     
     APP_IP=$(terraform output -raw app_ip_address)
-    LB_IP=$(terraform output -raw load_balancer_ip)
-    DB_HOST=$(terraform output -raw database_host)
+    APP_URL=$(terraform output -raw application_url)
+    DB_TYPE=$(terraform output -raw database_type)
+    COST=$(terraform output -raw estimated_monthly_cost)
+    AUTO_TERM=$(terraform output -raw auto_termination_info)
     
     cd ..
     
     print_success "Deployment information retrieved"
     echo -e "${GREEN}Application IP:${NC} $APP_IP"
-    echo -e "${GREEN}Load Balancer IP:${NC} $LB_IP"
-    echo -e "${GREEN}Database Host:${NC} $DB_HOST"
+    echo -e "${GREEN}Application URL:${NC} $APP_URL"
+    echo -e "${GREEN}Database Type:${NC} $DB_TYPE"
+    echo -e "${GREEN}Estimated Cost:${NC} $COST"
+    echo -e "${YELLOW}Auto-termination:${NC} $AUTO_TERM"
 }
 
 deploy_application() {
@@ -227,7 +231,9 @@ main() {
             run_migrations
             cleanup
             print_success "Full deployment completed!"
-            echo -e "${GREEN}Your Budget App is now running at:${NC} http://$LB_IP"
+            get_deployment_info
+            echo -e "${GREEN}Your Budget App is now running at:${NC} $APP_URL"
+            echo -e "${YELLOW}⚠️  Note: This deployment will auto-terminate after 30 minutes to save costs${NC}"
             ;;
     esac
 }

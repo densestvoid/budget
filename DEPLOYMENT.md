@@ -1,16 +1,18 @@
-# Budget App - DigitalOcean Deployment Guide
+# Budget App - Cost-Optimized DigitalOcean Deployment
 
-This guide walks you through deploying the Budget App to DigitalOcean using Terraform.
+This guide walks you through deploying the Budget App to DigitalOcean using Terraform with **maximum cost optimization**.
 
-## Architecture Overview
+## 💰 Cost-Optimized Architecture
 
-The deployment creates:
-- **VPC**: Private network for secure communication
-- **Droplet**: Ubuntu 22.04 server running the application
-- **Managed PostgreSQL Database**: Highly available database cluster
-- **Load Balancer**: For high availability and SSL termination
-- **Firewall**: Security rules for the application
-- **Domain & DNS** (optional): Custom domain configuration
+The deployment creates the **cheapest possible** setup:
+- **VPC**: Private network for secure communication (FREE)
+- **Droplet**: 512MB RAM Ubuntu 22.04 server ($4/month)
+- **SQLite Database**: Local file-based database (FREE)
+- **Direct Access**: No load balancer to save costs (saves $12/month)
+- **Auto-Termination**: Automatically shuts down after 30 minutes
+- **Firewall**: Security rules for the application (FREE)
+
+**Total Cost: ~$4/month** (or $0.13/day, or $0.0055/hour)
 
 ## Prerequisites
 
@@ -20,7 +22,27 @@ The deployment creates:
 4. **Docker**: Install from [docker.com](https://docker.com)
 5. **SSH Keys**: For server access
 
-## Quick Start
+## 🚀 GitHub Actions Deployment (Recommended)
+
+The easiest way to deploy is using GitHub Actions, which automatically deploys on every push:
+
+### 1. Setup Repository Secrets
+
+Add these secrets to your GitHub repository (Settings → Secrets and variables → Actions):
+
+- `DO_TOKEN`: Your DigitalOcean API token
+- `SSH_PRIVATE_KEY`: Your SSH private key content
+- `SSH_PUBLIC_KEY`: Your SSH public key content
+
+### 2. Push to Repository
+
+Simply push to any branch and GitHub Actions will automatically:
+1. Build the application
+2. Deploy infrastructure 
+3. Deploy the application
+4. Set up auto-termination after 30 minutes
+
+## 🛠️ Manual Deployment
 
 ### 1. Setup SSH Keys
 
@@ -28,34 +50,25 @@ The deployment creates:
 ./scripts/setup-ssh.sh
 ```
 
-This will generate SSH keys if they don't exist and display your public key to add to DigitalOcean.
-
 ### 2. Configure Terraform Variables
 
 ```bash
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 ```
 
-Edit `terraform/terraform.tfvars` with your configuration:
+Edit with your **cost-optimized** configuration:
 
 ```hcl
 # Required: Your DigitalOcean API token
 do_token = "your-digitalocean-api-token-here"
 
-# Optional: Customize these values
+# Cost-optimized settings
 region       = "nyc1"
-droplet_size = "s-1vcpu-1gb"
-db_size      = "db-s-1vcpu-1gb"
+droplet_size = "s-1vcpu-512mb-10gb"    # Cheapest at $4/month
+use_managed_db = false                  # Use SQLite to save $15/month
 
-# SSH configuration (update paths if needed)
-ssh_public_key_path  = "~/.ssh/id_rsa.pub"
-ssh_private_key_path = "~/.ssh/id_rsa"
-
-# Application configuration
-app_port = "8080"
-
-# Optional: Custom domain
-# domain_name = "your-domain.com"
+# Auto-termination
+auto_terminate_minutes = 30             # Auto-shutdown after 30 min
 ```
 
 ### 3. Deploy Everything
@@ -64,18 +77,12 @@ app_port = "8080"
 ./scripts/deploy.sh
 ```
 
-This single command will:
-1. Build the Go application
-2. Create a Docker image
-3. Deploy infrastructure with Terraform
-4. Deploy the application to the server
-5. Run database migrations
-
 ### 4. Access Your Application
 
-After deployment completes, you'll see output like:
+After deployment completes, you'll see:
 ```
-Your Budget App is now running at: http://147.182.123.45
+Your Budget App is now running at: http://147.182.123.45:8080
+⚠️ Note: This deployment will auto-terminate after 30 minutes to save costs
 ```
 
 ## Manual Deployment Steps
@@ -112,21 +119,24 @@ If you prefer to run steps individually:
 ./scripts/deploy.sh destroy
 ```
 
-## Configuration Options
+## 💰 Cost Optimization Features
 
-### Droplet Sizes
-- `s-1vcpu-1gb`: Basic (1 vCPU, 1GB RAM) - $6/month
-- `s-1vcpu-2gb`: Standard (1 vCPU, 2GB RAM) - $12/month
-- `s-2vcpu-2gb`: Enhanced (2 vCPUs, 2GB RAM) - $18/month
-- `s-2vcpu-4gb`: Performance (2 vCPUs, 4GB RAM) - $24/month
+### Database Options
+- **SQLite (default)**: FREE - Local file database, perfect for testing/demos
+- **Managed PostgreSQL**: $15/month - Only enable if you need production-grade features
 
-### Database Sizes
-- `db-s-1vcpu-1gb`: Basic (1 vCPU, 1GB RAM) - $15/month
-- `db-s-1vcpu-2gb`: Standard (1 vCPU, 2GB RAM) - $30/month
-- `db-s-2vcpu-4gb`: Enhanced (2 vCPUs, 4GB RAM) - $60/month
+### Droplet Sizes (Cost-Optimized)
+- `s-1vcpu-512mb-10gb`: **Ultra-cheap** (512MB RAM) - $4/month ⭐ **RECOMMENDED**
+- `s-1vcpu-1gb`: Basic (1GB RAM) - $6/month
+- `s-1vcpu-2gb`: Standard (2GB RAM) - $12/month
 
-### Regions
-Available regions: `nyc1`, `nyc3`, `ams2`, `ams3`, `sfo1`, `sfo2`, `sfo3`, `sgp1`, `lon1`, `fra1`, `tor1`, `blr1`, `syd1`
+### Auto-Termination
+- **Default**: 30 minutes - Saves costs for testing/demos
+- **Configurable**: Set `auto_terminate_minutes` to any value
+- **Disable**: Set to `0` to disable auto-termination
+
+### Regions (Choose closest to your users)
+`nyc1`, `nyc3`, `ams2`, `ams3`, `sfo1`, `sfo2`, `sfo3`, `sgp1`, `lon1`, `fra1`, `tor1`, `blr1`, `syd1`
 
 ## SSL/HTTPS Setup
 
@@ -211,13 +221,22 @@ The current setup uses a single droplet. For multiple droplets:
 - SSL/TLS encryption for data in transit
 - Regular security updates via cloud-init
 
-## Cost Estimation
+## 💰 Cost Estimation
 
-Monthly costs (USD):
-- Basic setup: ~$21/month (1GB droplet + 1GB database)
-- Standard setup: ~$42/month (2GB droplet + 2GB database)
-- Load balancer: $12/month
-- Bandwidth: Usually included in droplet cost
+### Ultra-Cost-Optimized (Default)
+- **Droplet**: $4/month (512MB RAM)
+- **Database**: FREE (SQLite)
+- **Load Balancer**: REMOVED (saves $12/month)
+- **Total**: **$4/month** or **$0.13/day**
+
+### With Managed Database (Optional)
+- **Droplet**: $4/month
+- **Database**: $15/month (managed PostgreSQL)
+- **Total**: $19/month
+
+### Auto-Termination Savings
+- **30-minute deployment**: ~$0.0055 per deployment
+- **Perfect for**: Testing, demos, CI/CD pipelines
 
 ## Backup and Recovery
 
