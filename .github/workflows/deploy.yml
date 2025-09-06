@@ -1,17 +1,9 @@
 name: Deploy Budget App to DigitalOcean
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-      - 'feature/*'
-      - 'hotfix/*'
-      - 'automated-deployment'  # Include our deployment branch
   pull_request:
-    branches:
-      - main
-      - develop
+    types: [opened, synchronize, reopened]
+    branches: ['**']  # Trigger for PRs targeting any branch
 
 env:
   # DigitalOcean configuration
@@ -29,8 +21,8 @@ jobs:
     name: Deploy to DigitalOcean
     runs-on: ubuntu-latest
     
-    # Only run on pushes to branches (not PRs) to save costs
-    if: github.event_name == 'push'
+    # Only run on PR events to save costs
+    if: github.event_name == 'pull_request'
     
     steps:
     - name: Checkout code
@@ -59,10 +51,11 @@ jobs:
     
     - name: Generate unique deployment name
       run: |
-        # Create a unique name for this deployment
-        BRANCH_NAME=$(echo ${{ github.ref_name }} | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
-        COMMIT_SHORT=$(echo ${{ github.sha }} | cut -c1-8)
-        DEPLOYMENT_NAME="budget-${BRANCH_NAME}-${COMMIT_SHORT}"
+        # Create a unique name for this deployment using PR info
+        PR_NUMBER="${{ github.event.number }}"
+        BRANCH_NAME=$(echo ${{ github.head_ref }} | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
+        COMMIT_SHORT=$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-8)
+        DEPLOYMENT_NAME="budget-pr-${PR_NUMBER}-${BRANCH_NAME}-${COMMIT_SHORT}"
         echo "DEPLOYMENT_NAME=${DEPLOYMENT_NAME}" >> $GITHUB_ENV
         echo "Deployment name: ${DEPLOYMENT_NAME}"
     
@@ -92,7 +85,7 @@ jobs:
         
         # GitHub Integration
         github_repo = "${{ github.repository }}"
-        github_branch = "${{ github.ref_name }}"
+        github_branch = "${{ github.head_ref }}"
         EOF
     
     - name: Build Go application
@@ -221,8 +214,9 @@ jobs:
       run: |
         echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "**PR:** #${{ github.event.number }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${{ github.head_ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit:** ${{ github.event.pull_request.head.sha }}" >> $GITHUB_STEP_SUMMARY
         echo "**Application URL:** ${{ env.APP_URL }}" >> $GITHUB_STEP_SUMMARY
         echo "**Estimated Cost:** ${{ env.ESTIMATED_COST }}" >> $GITHUB_STEP_SUMMARY
         echo "**Auto-termination:** 30 minutes" >> $GITHUB_STEP_SUMMARY
@@ -236,14 +230,8 @@ jobs:
         cd terraform
         terraform destroy -auto-approve || echo "Cleanup may have failed, please check DigitalOcean console"
 
-  # Job to comment on PRs with deployment info
-  comment-pr:
-    name: Comment on PR
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    
-    steps:
-    - name: Comment on PR
+    - name: Comment on PR with deployment info
+      if: success()
       uses: actions/github-script@v7
       with:
         script: |
@@ -251,15 +239,42 @@ jobs:
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: `## 🚀 Deployment Preview
+            body: `## 🚀 Deployment Successful!
             
-            This PR would trigger a deployment with the following configuration:
-            - **Cost**: ~$4/month (cost-optimized with containerized PostgreSQL)
-            - **Auto-termination**: 30 minutes
-            - **Database**: PostgreSQL (containerized, not accessible from outside)
-            - **Instance**: 512MB RAM droplet
+            Your PR has been deployed and is ready for testing:
             
-            Deployment will be triggered when this PR is merged to main.
+            **🌐 Application URL:** ${{ env.APP_URL }}
+            **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
+            **⏰ Auto-termination:** 30 minutes
+            **🗃️ Database:** PostgreSQL (containerized, secure)
+            **💻 Instance:** 512MB RAM droplet
             
-            ⚠️ **Note**: Deployments auto-terminate after 30 minutes to save costs.`
+            **PR Details:**
+            - **Branch:** ${{ github.head_ref }}
+            - **Commit:** ${{ github.event.pull_request.head.sha }}
+            
+            ⚠️ **Note**: This deployment will automatically terminate after 30 minutes to save costs.
+            
+            Test your changes and provide feedback! 🎉`
+          })
+    
+    - name: Comment on PR if deployment failed
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## ❌ Deployment Failed
+            
+            The deployment for this PR failed. Please check the [GitHub Actions logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+            
+            **Common issues:**
+            - Missing repository secrets (DO_TOKEN, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY)
+            - DigitalOcean API quota exceeded
+            - Network connectivity issues
+            
+            Please fix the issues and push a new commit to retry the deployment.`
           })
