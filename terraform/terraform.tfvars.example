@@ -1,0 +1,19 @@
+# DigitalOcean Configuration
+do_token = "your-digitalocean-api-token-here"
+
+# Infrastructure Configuration
+region       = "nyc1"                    # Change to your preferred region
+droplet_size = "s-1vcpu-1gb"            # Droplet size for the application
+db_size      = "db-s-1vcpu-1gb"         # Database cluster size
+
+# SSH Configuration
+ssh_public_key_path  = "~/.ssh/id_rsa.pub"
+ssh_private_key_path = "~/.ssh/id_rsa"
+
+# Application Configuration
+app_port = "8080"
+app_env  = "production"
+log_level = "info"
+
+# Domain Configuration (optional)
+# domain_name = "your-domain.com"

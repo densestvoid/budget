@@ -64,6 +64,9 @@ func (s *Server) SetupRoutes() {
 	// Static files
 	s.router.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir("assets"))))
 
+	// Health check endpoint (no auth required)
+	s.router.Get("/health", s.healthHandler)
+
 	// API routes
 	s.router.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.healthHandler)
