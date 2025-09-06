@@ -223,6 +223,23 @@ runcmd:
   - systemctl start docker
   - usermod -aG docker budget
   - chown -R budget:budget /home/budget
+  
+  # Clone the repository and build the Docker image
+  - |
+    su - budget -c "
+      cd /home/budget
+      git clone https://github.com/${github_repo}.git app-source
+      cd app-source
+      git checkout ${github_branch}
+      
+      # Build the Docker image using the production Dockerfile
+      docker build -f Dockerfile.prod -t budget-app:latest .
+      
+      # Clean up source code (keep only the built image)
+      cd ..
+      rm -rf app-source
+    "
+  
   - systemctl daemon-reload
   - systemctl enable budget-app.service
   

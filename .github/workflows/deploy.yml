@@ -9,10 +9,6 @@ env:
   # DigitalOcean configuration
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
   
-  # SSH configuration
-  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-  SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-  
   # Deployment configuration
   DEPLOYMENT_TIMEOUT: 30  # minutes
 
@@ -41,13 +37,7 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    - name: Create SSH key files
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
-        chmod 600 ~/.ssh/id_rsa
-        chmod 644 ~/.ssh/id_rsa.pub
+    # No SSH keys needed - deployment happens via cloud-init
     
     - name: Generate unique deployment name
       run: |
@@ -71,9 +61,7 @@ jobs:
         droplet_size = "s-1vcpu-512mb-10gb"
         use_managed_db = false
         
-        # SSH Configuration
-        ssh_public_key_path = "~/.ssh/id_rsa.pub"
-        ssh_private_key_path = "~/.ssh/id_rsa"
+        # No SSH configuration needed
         
         # Application Configuration
         app_port = "8080"
@@ -88,25 +76,7 @@ jobs:
         github_branch = "${{ github.head_ref }}"
         EOF
     
-    - name: Build Go application
-      run: |
-        echo "Building Go application..."
-        mkdir -p build
-        CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o build/budget main.go
-        
-        # Copy necessary files
-        cp Dockerfile.prod build/Dockerfile
-        cp -r templates build/ 2>/dev/null || true
-        cp config.yaml build/ 2>/dev/null || true
-    
-    - name: Build Docker image
-      run: |
-        cd build
-        docker build -t budget-app:latest .
-        cd ..
-        
-        # Save Docker image for deployment
-        docker save budget-app:latest | gzip > build/budget-app.tar.gz
+    # No need to build Docker image locally - cloud-init builds it from GitHub
     
     - name: Initialize Terraform
       run: |
@@ -137,78 +107,33 @@ jobs:
         echo "🌐 Application URL: ${APP_URL}"
         echo "💰 Estimated cost: ${COST}"
     
-    - name: Wait for server to be ready
+    - name: Wait for cloud-init deployment to complete
       run: |
-        echo "Waiting for server to be ready..."
-        timeout 300 bash -c '
-          while ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${{ env.APP_IP }} "echo Server is ready"; do
-            echo "Waiting for SSH access..."
-            sleep 10
+        echo "Waiting for cloud-init to build and deploy the application..."
+        echo "This may take 5-10 minutes as the server builds the Docker image from source..."
+        
+        # Wait for the application to be accessible
+        timeout 900 bash -c '
+          while ! curl -f --connect-timeout 5 http://${{ env.APP_IP }}:8080/health 2>/dev/null; do
+            echo "Waiting for application to be ready... (cloud-init may still be building Docker image)"
+            sleep 30
           done
         '
-    
-    - name: Deploy application to server
-      run: |
-        echo "Deploying application to server..."
         
-        # Copy Docker image to server
-        scp -o StrictHostKeyChecking=no build/budget-app.tar.gz root@${{ env.APP_IP }}:/tmp/
-        
-        # Deploy on server
-        ssh -o StrictHostKeyChecking=no root@${{ env.APP_IP }} << 'EOF'
-          # Load Docker image
-          docker load < /tmp/budget-app.tar.gz
-          
-          # Switch to budget user and deploy
-          su - budget -c "
-            cd /home/budget
-            if [ -f docker-compose.yml ]; then
-              docker-compose down 2>/dev/null || true
-              docker-compose up -d
-            else
-              echo 'Docker compose file not found, running container manually...'
-              docker run -d --name budget-app -p 8080:8080 --env-file .env budget-app:latest
-            fi
-          "
-          
-          # Clean up
-          rm /tmp/budget-app.tar.gz
-        EOF
-    
-    - name: Run database migrations
-      run: |
-        echo "Running database migrations..."
-        ssh -o StrictHostKeyChecking=no root@${{ env.APP_IP }} << 'EOF'
-          # Run migrations
-          su - budget -c "
-            cd /home/budget
-            # Wait for PostgreSQL to be ready
-            echo 'Waiting for PostgreSQL to be ready...'
-            timeout 60 bash -c 'until docker-compose exec -T postgres pg_isready -U budget_user -d budget; do sleep 2; done'
-            
-            # Wait for app to be ready
-            timeout 60 bash -c 'while ! curl -f http://localhost:8080/health; do sleep 2; done'
-            
-            # Run migrations using the deployed application
-            echo 'Running database migrations...'
-            docker-compose exec -T app ./budget migrate || echo 'Migration command not available, skipping...'
-          "
-        EOF
+        echo "✅ Application is now accessible!"
     
     - name: Verify deployment
       run: |
         echo "Verifying deployment..."
         
-        # Test health endpoint
-        timeout 60 bash -c '
-          while ! curl -f http://${{ env.APP_IP }}:8080/health; do
-            echo "Waiting for application to be healthy..."
-            sleep 5
-          done
-        '
-        
-        echo "✅ Deployment verification successful!"
-        echo "🚀 Application is running at: ${{ env.APP_URL }}"
+        # Final health check
+        if curl -f http://${{ env.APP_IP }}:8080/health; then
+          echo "✅ Deployment verification successful!"
+          echo "🚀 Application is running at: ${{ env.APP_URL }}"
+        else
+          echo "❌ Health check failed"
+          exit 1
+        fi
     
     - name: Update deployment status
       run: |
@@ -272,9 +197,10 @@ jobs:
             The deployment for this PR failed. Please check the [GitHub Actions logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
             
             **Common issues:**
-            - Missing repository secrets (DO_TOKEN, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY)
+            - Missing repository secrets (DO_TOKEN)
             - DigitalOcean API quota exceeded
             - Network connectivity issues
+            - Cloud-init build failure (check droplet console logs)
             
             Please fix the issues and push a new commit to retry the deployment.`
           })

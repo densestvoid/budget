@@ -51,11 +51,7 @@ resource "digitalocean_database_user" "budget_user" {
   name       = "budget_app"
 }
 
-# Create SSH key
-resource "digitalocean_ssh_key" "budget_key" {
-  name       = "budget-app-key"
-  public_key = file(var.ssh_public_key_path)
-}
+# No SSH key needed - using cloud-init for deployment
 
 # Create a Droplet for the application
 resource "digitalocean_droplet" "budget_app" {
@@ -63,7 +59,6 @@ resource "digitalocean_droplet" "budget_app" {
   name     = "budget-app"
   region   = var.region
   size     = var.droplet_size
-  ssh_keys = [digitalocean_ssh_key.budget_key.id]
   vpc_uuid = digitalocean_vpc.budget_vpc.id
 
   tags = ["budget", "app", "production"]
@@ -75,20 +70,6 @@ resource "digitalocean_droplet" "budget_app" {
     github_repo = var.github_repo
     github_branch = var.github_branch
   })
-
-  connection {
-    type        = "ssh"
-    user        = "root"
-    private_key = file(var.ssh_private_key_path)
-    host        = self.ipv4_address
-  }
-
-  # Wait for the droplet to be ready
-  provisioner "remote-exec" {
-    inline = [
-      "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do echo 'Waiting for cloud-init...'; sleep 2; done"
-    ]
-  }
 }
 
 # No load balancer for cost optimization - direct access to droplet

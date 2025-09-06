@@ -54,18 +54,7 @@ variable "db_size" {
   }
 }
 
-# SSH Key configuration
-variable "ssh_public_key_path" {
-  description = "Path to SSH public key file"
-  type        = string
-  default     = "~/.ssh/id_rsa.pub"
-}
-
-variable "ssh_private_key_path" {
-  description = "Path to SSH private key file"
-  type        = string
-  default     = "~/.ssh/id_rsa"
-}
+# No SSH keys needed - deployment happens via cloud-init
 
 # Application configuration
 variable "app_port" {
