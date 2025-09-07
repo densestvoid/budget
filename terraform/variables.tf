@@ -54,7 +54,19 @@ variable "db_size" {
   }
 }
 
-# No SSH keys needed - deployment happens via cloud-init
+# Docker image URL for pre-built deployment
+variable "docker_image_url" {
+  description = "URL to the pre-built Docker image"
+  type        = string
+  default     = ""
+}
+
+variable "github_token" {
+  description = "GitHub token for pulling from GHCR"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
 
 # Application configuration
 variable "app_port" {

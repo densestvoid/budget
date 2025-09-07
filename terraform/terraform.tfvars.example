@@ -23,3 +23,5 @@ auto_terminate_minutes = 30             # Automatically terminate after 30 minut
 # GitHub Integration (set by GitHub Actions)
 # github_repo = "user/repo"
 # github_branch = "main"
+# docker_image_url = "ghcr.io/user/repo/budget-app:latest"
+# github_token = "github_token_here"

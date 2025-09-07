@@ -78,6 +78,8 @@ resource "digitalocean_droplet" "budget_app" {
     auto_terminate_minutes = var.auto_terminate_minutes
     github_repo = var.github_repo
     github_branch = var.github_branch
+    docker_image_url = var.docker_image_url
+    github_token = var.github_token
   })
 }
 

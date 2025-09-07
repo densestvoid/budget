@@ -20,6 +20,11 @@ jobs:
     # Only run on PR events to save costs
     if: github.event_name == 'pull_request'
     
+    # Permissions needed for GitHub Container Registry
+    permissions:
+      contents: read
+      packages: write
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -74,9 +79,27 @@ jobs:
         # GitHub Integration
         github_repo = "${{ github.repository }}"
         github_branch = "${{ github.head_ref }}"
+        docker_image_url = "${{ env.IMAGE_URL }}"
+        github_token = "${{ secrets.GITHUB_TOKEN }}"
         EOF
     
-    # No need to build Docker image locally - cloud-init builds it from GitHub
+    - name: Build and push Docker image
+      run: |
+        echo "Building Docker image and pushing to GitHub Container Registry..."
+        
+        # Login to GitHub Container Registry
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Build the Docker image
+        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:${{ github.event.pull_request.head.sha }} .
+        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:latest .
+        
+        # Push both tagged and latest versions
+        docker push ghcr.io/${{ github.repository }}/budget-app:${{ github.event.pull_request.head.sha }}
+        docker push ghcr.io/${{ github.repository }}/budget-app:latest
+        
+        echo "✅ Docker image pushed successfully"
+        echo "IMAGE_URL=ghcr.io/${{ github.repository }}/budget-app:${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
     
     - name: Initialize Terraform
       run: |
@@ -107,16 +130,16 @@ jobs:
         echo "🌐 Application URL: ${APP_URL}"
         echo "💰 Estimated cost: ${COST}"
     
-    - name: Wait for cloud-init deployment to complete
+    - name: Wait for pre-built image deployment to complete
       run: |
-        echo "Waiting for cloud-init to build and deploy the application..."
-        echo "This may take 5-10 minutes as the server builds the Docker image from source..."
+        echo "Waiting for pre-built image deployment..."
+        echo "This should be much faster - typically 2-3 minutes"
         
-        # Wait for the application to be accessible
-        timeout 900 bash -c '
+        # Wait for application to be accessible (shorter timeout since no build)
+        timeout 300 bash -c '
           while ! curl -f --connect-timeout 5 http://${{ env.APP_IP }}:8080/health 2>/dev/null; do
-            echo "Waiting for application to be ready... (cloud-init may still be building Docker image)"
-            sleep 30
+            echo "Waiting for application to be ready..."
+            sleep 15
           done
         '
         
