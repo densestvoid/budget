@@ -60,12 +60,7 @@ resource "digitalocean_app" "budget_app" {
       }
 
       # Internal service - no external access
-      internal_ports = [
-        {
-          port     = 5432
-          protocol = "TCP"
-        }
-      ]
+      internal_ports = [5432]
     }
 
     # Main application service
