@@ -59,6 +59,12 @@ resource "digitalocean_app" "budget_app" {
         type  = "SECRET"
       }
 
+      env {
+        key   = "POSTGRES_INITDB_ARGS"
+        value = "--encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+        scope = "RUN_TIME"
+      }
+
       # Internal service - no external access
       internal_ports = [5432]
     }
@@ -98,18 +104,31 @@ resource "digitalocean_app" "budget_app" {
 
       env {
         key   = "LOG_LEVEL"
-        value = var.log_level
+        value = "debug"
         scope = "RUN_TIME"
       }
 
-      # Health check
+      env {
+        key   = "DEBUG"
+        value = "true"
+        scope = "RUN_TIME"
+      }
+
+      # Health check with longer startup time
       health_check {
-        http_path = "/health"
+        http_path             = "/health"
+        initial_delay_seconds = 60  # Give PostgreSQL time to start
+        period_seconds        = 10
+        timeout_seconds       = 5
+        success_threshold     = 1
+        failure_threshold     = 3
       }
 
       # HTTP port
       http_port = 8080
     }
+
+    # Note: Migrations are handled by the startup script in the web service
   }
 }
 
