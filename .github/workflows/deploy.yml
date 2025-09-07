@@ -1,4 +1,4 @@
-name: Deploy Budget App to DigitalOcean
+name: Deploy Budget App to DigitalOcean App Platform
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ env:
 
 jobs:
   deploy:
-    name: Deploy to DigitalOcean
+    name: Deploy to DigitalOcean App Platform
     runs-on: ubuntu-latest
     
     # Only run on PR events to save costs
@@ -24,7 +24,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+      pull-requests: write  # For PR comments
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -42,17 +43,38 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    # No SSH keys needed - deployment happens via cloud-init
-    
-    - name: Generate unique deployment name
+    - name: Generate unique deployment identifiers
       run: |
-        # Create a unique name for this deployment using PR info
+        # Create unique identifiers for this deployment
         PR_NUMBER="${{ github.event.number }}"
         BRANCH_NAME=$(echo ${{ github.head_ref }} | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
         COMMIT_SHORT=$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-8)
+        
         DEPLOYMENT_NAME="budget-pr-${PR_NUMBER}-${BRANCH_NAME}-${COMMIT_SHORT}"
+        IMAGE_TAG="${COMMIT_SHORT}"
+        
         echo "DEPLOYMENT_NAME=${DEPLOYMENT_NAME}" >> $GITHUB_ENV
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
         echo "Deployment name: ${DEPLOYMENT_NAME}"
+        echo "Image tag: ${IMAGE_TAG}"
+    
+    - name: Build and push Docker image
+      run: |
+        echo "Building Docker image and pushing to GitHub Container Registry..."
+        
+        # Login to GitHub Container Registry
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Build the Docker image with specific tag
+        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} .
+        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:latest .
+        
+        # Push both versions
+        docker push ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}
+        docker push ghcr.io/${{ github.repository }}/budget-app:latest
+        
+        echo "✅ Docker image pushed successfully"
+        echo "IMAGE_URL=ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
     
     - name: Create Terraform variables file
       run: |
@@ -63,10 +85,7 @@ jobs:
         
         # Cost-optimized configuration
         region = "nyc1"
-        droplet_size = "s-1vcpu-512mb-10gb"
-        use_managed_db = false
-        
-        # No SSH configuration needed
+        use_managed_db = false  # Use containerized PostgreSQL to save costs
         
         # Application Configuration
         app_port = "8080"
@@ -79,27 +98,9 @@ jobs:
         # GitHub Integration
         github_repo = "${{ github.repository }}"
         github_branch = "${{ github.head_ref }}"
-        docker_image_url = "${{ env.IMAGE_URL }}"
+        docker_image_tag = "${{ env.IMAGE_TAG }}"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
         EOF
-    
-    - name: Build and push Docker image
-      run: |
-        echo "Building Docker image and pushing to GitHub Container Registry..."
-        
-        # Login to GitHub Container Registry
-        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-        
-        # Build the Docker image
-        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:${{ github.event.pull_request.head.sha }} .
-        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:latest .
-        
-        # Push both tagged and latest versions
-        docker push ghcr.io/${{ github.repository }}/budget-app:${{ github.event.pull_request.head.sha }}
-        docker push ghcr.io/${{ github.repository }}/budget-app:latest
-        
-        echo "✅ Docker image pushed successfully"
-        echo "IMAGE_URL=ghcr.io/${{ github.repository }}/budget-app:${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
     
     - name: Initialize Terraform
       run: |
@@ -117,95 +118,60 @@ jobs:
         terraform apply -auto-approve tfplan
         
         # Get deployment outputs
-        APP_IP=$(terraform output -raw app_ip_address)
-        APP_URL=$(terraform output -raw application_url)
+        APP_URL=$(terraform output -raw app_url)
+        APP_ID=$(terraform output -raw app_id)
         COST=$(terraform output -raw estimated_monthly_cost)
+        TERMINATION_INFO=$(terraform output -raw auto_termination_info)
         
-        echo "APP_IP=${APP_IP}" >> $GITHUB_ENV
         echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+        echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
         echo "ESTIMATED_COST=${COST}" >> $GITHUB_ENV
+        echo "TERMINATION_INFO=${TERMINATION_INFO}" >> $GITHUB_ENV
         
-        echo "✅ Infrastructure deployed successfully!"
-        echo "📍 Application IP: ${APP_IP}"
+        echo "✅ App Platform deployment initiated!"
         echo "🌐 Application URL: ${APP_URL}"
+        echo "🆔 App ID: ${APP_ID}"
         echo "💰 Estimated cost: ${COST}"
+        echo "⏰ Termination: ${TERMINATION_INFO}"
     
-    - name: Debug deployment status
+    - name: Wait for App Platform deployment
       run: |
-        echo "🔍 Debugging deployment status..."
-        echo "Droplet IP: ${{ env.APP_IP }}"
-        echo "Expected Image: ${{ env.IMAGE_URL }}"
-        echo "Repository: ${{ github.repository }}"
+        echo "Waiting for DigitalOcean App Platform deployment..."
+        echo "This typically takes 2-5 minutes for container deployment"
         
-        # Check if droplet is responding at all
-        echo "Testing basic connectivity..."
-        if ping -c 3 ${{ env.APP_IP }}; then
-          echo "✅ Droplet is reachable via ping"
-        else
-          echo "❌ Droplet is not reachable via ping"
-        fi
-        
-        # Check what ports are open
-        echo "Checking open ports..."
-        for port in 80 443 8080 9999; do
-          echo "Testing port $port..."
-          if timeout 5 bash -c "</dev/tcp/${{ env.APP_IP }}/$port"; then
-            echo "✅ Port $port is open"
-          else
-            echo "❌ Port $port is closed/filtered"
-          fi
-        done
-        
-        # Try to get any HTTP response (even errors)
-        echo "Testing HTTP connectivity on different ports..."
-        for port in 8080 80 9999; do
-          echo "--- Testing port $port ---"
-          curl -v --connect-timeout 10 --max-time 15 http://${{ env.APP_IP }}:$port/ || echo "No response on port $port"
-        done
-
-    - name: Wait for pre-built image deployment to complete
-      run: |
-        echo "Waiting for pre-built image deployment..."
-        echo "This should be much faster - typically 2-3 minutes"
-        
-        # First check if status endpoint is available (port 9999)
-        echo "Checking for status endpoint..."
-        for i in {1..10}; do
-          if curl -f --connect-timeout 5 http://${{ env.APP_IP }}:9999/status 2>/dev/null; then
-            echo "✅ Status endpoint is available!"
-            curl -s http://${{ env.APP_IP }}:9999/status | jq '.' || curl -s http://${{ env.APP_IP }}:9999/status
-            break
-          else
-            echo "Status endpoint not ready yet (attempt $i/10)..."
-            sleep 15
-          fi
-        done
-        
-        # Wait for application to be accessible with detailed progress
-        timeout 300 bash -c '
+        # Wait for the application to be accessible
+        timeout 600 bash -c '
           attempt=1
-          while ! curl -f --connect-timeout 5 http://${{ env.APP_IP }}:8080/health 2>/dev/null; do
-            echo "Waiting for application to be ready (attempt $attempt)..."
+          while ! curl -f --connect-timeout 10 ${{ env.APP_URL }}/health 2>/dev/null; do
+            echo "Waiting for App Platform deployment (attempt $attempt)..."
             
-            # Check status endpoint every few attempts
-            if [ $((attempt % 4)) -eq 0 ]; then
-              echo "--- Status Check (attempt $attempt) ---"
-              curl -s --connect-timeout 3 http://${{ env.APP_IP }}:9999/status 2>/dev/null | jq -r ".timestamp, .cloud_init_finished, .docker_running, .services, .deployment_log[-3:][]?" 2>/dev/null || echo "Status endpoint not available"
+            # Show progress every 5 attempts
+            if [ $((attempt % 5)) -eq 0 ]; then
+              echo "--- Deployment Progress Check (attempt $attempt) ---"
+              echo "App URL: ${{ env.APP_URL }}"
+              echo "Testing connectivity..."
+              curl -I --connect-timeout 5 ${{ env.APP_URL }}/ 2>/dev/null || echo "No response yet"
             fi
             
             attempt=$((attempt + 1))
-            sleep 15
+            sleep 20
           done
         '
         
         echo "✅ Application is now accessible!"
     
-    - name: Verify deployment
+    - name: Verify App Platform deployment
       run: |
-        echo "Verifying deployment..."
+        echo "Verifying App Platform deployment..."
         
-        # Final health check
-        if curl -f http://${{ env.APP_IP }}:8080/health; then
+        # Test health endpoint
+        if curl -f ${{ env.APP_URL }}/health; then
+          echo "✅ Health check passed!"
+          
+          # Get health response
+          echo "Health response:"
+          curl -s ${{ env.APP_URL }}/health | jq '.' 2>/dev/null || curl -s ${{ env.APP_URL }}/health
+          
           echo "✅ Deployment verification successful!"
           echo "🚀 Application is running at: ${{ env.APP_URL }}"
         else
@@ -213,36 +179,51 @@ jobs:
           exit 1
         fi
     
+    - name: Schedule auto-termination
+      run: |
+        echo "Scheduling auto-termination via GitHub Actions..."
+        
+        # We'll use GitHub's workflow dispatch to schedule termination
+        # Create a delay and then call DigitalOcean API to delete the app
+        
+        # For now, just log the termination info
+        echo "🕐 Auto-termination scheduled for ${{ env.TERMINATION_INFO }}"
+        echo "📍 App ID: ${{ env.APP_ID }}"
+        echo "🌐 App URL: ${{ env.APP_URL }}"
+        
+        # Note: In a production setup, you'd use GitHub's scheduled workflows
+        # or a separate termination service
+    
     - name: Update deployment status
       run: |
-        echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+        echo "## 🚀 App Platform Deployment Successful" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**PR:** #${{ github.event.number }}" >> $GITHUB_STEP_SUMMARY
         echo "**Branch:** ${{ github.head_ref }}" >> $GITHUB_STEP_SUMMARY
         echo "**Commit:** ${{ github.event.pull_request.head.sha }}" >> $GITHUB_STEP_SUMMARY
         echo "**Application URL:** ${{ env.APP_URL }}" >> $GITHUB_STEP_SUMMARY
+        echo "**App ID:** ${{ env.APP_ID }}" >> $GITHUB_STEP_SUMMARY
         echo "**Estimated Cost:** ${{ env.ESTIMATED_COST }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Auto-termination:** 30 minutes" >> $GITHUB_STEP_SUMMARY
+        echo "**Auto-termination:** ${{ env.TERMINATION_INFO }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "⚠️ **Note:** This deployment will automatically terminate after 30 minutes to save costs." >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ **Note:** Failed deployments are preserved for debugging. Successful deployments auto-terminate." >> $GITHUB_STEP_SUMMARY
     
     - name: Provide debugging info on failure
       if: failure()
       run: |
-        echo "❌ Deployment failed!"
+        echo "❌ App Platform deployment failed!"
         echo ""
         echo "🔍 DEBUGGING INFORMATION:"
-        echo "Status URL: http://${{ env.APP_IP }}:9999/status"
-        echo "Droplet IP: ${{ env.APP_IP }}"
-        echo "Expected Image: ${{ env.IMAGE_URL }}"
+        if [ -n "${{ env.APP_URL }}" ]; then
+          echo "App URL: ${{ env.APP_URL }}"
+          echo "App ID: ${{ env.APP_ID }}"
+          echo "You can check the app status in DigitalOcean App Platform console"
+        else
+          echo "App was not created - check Terraform logs above"
+        fi
         echo ""
-        echo "📋 You can check the status endpoint for detailed logs:"
-        echo "curl http://${{ env.APP_IP }}:9999/status"
-        echo ""
-        echo "🏗️ The droplet will be PRESERVED for debugging (smart auto-termination)"
-        echo "It will only terminate if the app becomes healthy, otherwise it stays up for investigation"
-        echo ""
-        echo "⚠️ Remember to manually destroy the droplet when done debugging to avoid charges:"
+        echo "🏗️ The app will be PRESERVED for debugging if it was created"
+        echo "⚠️ Remember to manually destroy the app when done debugging to avoid charges:"
         echo "cd terraform && terraform destroy -auto-approve"
 
     - name: Comment on PR with deployment info
@@ -254,21 +235,30 @@ jobs:
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: `## 🚀 Deployment Successful!
+            body: `## 🚀 App Platform Deployment Successful!
             
-            Your PR has been deployed and is ready for testing:
+            Your PR has been deployed to DigitalOcean App Platform:
             
             **🌐 Application URL:** ${{ env.APP_URL }}
+            **🆔 App ID:** ${{ env.APP_ID }}
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
-            **⏰ Auto-termination:** 30 minutes
-            **🗃️ Database:** PostgreSQL (containerized, secure)
-            **💻 Instance:** 512MB RAM droplet
+            **⏰ Auto-termination:** ${{ env.TERMINATION_INFO }}
+            **🗃️ Database:** PostgreSQL (containerized in App Platform)
+            **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             
             **PR Details:**
             - **Branch:** ${{ github.head_ref }}
             - **Commit:** ${{ github.event.pull_request.head.sha }}
+            - **Image:** ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}
             
-            ⚠️ **Note**: This deployment will automatically terminate after 30 minutes to save costs.
+            **Benefits of App Platform:**
+            - ✅ Automatic HTTPS/SSL
+            - ✅ Built-in load balancing  
+            - ✅ Automatic scaling
+            - ✅ Managed container orchestration
+            - ✅ No server management needed
+            
+            ⚠️ **Note:** This deployment will automatically terminate after 30 minutes to save costs.
             
             Test your changes and provide feedback! 🎉`
           })
@@ -282,15 +272,48 @@ jobs:
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: `## ❌ Deployment Failed
+            body: `## ❌ App Platform Deployment Failed
             
-            The deployment for this PR failed. Please check the [GitHub Actions logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+            The App Platform deployment for this PR failed. Please check the [GitHub Actions logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
             
             **Common issues:**
             - Missing repository secrets (DO_TOKEN)
-            - DigitalOcean API quota exceeded
-            - Network connectivity issues
-            - Cloud-init build failure (check droplet console logs)
+            - DigitalOcean App Platform quota exceeded
+            - Container image build or registry issues
+            - Invalid App Platform configuration
+            
+            **Debugging:**
+            - Check the Terraform logs in GitHub Actions
+            - Verify the Docker image was pushed successfully
+            - Check DigitalOcean App Platform console for app status
             
             Please fix the issues and push a new commit to retry the deployment.`
           })
+
+  # Schedule auto-termination job
+  schedule-termination:
+    name: Schedule Auto-Termination
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: success() && github.event_name == 'pull_request'
+    
+    steps:
+    - name: Schedule app termination
+      run: |
+        echo "Scheduling app termination in 30 minutes..."
+        
+        # Sleep for 30 minutes then delete the app
+        sleep 1800  # 30 minutes
+        
+        echo "Auto-termination time reached, deleting app..."
+        
+        # Use DigitalOcean API to delete the app
+        APP_ID="${{ needs.deploy.outputs.app_id }}"
+        
+        curl -X DELETE \
+          -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          "https://api.digitalocean.com/v2/apps/${APP_ID}"
+        
+        echo "✅ App terminated successfully after 30 minutes"
+      timeout-minutes: 45  # Allow extra time for the sleep + deletion

@@ -19,20 +19,6 @@ variable "region" {
   }
 }
 
-# Droplet configuration - optimized for minimal cost
-variable "droplet_size" {
-  description = "Size of the application droplet"
-  type        = string
-  default     = "s-1vcpu-512mb-10gb"  # Cheapest option at $4/month
-  validation {
-    condition = contains([
-      "s-1vcpu-512mb-10gb", "s-1vcpu-1gb", "s-1vcpu-2gb", "s-2vcpu-2gb", "s-2vcpu-4gb",
-      "s-4vcpu-8gb", "s-6vcpu-16gb", "s-8vcpu-32gb"
-    ], var.droplet_size)
-    error_message = "Droplet size must be a valid DigitalOcean size."
-  }
-}
-
 # Use containerized PostgreSQL instead of managed PostgreSQL for cost optimization
 variable "use_managed_db" {
   description = "Whether to use managed database (expensive) or containerized PostgreSQL (cheap)"
@@ -54,11 +40,17 @@ variable "db_size" {
   }
 }
 
-# Docker image URL for pre-built deployment
-variable "docker_image_url" {
-  description = "URL to the pre-built Docker image"
+# Docker image configuration for App Platform
+variable "github_repo" {
+  description = "GitHub repository (user/repo format)"
   type        = string
   default     = ""
+}
+
+variable "docker_image_tag" {
+  description = "Docker image tag to deploy"
+  type        = string
+  default     = "latest"
 }
 
 variable "github_token" {
@@ -97,18 +89,12 @@ variable "log_level" {
 
 # Auto-termination configuration
 variable "auto_terminate_minutes" {
-  description = "Number of minutes after which to automatically terminate the deployment"
+  description = "Number of minutes after which to automatically terminate the deployment (0 to disable)"
   type        = number
   default     = 30
 }
 
 # GitHub deployment configuration
-variable "github_repo" {
-  description = "GitHub repository for deployment triggers"
-  type        = string
-  default     = ""
-}
-
 variable "github_branch" {
   description = "GitHub branch that triggered this deployment"
   type        = string

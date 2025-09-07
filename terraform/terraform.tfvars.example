@@ -1,17 +1,16 @@
 # DigitalOcean Configuration
 do_token = "your-digitalocean-api-token-here"
 
-# Infrastructure Configuration - Cost Optimized
-region       = "nyc1"                    # Change to your preferred region
-droplet_size = "s-1vcpu-512mb-10gb"     # Cheapest droplet at $4/month
-use_managed_db = false                   # Use containerized PostgreSQL instead of managed DB to save $15/month
-db_size      = "db-s-1vcpu-1gb"         # Only used if use_managed_db = true
+# Infrastructure Configuration - App Platform (Cost Optimized)
+region = "nyc1"                         # Change to your preferred region
+use_managed_db = false                  # Use containerized PostgreSQL to save $15/month
 
-# No SSH configuration needed - deployment via cloud-init
+# Database configuration (only used if use_managed_db = true)
+db_size = "db-s-1vcpu-1gb"             # Only used if use_managed_db = true
 
 # Application Configuration
 app_port = "8080"
-app_env  = "production"
+app_env = "production"
 log_level = "info"
 
 # Domain Configuration (optional)
@@ -23,5 +22,5 @@ auto_terminate_minutes = 30             # Automatically terminate after 30 minut
 # GitHub Integration (set by GitHub Actions)
 # github_repo = "user/repo"
 # github_branch = "main"
-# docker_image_url = "ghcr.io/user/repo/budget-app:latest"
+# docker_image_tag = "commit-sha"
 # github_token = "github_token_here"
