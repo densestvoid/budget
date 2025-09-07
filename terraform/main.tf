@@ -26,7 +26,7 @@ resource "random_id" "deployment" {
 resource "digitalocean_vpc" "budget_vpc" {
   name     = "budget-vpc-${random_id.deployment.hex}"
   region   = var.region
-  ip_range = "10.244.0.0/16"  # Use a different range to avoid conflicts
+  ip_range = "172.16.0.0/16"  # Use 172.16.x.x range which should be safe
 
   # Note: VPC resources don't support tags in DigitalOcean
 }
