@@ -130,15 +130,70 @@ jobs:
         echo "🌐 Application URL: ${APP_URL}"
         echo "💰 Estimated cost: ${COST}"
     
+    - name: Debug deployment status
+      run: |
+        echo "🔍 Debugging deployment status..."
+        echo "Droplet IP: ${{ env.APP_IP }}"
+        echo "Expected Image: ${{ env.IMAGE_URL }}"
+        echo "Repository: ${{ github.repository }}"
+        
+        # Check if droplet is responding at all
+        echo "Testing basic connectivity..."
+        if ping -c 3 ${{ env.APP_IP }}; then
+          echo "✅ Droplet is reachable via ping"
+        else
+          echo "❌ Droplet is not reachable via ping"
+        fi
+        
+        # Check what ports are open
+        echo "Checking open ports..."
+        for port in 80 443 8080 9999; do
+          echo "Testing port $port..."
+          if timeout 5 bash -c "</dev/tcp/${{ env.APP_IP }}/$port"; then
+            echo "✅ Port $port is open"
+          else
+            echo "❌ Port $port is closed/filtered"
+          fi
+        done
+        
+        # Try to get any HTTP response (even errors)
+        echo "Testing HTTP connectivity on different ports..."
+        for port in 8080 80 9999; do
+          echo "--- Testing port $port ---"
+          curl -v --connect-timeout 10 --max-time 15 http://${{ env.APP_IP }}:$port/ || echo "No response on port $port"
+        done
+
     - name: Wait for pre-built image deployment to complete
       run: |
         echo "Waiting for pre-built image deployment..."
         echo "This should be much faster - typically 2-3 minutes"
         
-        # Wait for application to be accessible (shorter timeout since no build)
+        # First check if status endpoint is available (port 9999)
+        echo "Checking for status endpoint..."
+        for i in {1..10}; do
+          if curl -f --connect-timeout 5 http://${{ env.APP_IP }}:9999/status 2>/dev/null; then
+            echo "✅ Status endpoint is available!"
+            curl -s http://${{ env.APP_IP }}:9999/status | jq '.' || curl -s http://${{ env.APP_IP }}:9999/status
+            break
+          else
+            echo "Status endpoint not ready yet (attempt $i/10)..."
+            sleep 15
+          fi
+        done
+        
+        # Wait for application to be accessible with detailed progress
         timeout 300 bash -c '
+          attempt=1
           while ! curl -f --connect-timeout 5 http://${{ env.APP_IP }}:8080/health 2>/dev/null; do
-            echo "Waiting for application to be ready..."
+            echo "Waiting for application to be ready (attempt $attempt)..."
+            
+            # Check status endpoint every few attempts
+            if [ $((attempt % 4)) -eq 0 ]; then
+              echo "--- Status Check (attempt $attempt) ---"
+              curl -s --connect-timeout 3 http://${{ env.APP_IP }}:9999/status 2>/dev/null | jq -r ".timestamp, .cloud_init_finished, .docker_running, .services, .deployment_log[-3:][]?" 2>/dev/null || echo "Status endpoint not available"
+            fi
+            
+            attempt=$((attempt + 1))
             sleep 15
           done
         '
@@ -171,12 +226,24 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "⚠️ **Note:** This deployment will automatically terminate after 30 minutes to save costs." >> $GITHUB_STEP_SUMMARY
     
-    - name: Cleanup on failure
+    - name: Provide debugging info on failure
       if: failure()
       run: |
-        echo "Deployment failed, cleaning up..."
-        cd terraform
-        terraform destroy -auto-approve || echo "Cleanup may have failed, please check DigitalOcean console"
+        echo "❌ Deployment failed!"
+        echo ""
+        echo "🔍 DEBUGGING INFORMATION:"
+        echo "Status URL: http://${{ env.APP_IP }}:9999/status"
+        echo "Droplet IP: ${{ env.APP_IP }}"
+        echo "Expected Image: ${{ env.IMAGE_URL }}"
+        echo ""
+        echo "📋 You can check the status endpoint for detailed logs:"
+        echo "curl http://${{ env.APP_IP }}:9999/status"
+        echo ""
+        echo "🏗️ The droplet will be PRESERVED for debugging (smart auto-termination)"
+        echo "It will only terminate if the app becomes healthy, otherwise it stays up for investigation"
+        echo ""
+        echo "⚠️ Remember to manually destroy the droplet when done debugging to avoid charges:"
+        echo "cd terraform && terraform destroy -auto-approve"
 
     - name: Comment on PR with deployment info
       if: success()

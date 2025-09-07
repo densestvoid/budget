@@ -136,6 +136,13 @@ resource "digitalocean_firewall" "budget_firewall" {
     source_addresses = ["0.0.0.0/0", "::/0"]
   }
 
+  # Status server port - for deployment diagnostics
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "9999"
+    source_addresses = ["0.0.0.0/0", "::/0"]
+  }
+
   # Allow all outbound traffic
   outbound_rule {
     protocol              = "tcp"

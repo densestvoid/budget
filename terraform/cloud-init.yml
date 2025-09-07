@@ -185,20 +185,125 @@ write_files:
   - path: /home/budget/auto-terminate.sh
     content: |
       #!/bin/bash
-      echo "Auto-termination triggered after ${auto_terminate_minutes} minutes"
-      echo "Deployment info: Repo=${github_repo}, Branch=${github_branch}"
+      echo "$(date): Auto-termination check triggered after ${auto_terminate_minutes} minutes" | tee -a /var/log/auto-terminate.log
+      echo "Deployment info: Repo=${github_repo}, Branch=${github_branch}" | tee -a /var/log/auto-terminate.log
       
-      # Stop the application gracefully
-      cd /home/budget
-      docker-compose down
-      
-      # Log the termination
-      echo "$(date): Auto-termination executed" >> /var/log/auto-terminate.log
-      
-      # Shutdown the system
-      shutdown -h now
+      # Check if deployment was successful by testing health endpoint
+      if curl -f --connect-timeout 5 http://localhost:8080/health >/dev/null 2>&1; then
+        echo "$(date): ✅ Deployment successful - proceeding with auto-termination" | tee -a /var/log/auto-terminate.log
+        
+        # Stop the application gracefully
+        cd /home/budget
+        docker-compose down 2>&1 | tee -a /var/log/auto-terminate.log
+        
+        # Shutdown the system
+        echo "$(date): Shutting down system..." | tee -a /var/log/auto-terminate.log
+        shutdown -h now
+      else
+        echo "$(date): ❌ Deployment failed or app not responding - PRESERVING DROPLET for debugging" | tee -a /var/log/auto-terminate.log
+        echo "$(date): Check logs at http://$(curl -s http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address):9999/status" | tee -a /var/log/auto-terminate.log
+        echo "$(date): Droplet will remain running for manual investigation" | tee -a /var/log/auto-terminate.log
+        
+        # Schedule another check in 60 minutes (in case it's just slow)
+        echo "/home/budget/auto-terminate.sh" | at now + 60 minutes
+        echo "$(date): Scheduled another termination check in 60 minutes" | tee -a /var/log/auto-terminate.log
+      fi
     owner: budget:budget
     permissions: '0755'
+
+  - path: /home/budget/status-server.py
+    content: |
+      #!/usr/bin/env python3
+      import http.server
+      import socketserver
+      import json
+      import subprocess
+      import os
+      from datetime import datetime
+      
+      class StatusHandler(http.server.SimpleHTTPRequestHandler):
+          def do_GET(self):
+              if self.path == '/status':
+                  self.send_response(200)
+                  self.send_header('Content-type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  
+                  # Get deployment status
+                  status = {
+                      "timestamp": datetime.now().isoformat(),
+                      "cloud_init_finished": os.path.exists("/var/lib/cloud/instance/boot-finished"),
+                      "deployment_log_exists": os.path.exists("/var/log/deployment.log"),
+                      "docker_running": False,
+                      "containers": [],
+                      "services": {},
+                      "deployment_log": []
+                  }
+                  
+                  try:
+                      # Check Docker
+                      result = subprocess.run(["docker", "ps", "--format", "table {{.Names}}\t{{.Status}}"], 
+                                            capture_output=True, text=True, timeout=5)
+                      status["docker_running"] = result.returncode == 0
+                      if result.returncode == 0:
+                          status["containers"] = result.stdout.strip().split('\n')
+                  except Exception as e:
+                      status["docker_error"] = str(e)
+                  
+                  try:
+                      # Check systemd services
+                      for service in ["docker", "budget-app", "atd"]:
+                          result = subprocess.run(["systemctl", "is-active", service], 
+                                                capture_output=True, text=True, timeout=5)
+                          status["services"][service] = result.stdout.strip()
+                  except Exception as e:
+                      status["systemctl_error"] = str(e)
+                  
+                  # Read deployment log if exists
+                  if os.path.exists("/var/log/deployment.log"):
+                      try:
+                          with open("/var/log/deployment.log", "r") as f:
+                              lines = f.read().strip().split('\n')
+                              status["deployment_log"] = lines[-20:]  # Last 20 lines
+                      except Exception as e:
+                          status["log_read_error"] = str(e)
+                  
+                  # Check cloud-init status
+                  try:
+                      if os.path.exists("/var/log/cloud-init-output.log"):
+                          with open("/var/log/cloud-init-output.log", "r") as f:
+                              lines = f.read().strip().split('\n')
+                              status["cloud_init_log"] = lines[-10:]  # Last 10 lines
+                  except Exception as e:
+                      status["cloud_init_log_error"] = str(e)
+                  
+                  self.wfile.write(json.dumps(status, indent=2).encode())
+              else:
+                  self.send_response(404)
+                  self.end_headers()
+      
+      print(f"Starting status server on port 9999 at {datetime.now()}")
+      with socketserver.TCPServer(("", 9999), StatusHandler) as httpd:
+          httpd.serve_forever()
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/status-server.service
+    content: |
+      [Unit]
+      Description=Deployment Status Server
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 /home/budget/status-server.py
+      Restart=always
+      RestartSec=5
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+    permissions: '0644'
 
   - path: /etc/systemd/system/budget-app.service
     content: |
@@ -226,15 +331,22 @@ runcmd:
   - usermod -aG docker budget
   - chown -R budget:budget /home/budget
   
+  # Start status server first for diagnostics
   - systemctl daemon-reload
+  - systemctl enable status-server.service
+  - systemctl start status-server.service
+  - echo "Status server started on port 9999"
+  
+  # Start main application deployment
   - systemctl enable budget-app.service
   - systemctl start budget-app.service
   
-  # Schedule auto-termination
+  # Schedule auto-termination (will check if deployment succeeded)
   - systemctl enable atd
   - systemctl start atd
   - |
     echo "/home/budget/auto-terminate.sh" | at now + ${auto_terminate_minutes} minutes
-    echo "Auto-termination scheduled for ${auto_terminate_minutes} minutes from now"
+    echo "$(date): Smart auto-termination scheduled for ${auto_terminate_minutes} minutes from now" | tee -a /var/log/auto-terminate.log
+    echo "$(date): If deployment fails, droplet will be preserved for debugging" | tee -a /var/log/auto-terminate.log
 
-final_message: "Budget app server setup complete. Pre-built image deployment started. Auto-termination scheduled for ${auto_terminate_minutes} minutes."
+final_message: "Budget app server setup complete. Status server running on port 9999. Pre-built image deployment started. Smart auto-termination scheduled for ${auto_terminate_minutes} minutes (will preserve failed deployments)."
