@@ -109,34 +109,32 @@ resource "digitalocean_record" "budget_www_record" {
 
 # Create a firewall
 resource "digitalocean_firewall" "budget_firewall" {
-  name = "budget-app-firewall"
+  name = "budget-app-firewall-${random_id.deployment.hex}"
 
   droplet_ids = [digitalocean_droplet.budget_app.id]
 
-  inbound_rule {
-    protocol         = "tcp"
-    port_range       = "22"
-    source_addresses = ["0.0.0.0/0", "::/0"]
-  }
-
+  # Application port - allow access to the budget app
   inbound_rule {
     protocol         = "tcp"
     port_range       = var.app_port
-    source_addresses = ["0.0.0.0/0", "::/0"] # Allow direct access since no load balancer
+    source_addresses = ["0.0.0.0/0", "::/0"]
   }
 
+  # HTTP port - for nginx proxy
   inbound_rule {
     protocol         = "tcp"
     port_range       = "80"
     source_addresses = ["0.0.0.0/0", "::/0"]
   }
 
+  # HTTPS port - for nginx proxy (future SSL)
   inbound_rule {
     protocol         = "tcp"
     port_range       = "443"
     source_addresses = ["0.0.0.0/0", "::/0"]
   }
 
+  # Allow all outbound traffic
   outbound_rule {
     protocol              = "tcp"
     port_range            = "1-65535"
@@ -149,5 +147,6 @@ resource "digitalocean_firewall" "budget_firewall" {
     destination_addresses = ["0.0.0.0/0", "::/0"]
   }
 
-  tags = ["budget", "firewall", "production"]
+  # Note: No SSH port 22 since we don't use SSH for deployment
+  # Note: Firewall resources don't use tags, they use droplet_ids
 }
