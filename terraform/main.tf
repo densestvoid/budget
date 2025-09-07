@@ -5,6 +5,10 @@ terraform {
       source  = "digitalocean/digitalocean"
       version = "~> 2.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.1"
+    }
   }
 }
 
@@ -13,19 +17,24 @@ provider "digitalocean" {
   token = var.do_token
 }
 
+# Generate a random ID for unique resource naming
+resource "random_id" "deployment" {
+  byte_length = 4
+}
+
 # Create a VPC
 resource "digitalocean_vpc" "budget_vpc" {
-  name     = "budget-vpc"
+  name     = "budget-vpc-${random_id.deployment.hex}"
   region   = var.region
   ip_range = "10.10.0.0/16"
 
-  tags = ["budget", "production"]
+  # Note: VPC resources don't support tags in DigitalOcean
 }
 
 # Create a managed PostgreSQL database (only if use_managed_db is true)
 resource "digitalocean_database_cluster" "budget_db" {
   count      = var.use_managed_db ? 1 : 0
-  name       = "budget-db"
+  name       = "budget-db-${random_id.deployment.hex}"
   engine     = "pg"
   version    = "16"
   size       = var.db_size
@@ -56,7 +65,7 @@ resource "digitalocean_database_user" "budget_user" {
 # Create a Droplet for the application
 resource "digitalocean_droplet" "budget_app" {
   image    = "ubuntu-22-04-x64"
-  name     = "budget-app"
+  name     = "budget-app-${random_id.deployment.hex}"
   region   = var.region
   size     = var.droplet_size
   vpc_uuid = digitalocean_vpc.budget_vpc.id
