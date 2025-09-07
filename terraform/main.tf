@@ -48,7 +48,7 @@ resource "digitalocean_app" "budget_app" {
 
       env {
         key   = "POSTGRES_USER"
-        value = "budget_user"
+        value = "postgres"
         scope = "RUN_TIME"
       }
 
@@ -60,8 +60,8 @@ resource "digitalocean_app" "budget_app" {
       }
 
       env {
-        key   = "POSTGRES_INITDB_ARGS"
-        value = "--encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+        key   = "POSTGRES_HOST_AUTH_METHOD"
+        value = "trust"
         scope = "RUN_TIME"
       }
 
@@ -82,35 +82,29 @@ resource "digitalocean_app" "budget_app" {
         tag           = var.docker_image_tag
       }
 
-      # Environment variables
+      # Environment variables (with BUDGET_ prefix for viper)
       env {
-        key   = "DATABASE_URL"
-        value = "postgres://budget_user:budget_password@postgres:5432/budget?sslmode=disable"
+        key   = "BUDGET_DATABASE_URL"
+        value = "postgres://postgres:budget_password@postgres:5432/budget?sslmode=disable"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
 
       env {
-        key   = "PORT"
+        key   = "BUDGET_PORT"
         value = "8080"
         scope = "RUN_TIME"
       }
 
       env {
-        key   = "ENV"
+        key   = "BUDGET_ENV"
         value = "production"
         scope = "RUN_TIME"
       }
 
       env {
-        key   = "LOG_LEVEL"
+        key   = "BUDGET_LOG_LEVEL"
         value = "debug"
-        scope = "RUN_TIME"
-      }
-
-      env {
-        key   = "DEBUG"
-        value = "true"
         scope = "RUN_TIME"
       }
 
