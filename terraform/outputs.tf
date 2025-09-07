@@ -14,28 +14,22 @@ output "app_status" {
   value       = digitalocean_app.budget_app.active_deployment_id
 }
 
-# Database outputs (only if managed database is used)
-output "database_host" {
-  description = "Database host (private) - only available if use_managed_db is true"
-  value       = var.use_managed_db ? digitalocean_database_cluster.budget_db[0].private_host : "PostgreSQL (containerized in app)"
-  sensitive   = true
-}
-
+# Database info
 output "database_type" {
   description = "Database type being used"
-  value       = var.use_managed_db ? "PostgreSQL (managed)" : "PostgreSQL (containerized)"
+  value       = "PostgreSQL (containerized in App Platform)"
 }
 
 output "database_connection_string" {
   description = "Database connection string"
-  value       = var.use_managed_db ? "postgres://${digitalocean_database_user.budget_user[0].name}:${digitalocean_database_user.budget_user[0].password}@${digitalocean_database_cluster.budget_db[0].private_host}:${digitalocean_database_cluster.budget_db[0].port}/${digitalocean_database_db.budget_database[0].name}?sslmode=require" : "Internal PostgreSQL container"
+  value       = "postgres://budget_user:budget_password@postgres:5432/budget?sslmode=disable"
   sensitive   = true
 }
 
 # Cost optimization info
 output "estimated_monthly_cost" {
   description = "Estimated monthly cost in USD"
-  value       = var.use_managed_db ? "$20 (app $5 + database $15)" : "$10 (app $5 + postgres $5)"
+  value       = "$10 (web service $5 + postgres service $5)"
 }
 
 # Auto-termination info

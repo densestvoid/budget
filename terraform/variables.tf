@@ -19,27 +19,6 @@ variable "region" {
   }
 }
 
-# Use containerized PostgreSQL instead of managed PostgreSQL for cost optimization
-variable "use_managed_db" {
-  description = "Whether to use managed database (expensive) or containerized PostgreSQL (cheap)"
-  type        = bool
-  default     = false
-}
-
-# Database configuration - only used if use_managed_db is true
-variable "db_size" {
-  description = "Size of the database cluster (only used if use_managed_db is true)"
-  type        = string
-  default     = "db-s-1vcpu-1gb"
-  validation {
-    condition = contains([
-      "db-s-1vcpu-1gb", "db-s-1vcpu-2gb", "db-s-2vcpu-4gb",
-      "db-s-4vcpu-8gb", "db-s-6vcpu-16gb"
-    ], var.db_size)
-    error_message = "Database size must be a valid DigitalOcean database size."
-  }
-}
-
 # Docker image configuration for App Platform
 variable "github_repo" {
   description = "GitHub repository (user/repo format)"

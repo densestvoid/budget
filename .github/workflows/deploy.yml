@@ -85,7 +85,6 @@ jobs:
         
         # Cost-optimized configuration
         region = "nyc1"
-        use_managed_db = false  # Use containerized PostgreSQL to save costs
         
         # Application Configuration
         app_port = "8080"
@@ -243,7 +242,7 @@ jobs:
             **🆔 App ID:** ${{ env.APP_ID }}
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
             **⏰ Auto-termination:** ${{ env.TERMINATION_INFO }}
-            **🗃️ Database:** PostgreSQL (containerized in App Platform)
+            **🗃️ Database:** PostgreSQL (internal service in App Platform)
             **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             
             **PR Details:**
