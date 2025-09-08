@@ -301,17 +301,22 @@ jobs:
     needs: deploy
     if: success() && github.event_name == 'pull_request'
     
+    env:
+      APP_ID: ${{ needs.deploy.outputs.app_id }}
+      APP_URL: ${{ needs.deploy.outputs.app_url }}
+    
     steps:
     - name: Schedule app termination
       run: |
         echo "Scheduling app termination in 30 minutes..."
         
-        # Get APP_ID from the deploy job outputs
-        APP_ID="${{ needs.deploy.outputs.app_id }}"
-        APP_URL="${{ needs.deploy.outputs.app_url }}"
-        
+        # Get APP_ID from environment (set from deploy job outputs)
         echo "App ID to terminate: ${APP_ID}"
         echo "App URL: ${APP_URL}"
+        
+        echo "Debug: Environment variables:"
+        echo "APP_ID = '${APP_ID}'"
+        echo "APP_URL = '${APP_URL}'"
         
         if [ -z "$APP_ID" ]; then
           echo "❌ Error: APP_ID is empty, cannot terminate app"
