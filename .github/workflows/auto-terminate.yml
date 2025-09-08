@@ -134,11 +134,33 @@ jobs:
         
         echo "✅ Terraform configuration recreated"
     
+    - name: Download Terraform state from deploy workflow
+      uses: actions/download-artifact@v4
+      with:
+        name: terraform-state-${{ steps.validate.outputs.app_id }}
+        path: terraform/
+    
     - name: Initialize Terraform
       run: |
         cd terraform
+        
+        # Check if state file was downloaded
+        if [ -f terraform.tfstate ]; then
+          echo "✅ Terraform state downloaded successfully"
+          echo "State file size: $(du -h terraform.tfstate)"
+          
+          # Show what resources are in the state
+          echo "Resources in state:"
+          terraform show | grep -E "resource \".*\"" || echo "No resources found in show output"
+        else
+          echo "❌ Terraform state file not found"
+          echo "Available files:"
+          ls -la
+          exit 1
+        fi
+        
         terraform init
-        echo "✅ Terraform initialized"
+        echo "✅ Terraform initialized with existing state"
     
     - name: Terminate deployment via Terraform destroy
       if: steps.health_check.outputs.should_terminate == 'true'
