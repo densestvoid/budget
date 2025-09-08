@@ -35,7 +35,18 @@ output "estimated_monthly_cost" {
 # Auto-termination info
 output "auto_termination_info" {
   description = "Auto-termination configuration"
-  value       = var.auto_terminate_minutes > 0 ? "App will auto-terminate after ${var.auto_terminate_minutes} minutes" : "Auto-termination disabled"
+  value       = var.auto_terminate_minutes > 0 ? "App will auto-terminate at ${local.termination_display}" : "Auto-termination disabled"
+}
+
+# Precise termination schedule
+output "termination_schedule" {
+  description = "Precise termination schedule details"
+  value = var.auto_terminate_minutes > 0 ? {
+    cron_expression = local.precise_cron
+    termination_time = local.termination_display
+    app_id = digitalocean_app.budget_app.id
+    terminator_function_id = digitalocean_app.termination_function[0].id
+  } : null
 }
 
 # Deployment info

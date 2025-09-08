@@ -132,11 +132,23 @@ jobs:
         echo "ESTIMATED_COST=${COST}" >> $GITHUB_ENV
         echo "TERMINATION_INFO=${TERMINATION_INFO}" >> $GITHUB_ENV
         
+        # Get precise termination schedule
+        TERMINATION_SCHEDULE=$(terraform output -json termination_schedule)
+        CRON_EXPR=$(echo "$TERMINATION_SCHEDULE" | jq -r '.cron_expression')
+        TERM_TIME=$(echo "$TERMINATION_SCHEDULE" | jq -r '.termination_time')
+        TERMINATOR_ID=$(echo "$TERMINATION_SCHEDULE" | jq -r '.terminator_function_id')
+        
+        echo "CRON_EXPR=${CRON_EXPR}" >> $GITHUB_ENV
+        echo "TERM_TIME=${TERM_TIME}" >> $GITHUB_ENV
+        echo "TERMINATOR_ID=${TERMINATOR_ID}" >> $GITHUB_ENV
+        
         echo "✅ App Platform deployment initiated!"
         echo "🌐 Application URL: ${APP_URL}"
         echo "🆔 App ID: ${APP_ID}"
         echo "💰 Estimated cost: ${COST}"
-        echo "⏰ Termination: ${TERMINATION_INFO}"
+        echo "⏰ Precise termination: ${TERM_TIME}"
+        echo "📅 Cron schedule: ${CRON_EXPR}"
+        echo "🤖 Terminator function: ${TERMINATOR_ID}"
     
     - name: Wait for App Platform deployment
       run: |
@@ -246,7 +258,9 @@ jobs:
             **🌐 Application URL:** ${{ env.APP_URL }}
             **🆔 App ID:** ${{ env.APP_ID }}
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
-            **⏰ Auto-termination:** ${{ env.TERMINATION_INFO }}
+            **⏰ Precise Termination:** ${{ env.TERM_TIME }}
+            **📅 Cron Schedule:** \`${{ env.CRON_EXPR }}\`
+            **🤖 Terminator Function:** ${{ env.TERMINATOR_ID }}
             **🗃️ Database:** PostgreSQL (internal service in App Platform)
             **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             
@@ -294,57 +308,5 @@ jobs:
             Please fix the issues and push a new commit to retry the deployment.`
           })
 
-  # Schedule auto-termination job
-  schedule-termination:
-    name: Schedule Auto-Termination
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: success() && github.event_name == 'pull_request'
-    
-    env:
-      APP_ID: ${{ needs.deploy.outputs.app_id }}
-      APP_URL: ${{ needs.deploy.outputs.app_url }}
-    
-    steps:
-    - name: Schedule app termination
-      run: |
-        echo "Scheduling app termination in 30 minutes..."
-        
-        # Get APP_ID from environment (set from deploy job outputs)
-        echo "App ID to terminate: ${APP_ID}"
-        echo "App URL: ${APP_URL}"
-        
-        echo "Debug: Environment variables:"
-        echo "APP_ID = '${APP_ID}'"
-        echo "APP_URL = '${APP_URL}'"
-        
-        if [ -z "$APP_ID" ]; then
-          echo "❌ Error: APP_ID is empty, cannot terminate app"
-          echo "Deploy job outputs:"
-          echo "app_id: ${{ needs.deploy.outputs.app_id }}"
-          echo "app_url: ${{ needs.deploy.outputs.app_url }}"
-          exit 1
-        fi
-        
-        # Sleep for 30 minutes then delete the app
-        echo "Sleeping for 30 minutes before termination..."
-        sleep 1800  # 30 minutes
-        
-        echo "Auto-termination time reached, deleting app ${APP_ID}..."
-        
-        # Use DigitalOcean API to delete the app
-        response=$(curl -w "%{http_code}" -s -X DELETE \
-          -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-          -H "Content-Type: application/json" \
-          "https://api.digitalocean.com/v2/apps/${APP_ID}")
-        
-        http_code="${response: -3}"
-        
-        if [ "$http_code" = "204" ]; then
-          echo "✅ App terminated successfully after 30 minutes"
-        else
-          echo "❌ Failed to terminate app. HTTP code: $http_code"
-          echo "Response: $response"
-          exit 1
-        fi
-      timeout-minutes: 45  # Allow extra time for the sleep + deletion
+  # No sleep-based termination job needed!
+  # Termination is handled by the DigitalOcean Function with precise cron scheduling

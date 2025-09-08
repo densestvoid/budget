@@ -22,6 +22,36 @@ resource "random_id" "deployment" {
   byte_length = 4
 }
 
+# Calculate precise termination time and cron schedule
+locals {
+  # Calculate termination time (current time + specified minutes)
+  termination_timestamp = timeadd(timestamp(), "${var.auto_terminate_minutes}m")
+  
+  # Round up to the next minute for precise cron scheduling
+  base_minute = tonumber(formatdate("m", local.termination_timestamp))
+  base_hour = tonumber(formatdate("h", local.termination_timestamp))
+  base_day = tonumber(formatdate("D", local.termination_timestamp))
+  base_month = tonumber(formatdate("M", local.termination_timestamp))
+  base_seconds = tonumber(formatdate("s", local.termination_timestamp))
+  
+  # Round up to next minute if there are seconds
+  adjusted_minute = local.base_seconds > 0 ? local.base_minute + 1 : local.base_minute
+  
+  # Handle minute overflow (59 + 1 = 0, hour++)
+  final_minute = local.adjusted_minute >= 60 ? 0 : local.adjusted_minute
+  final_hour = local.adjusted_minute >= 60 ? local.base_hour + 1 : local.base_hour
+  
+  # Handle hour overflow (23 + 1 = 0, day++)  
+  adjusted_hour = local.final_hour >= 24 ? 0 : local.final_hour
+  adjusted_day = local.final_hour >= 24 ? local.base_day + 1 : local.base_day
+  
+  # Create precise cron expression: "minute hour day month *"
+  precise_cron = "${local.final_minute} ${local.adjusted_hour} ${local.adjusted_day} ${local.base_month} *"
+  
+  # Human-readable termination time
+  termination_display = formatdate("YYYY-MM-DD hh:mm:ss UTC", timeadd(local.termination_timestamp, local.base_seconds > 0 ? "1m" : "0m"))
+}
+
 # Create DigitalOcean App Platform application
 resource "digitalocean_app" "budget_app" {
   spec {
@@ -122,7 +152,51 @@ resource "digitalocean_app" "budget_app" {
       http_port = 8080
     }
 
-    # Note: Migrations are handled by the startup script in the web service
+  }
+}
+
+# Separate termination function app (so it can delete the main app)
+resource "digitalocean_app" "termination_function" {
+  count = var.auto_terminate_minutes > 0 ? 1 : 0
+
+  spec {
+    name   = "terminator-${random_id.deployment.hex}"
+    region = var.region
+
+    # Precise auto-termination function
+    function {
+      name = "terminate"
+      
+      source_dir = "${path.module}/termination-function"
+      
+      env {
+        key   = "DO_TOKEN"
+        value = var.do_token
+        scope = "RUN_TIME"
+        type  = "SECRET"
+      }
+
+      env {
+        key   = "TARGET_APP_ID"
+        value = digitalocean_app.budget_app.id
+        scope = "RUN_TIME"
+      }
+
+      env {
+        key   = "TERMINATION_TIME"
+        value = local.termination_timestamp
+        scope = "RUN_TIME"
+      }
+
+      # Precise cron schedule - runs exactly when termination should occur
+      triggers {
+        name = "precise_termination"
+        type = "SCHEDULED"
+        config {
+          cron = local.precise_cron
+        }
+      }
+    }
   }
 }
 
