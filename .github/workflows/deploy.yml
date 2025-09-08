@@ -20,11 +20,12 @@ jobs:
     # Only run on PR events to save costs
     if: github.event_name == 'pull_request'
     
-    # Permissions needed for GitHub Container Registry
+    # Permissions needed for GitHub Container Registry and workflow dispatch
     permissions:
       contents: read
       packages: write
       pull-requests: write  # For PR comments
+      actions: write        # For triggering workflow_dispatch
     
     # Outputs for the termination job
     outputs:
@@ -318,7 +319,9 @@ jobs:
         
         # Trigger the auto-termination workflow
         # The environment wait timer will handle the 30-minute delay WITHOUT using runner time
-        curl -X POST \
+        echo "Triggering auto-termination workflow..."
+        
+        response=$(curl -w "%{http_code}" -s -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
           "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-terminate.yml/dispatches" \
@@ -329,9 +332,25 @@ jobs:
               \"app_url\": \"${{ env.APP_URL }}\",
               \"pr_number\": \"${{ github.event.number }}\"
             }
-          }"
+          }")
         
-        echo "✅ Auto-termination workflow dispatched"
-        echo "🕐 Environment wait timer will delay execution by 30 minutes"
-        echo "⚡ No GitHub runner time wasted during delay!"
-        echo "🔄 Workflow will start automatically after environment approval"
+        http_code="${response: -3}"
+        response_body="${response%???}"
+        
+        if [ "$http_code" = "204" ]; then
+          echo "✅ Auto-termination workflow dispatched successfully"
+          echo "🕐 Environment wait timer will delay execution by 30 minutes"
+          echo "⚡ No GitHub runner time wasted during delay!"
+          echo "🔄 Workflow will start automatically after environment approval"
+        else
+          echo "❌ Failed to dispatch auto-termination workflow (HTTP: $http_code)"
+          echo "Response: $response_body"
+          echo ""
+          echo "⚠️  Auto-termination not scheduled - manual cleanup required:"
+          echo "cd terraform && terraform destroy -auto-approve"
+          echo ""
+          echo "Common causes:"
+          echo "- Missing 'actions: write' permission"
+          echo "- GITHUB_TOKEN doesn't have workflow dispatch permissions"
+          echo "- Workflow file path incorrect"
+        fi
