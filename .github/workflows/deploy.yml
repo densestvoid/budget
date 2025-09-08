@@ -132,20 +132,20 @@ jobs:
         echo "ESTIMATED_COST=${COST}" >> $GITHUB_ENV
         echo "TERMINATION_INFO=${TERMINATION_INFO}" >> $GITHUB_ENV
         
-        # Get termination schedule info
-        TERMINATION_SCHEDULE=$(terraform output -json termination_schedule)
-        TERM_TIME=$(echo "$TERMINATION_SCHEDULE" | jq -r '.expected_termination_time')
-        CLEANUP_METHOD=$(echo "$TERMINATION_SCHEDULE" | jq -r '.method')
+        # Get termination method info
+        TERMINATION_METHOD=$(terraform output -json termination_method)
+        CLEANUP_METHOD=$(echo "$TERMINATION_METHOD" | jq -r '.method')
+        DELAY_MINUTES=$(echo "$TERMINATION_METHOD" | jq -r '.delay_minutes')
         
-        echo "TERM_TIME=${TERM_TIME}" >> $GITHUB_ENV
         echo "CLEANUP_METHOD=${CLEANUP_METHOD}" >> $GITHUB_ENV
+        echo "DELAY_MINUTES=${DELAY_MINUTES}" >> $GITHUB_ENV
         
         echo "✅ App Platform deployment initiated!"
         echo "🌐 Application URL: ${APP_URL}"
         echo "🆔 App ID: ${APP_ID}"
         echo "💰 Estimated cost: ${COST}"
-        echo "⏰ Expected termination: ${TERM_TIME}"
-        echo "🔄 Cleanup method: ${CLEANUP_METHOD}"
+        echo "⏰ Auto-termination: ${DELAY_MINUTES} minutes via environment wait timer"
+        echo "🔄 Method: ${CLEANUP_METHOD}"
     
     - name: Wait for App Platform deployment
       run: |
@@ -255,9 +255,9 @@ jobs:
             **🌐 Application URL:** ${{ env.APP_URL }}
             **🆔 App ID:** ${{ env.APP_ID }}
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
-            **⏰ Expected Termination:** ${{ env.TERM_TIME }}
-            **🔄 Cleanup Method:** ${{ env.CLEANUP_METHOD }}
-            **🔁 Retry Logic:** Up to 3 attempts with 5-minute delays
+            **⏰ Auto-Termination:** ${{ env.DELAY_MINUTES }} minutes
+            **🔄 Method:** ${{ env.CLEANUP_METHOD }}
+            **⚡ Zero Runner Waste:** Environment wait timer handles delay
             **🗃️ Database:** PostgreSQL (internal service in App Platform)
             **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             

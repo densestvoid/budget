@@ -22,12 +22,7 @@ resource "random_id" "deployment" {
   byte_length = 4
 }
 
-# Calculate expected termination time for display
-locals {
-  # Calculate when the app should be terminated (for display purposes)
-  termination_timestamp = timeadd(timestamp(), "${var.auto_terminate_minutes}m")
-  termination_display = formatdate("YYYY-MM-DD hh:mm:ss UTC", local.termination_timestamp)
-}
+# No complex timing calculation needed - GitHub Actions handles termination scheduling
 
 # Create DigitalOcean App Platform application
 resource "digitalocean_app" "budget_app" {

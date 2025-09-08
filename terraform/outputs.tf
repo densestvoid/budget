@@ -35,17 +35,16 @@ output "estimated_monthly_cost" {
 # Auto-termination info
 output "auto_termination_info" {
   description = "Auto-termination configuration"
-  value       = var.auto_terminate_minutes > 0 ? "App will auto-terminate at ${local.termination_display}" : "Auto-termination disabled"
+  value       = var.auto_terminate_minutes > 0 ? "App will auto-terminate after ${var.auto_terminate_minutes} minutes via workflow_dispatch" : "Auto-termination disabled"
 }
 
-# Termination info
-output "termination_schedule" {
-  description = "Termination schedule details"
+# Termination method info
+output "termination_method" {
+  description = "Auto-termination method"
   value = var.auto_terminate_minutes > 0 ? {
-    expected_termination_time = local.termination_display
-    app_id = digitalocean_app.budget_app.id
-    method = "GitHub Actions workflow_dispatch with self-restart"
-    note = "Auto-termination workflow will be triggered with ${var.auto_terminate_minutes} minute delay"
+    method = "GitHub Actions workflow_dispatch with environment wait timer"
+    delay_minutes = var.auto_terminate_minutes
+    note = "Requires 'termination-delay' environment with ${var.auto_terminate_minutes}-minute wait timer"
   } : null
 }
 
