@@ -275,16 +275,19 @@ jobs:
             - ✅ No server management needed
             
             **Auto-Termination:**
-            - 🕐 Scheduled via GitHub Issues (30 minutes)
+            - 🕐 Scheduled via workflow_dispatch (30 minutes)
             - ⚡ No GitHub runner time wasted during delay
-            - 🔄 Processed automatically by cleanup workflow (every 5 minutes)
-            - 📝 Tracked via GitHub Issue for transparency
+            - 🔄 Uses environment wait timer for precise timing
+            - 📝 Transparent execution via GitHub Actions
+            
+            **Setup Required (First Time Only):**
+            1. Create \`termination-delay\` environment with 30-minute wait timer
+            2. Manually trigger auto-terminate workflow once to register it
             
             **How it works:**
-            - Creates GitHub Issue with termination schedule
-            - Cleanup workflow runs every 5 minutes
-            - Terminates apps when scheduled time arrives
-            - Closes issue with completion status
+            - Triggers auto-terminate workflow via API
+            - Environment wait timer delays execution (no runner cost)
+            - Workflow runs automatically after 30-minute delay
             
             Test your changes and provide feedback! 🎉`
           })
@@ -316,41 +319,43 @@ jobs:
             Please fix the issues and push a new commit to retry the deployment.`
           })
 
-    - name: Schedule auto-termination via GitHub Issue
+    - name: Schedule auto-termination via workflow dispatch
       if: success()
-      uses: actions/github-script@v7
-      with:
-        script: |
-          // Calculate termination time (30 minutes from now)
-          const terminationTime = new Date(Date.now() + 30 * 60 * 1000);
-          
-          // Create a GitHub issue to track the scheduled termination
-          const issue = await github.rest.issues.create({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            title: `🕐 Auto-Terminate: ${{ env.APP_ID }}`,
-            body: `## Scheduled Auto-Termination
-            
-            **App ID:** ${{ env.APP_ID }}
-            **App URL:** ${{ env.APP_URL }}
-            **PR:** #${{ github.event.number }}
-            **Branch:** ${{ github.head_ref }}
-            **Scheduled Termination:** ${terminationTime.toISOString()}
-            **Created:** ${new Date().toISOString()}
-            
-            This issue tracks a scheduled app termination. The cleanup workflow will process this automatically.
-            
-            **Manual cleanup if needed:**
-            \`\`\`bash
-            curl -X DELETE \\
-              -H "Authorization: Bearer YOUR_DO_TOKEN" \\
-              "https://api.digitalocean.com/v2/apps/${{ env.APP_ID }}"
-            \`\`\``,
-            labels: ['auto-termination', 'scheduled']
-          });
-          
-          console.log(`✅ Termination scheduled via issue #${issue.data.number}`);
-          console.log(`🕐 Termination time: ${terminationTime.toISOString()}`);
-          console.log(`⚡ No GitHub runner time wasted during delay!`);
-          
-          return issue.data.number;
+      run: |
+        echo "🕐 Scheduling auto-termination via workflow dispatch..."
+        
+        # Trigger the auto-termination workflow
+        echo "Triggering auto-termination workflow..."
+        
+        response=$(curl -w "%{http_code}" -s -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-terminate.yml/dispatches" \
+          -d "{
+            \"ref\": \"${{ github.head_ref }}\",
+            \"inputs\": {
+              \"app_id\": \"${{ env.APP_ID }}\",
+              \"app_url\": \"${{ env.APP_URL }}\",
+              \"pr_number\": \"${{ github.event.number }}\"
+            }
+          }")
+        
+        http_code="${response: -3}"
+        response_body="${response%???}"
+        
+        if [ "$http_code" = "204" ]; then
+          echo "✅ Auto-termination workflow dispatched successfully"
+          echo "🕐 Environment wait timer will delay execution by 30 minutes"
+          echo "⚡ No GitHub runner time wasted during delay!"
+          echo "🔄 Workflow will start automatically after environment approval"
+        else
+          echo "❌ Failed to dispatch auto-termination workflow (HTTP: $http_code)"
+          echo "Response: $response_body"
+          echo ""
+          echo "💡 If this is the first time, manually trigger the auto-terminate workflow once to register it:"
+          echo "   Go to Actions → Auto-Terminate Deployment → Run workflow"
+          echo "   Then future automatic triggers will work"
+          echo ""
+          echo "⚠️  For now, manual cleanup required:"
+          echo "cd terraform && terraform destroy -auto-approve"
+        fi
