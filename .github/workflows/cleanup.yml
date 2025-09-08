@@ -1,4 +1,4 @@
-name: Cleanup Old Deployments
+name: Process Scheduled Terminations
 
 on:
   schedule:
@@ -6,79 +6,153 @@ on:
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
-  cleanup:
+  process-terminations:
     runs-on: ubuntu-latest
     steps:
-    - name: Cleanup old budget apps
-      run: |
-        echo "🗑️ Checking for budget apps older than 30 minutes..."
-        
-        # Get current timestamp
-        current_time=$(date +%s)
-        
-        # Get all DigitalOcean apps
-        apps_json=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/apps")
-        
-        if [ $? -ne 0 ]; then
-          echo "❌ Failed to fetch apps from DigitalOcean API"
-          exit 1
-        fi
-        
-        # Check if we got a valid response
-        if ! echo "$apps_json" | jq -e '.apps' >/dev/null 2>&1; then
-          echo "❌ Invalid response from DigitalOcean API"
-          echo "Response: $apps_json"
-          exit 1
-        fi
-        
-        # Process each budget app
-        terminated_count=0
-        kept_count=0
-        
-        echo "$apps_json" | jq -r '.apps[] | select(.spec.name | startswith("budget-app-")) | "\(.id)|\(.spec.name)|\(.created_at)"' | \
-        while IFS='|' read -r app_id app_name created_at; do
-          if [ -n "$app_id" ] && [ -n "$created_at" ]; then
-            # Calculate age in minutes
-            created_timestamp=$(date -d "$created_at" +%s)
-            age_minutes=$(( (current_time - created_timestamp) / 60 ))
+    - name: Process scheduled terminations
+      uses: actions/github-script@v7
+      with:
+        script: |
+          console.log('🔍 Checking for scheduled terminations...');
+          
+          // Get all open issues with auto-termination labels
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: 'auto-termination,scheduled',
+            state: 'open'
+          });
+          
+          console.log(`Found ${issues.data.length} scheduled termination(s)`);
+          
+          const now = new Date();
+          let processedCount = 0;
+          let terminatedCount = 0;
+          
+          for (const issue of issues.data) {
+            const title = issue.title;
+            const body = issue.body;
             
-            echo "📱 App: $app_name"
-            echo "   Age: ${age_minutes} minutes"
-            echo "   Created: $created_at"
+            // Extract app ID from title
+            const appIdMatch = title.match(/Auto-Terminate: (.+)/);
+            if (!appIdMatch) {
+              console.log(`Skipping issue #${issue.number} - invalid title format`);
+              continue;
+            }
             
-            if [ $age_minutes -gt 30 ]; then
-              echo "   🗑️  TERMINATING (older than 30 minutes)"
+            const appId = appIdMatch[1];
+            
+            // Extract scheduled time from body
+            const timeMatch = body.match(/\*\*Scheduled Termination:\*\* (.+)/);
+            if (!timeMatch) {
+              console.log(`Skipping issue #${issue.number} - no scheduled time found`);
+              continue;
+            }
+            
+            const scheduledTime = new Date(timeMatch[1]);
+            const minutesUntilTermination = (scheduledTime - now) / (1000 * 60);
+            
+            console.log(`\nIssue #${issue.number}:`);
+            console.log(`  App ID: ${appId}`);
+            console.log(`  Scheduled: ${scheduledTime.toISOString()}`);
+            console.log(`  Time until termination: ${minutesUntilTermination.toFixed(1)} minutes`);
+            
+            processedCount++;
+            
+            // Check if termination time has arrived (with 1-minute tolerance)
+            if (minutesUntilTermination <= 1) {
+              console.log(`  🗑️ Termination time reached, deleting app...`);
               
-              # Delete the app
-              response=$(curl -w "%{http_code}" -s -X DELETE \
-                -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-                "https://api.digitalocean.com/v2/apps/${app_id}")
-              
-              http_code="${response: -3}"
-              if [ "$http_code" = "204" ]; then
-                echo "   ✅ Successfully terminated $app_name"
-                terminated_count=$((terminated_count + 1))
-              else
-                echo "   ❌ Failed to terminate $app_name (HTTP: $http_code)"
-                echo "   Response: ${response%???}"  # Remove HTTP code from response
-              fi
-            else
-              echo "   ⏰ KEEPING (only ${age_minutes} minutes old)"
-              kept_count=$((kept_count + 1))
-            fi
-            echo ""
-          fi
-        done
-        
-        echo "🏁 Cleanup Summary:"
-        echo "   Terminated: $terminated_count apps"
-        echo "   Kept: $kept_count apps"
-        echo "   Cleanup completed at $(date)"
-        
-        # Update GitHub Actions summary
-        echo "## 🗑️ App Cleanup Results" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Terminated:** $terminated_count apps (>30 minutes old)" >> $GITHUB_STEP_SUMMARY
-        echo "**Kept:** $kept_count apps (≤30 minutes old)" >> $GITHUB_STEP_SUMMARY
-        echo "**Run Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+              try {
+                // Delete the app via DigitalOcean API
+                const response = await fetch(`https://api.digitalocean.com/v2/apps/${appId}`, {
+                  method: 'DELETE',
+                  headers: {
+                    'Authorization': `Bearer ${{ secrets.DO_TOKEN }}`,
+                    'Content-Type': 'application/json'
+                  }
+                });
+                
+                if (response.ok) {
+                  console.log(`  ✅ Successfully terminated app ${appId}`);
+                  terminatedCount++;
+                  
+                  // Close the issue with success comment
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `✅ **Auto-termination completed successfully**\n\nApp \`${appId}\` was terminated at ${now.toISOString()}\n\n*Processed by scheduled cleanup workflow*`
+                  });
+                  
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    state: 'closed'
+                  });
+                  
+                } else if (response.status === 404) {
+                  console.log(`  ℹ️ App ${appId} was already deleted`);
+                  terminatedCount++;
+                  
+                  // Close the issue - app already gone
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `ℹ️ **App already terminated**\n\nApp \`${appId}\` was not found (already deleted)\n\n*Processed by scheduled cleanup workflow*`
+                  });
+                  
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    state: 'closed'
+                  });
+                  
+                } else {
+                  console.log(`  ❌ Failed to terminate app ${appId} (HTTP: ${response.status})`);
+                  const errorText = await response.text();
+                  console.log(`  Error: ${errorText}`);
+                  
+                  // Comment on issue about failure
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `❌ **Auto-termination failed**\n\nFailed to delete app \`${appId}\` (HTTP ${response.status})\n\nError: ${errorText}\n\n**Manual cleanup required:**\n\`\`\`bash\ncurl -X DELETE -H "Authorization: Bearer YOUR_DO_TOKEN" "https://api.digitalocean.com/v2/apps/${appId}"\n\`\`\``
+                  });
+                }
+                
+              } catch (error) {
+                console.log(`  ❌ Exception terminating app ${appId}: ${error.message}`);
+                
+                // Comment on issue about exception
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `❌ **Auto-termination exception**\n\nException while deleting app \`${appId}\`: ${error.message}\n\n**Manual cleanup required**`
+                });
+              }
+            } else {
+              console.log(`  ⏰ Waiting ${minutesUntilTermination.toFixed(1)} more minutes`);
+            }
+          }
+          
+          console.log(`\n🏁 Cleanup Summary:`);
+          console.log(`  Processed: ${processedCount} scheduled terminations`);
+          console.log(`  Terminated: ${terminatedCount} apps`);
+          console.log(`  Waiting: ${processedCount - terminatedCount} apps`);
+          
+          // Update GitHub Actions summary
+          core.summary.addHeading('🗑️ Scheduled Termination Processing');
+          core.summary.addTable([
+            [{data: 'Metric', header: true}, {data: 'Count', header: true}],
+            ['Scheduled Terminations Found', processedCount.toString()],
+            ['Apps Terminated', terminatedCount.toString()],
+            ['Apps Still Waiting', (processedCount - terminatedCount).toString()],
+            ['Next Check', '5 minutes']
+          ]);
+          await core.summary.write();
