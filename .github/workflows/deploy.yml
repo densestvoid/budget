@@ -25,6 +25,11 @@ jobs:
       contents: read
       packages: write
       pull-requests: write  # For PR comments
+    
+    # Outputs for the termination job
+    outputs:
+      app_id: ${{ env.APP_ID }}
+      app_url: ${{ env.APP_URL }}
 
     steps:
     - name: Checkout code
@@ -301,18 +306,40 @@ jobs:
       run: |
         echo "Scheduling app termination in 30 minutes..."
         
+        # Get APP_ID from the deploy job outputs
+        APP_ID="${{ needs.deploy.outputs.app_id }}"
+        APP_URL="${{ needs.deploy.outputs.app_url }}"
+        
+        echo "App ID to terminate: ${APP_ID}"
+        echo "App URL: ${APP_URL}"
+        
+        if [ -z "$APP_ID" ]; then
+          echo "❌ Error: APP_ID is empty, cannot terminate app"
+          echo "Deploy job outputs:"
+          echo "app_id: ${{ needs.deploy.outputs.app_id }}"
+          echo "app_url: ${{ needs.deploy.outputs.app_url }}"
+          exit 1
+        fi
+        
         # Sleep for 30 minutes then delete the app
+        echo "Sleeping for 30 minutes before termination..."
         sleep 1800  # 30 minutes
         
-        echo "Auto-termination time reached, deleting app..."
+        echo "Auto-termination time reached, deleting app ${APP_ID}..."
         
         # Use DigitalOcean API to delete the app
-        APP_ID="${{ needs.deploy.outputs.app_id }}"
-        
-        curl -X DELETE \
+        response=$(curl -w "%{http_code}" -s -X DELETE \
           -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
           -H "Content-Type: application/json" \
-          "https://api.digitalocean.com/v2/apps/${APP_ID}"
+          "https://api.digitalocean.com/v2/apps/${APP_ID}")
         
-        echo "✅ App terminated successfully after 30 minutes"
+        http_code="${response: -3}"
+        
+        if [ "$http_code" = "204" ]; then
+          echo "✅ App terminated successfully after 30 minutes"
+        else
+          echo "❌ Failed to terminate app. HTTP code: $http_code"
+          echo "Response: $response"
+          exit 1
+        fi
       timeout-minutes: 45  # Allow extra time for the sleep + deletion
