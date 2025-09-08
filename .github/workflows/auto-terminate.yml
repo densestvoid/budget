@@ -1,0 +1,198 @@
+name: Auto-Terminate Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: 'DigitalOcean App ID to terminate'
+        required: true
+        type: string
+      app_url:
+        description: 'Application URL'
+        required: true
+        type: string
+      delay_minutes:
+        description: 'Minutes to wait before termination'
+        required: true
+        type: number
+        default: 30
+      retry_count:
+        description: 'Current retry attempt (internal use)'
+        required: false
+        type: number
+        default: 0
+      max_retries:
+        description: 'Maximum retry attempts'
+        required: false
+        type: number
+        default: 3
+
+env:
+  DO_TOKEN: ${{ secrets.DO_TOKEN }}
+
+jobs:
+  auto-terminate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Calculate timing and validate inputs
+      id: timing
+      run: |
+        APP_ID="${{ github.event.inputs.app_id }}"
+        APP_URL="${{ github.event.inputs.app_url }}"
+        DELAY_MINUTES="${{ github.event.inputs.delay_minutes }}"
+        RETRY_COUNT="${{ github.event.inputs.retry_count }}"
+        MAX_RETRIES="${{ github.event.inputs.max_retries }}"
+        
+        echo "🕐 Auto-termination workflow triggered"
+        echo "App ID: $APP_ID"
+        echo "App URL: $APP_URL"
+        echo "Delay: $DELAY_MINUTES minutes"
+        echo "Retry: $RETRY_COUNT/$MAX_RETRIES"
+        
+        # Validate inputs
+        if [ -z "$APP_ID" ] || [ -z "$APP_URL" ]; then
+          echo "❌ Error: app_id and app_url are required"
+          exit 1
+        fi
+        
+        if [ "$RETRY_COUNT" -gt "$MAX_RETRIES" ]; then
+          echo "❌ Error: Maximum retry attempts ($MAX_RETRIES) exceeded"
+          exit 1
+        fi
+        
+        # Calculate wait time in seconds
+        WAIT_SECONDS=$((DELAY_MINUTES * 60))
+        echo "Will wait $WAIT_SECONDS seconds ($DELAY_MINUTES minutes)"
+        
+        # Calculate expected termination time
+        TERMINATION_TIME=$(date -u -d "+$DELAY_MINUTES minutes" '+%Y-%m-%d %H:%M:%S UTC')
+        echo "Expected termination: $TERMINATION_TIME"
+        
+        # Export for next steps
+        echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
+        echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+        echo "wait_seconds=$WAIT_SECONDS" >> $GITHUB_OUTPUT
+        echo "termination_time=$TERMINATION_TIME" >> $GITHUB_OUTPUT
+        echo "retry_count=$RETRY_COUNT" >> $GITHUB_OUTPUT
+        echo "max_retries=$MAX_RETRIES" >> $GITHUB_OUTPUT
+    
+    - name: Wait for termination time
+      run: |
+        WAIT_SECONDS="${{ steps.timing.outputs.wait_seconds }}"
+        TERMINATION_TIME="${{ steps.timing.outputs.termination_time }}"
+        
+        echo "⏰ Waiting $WAIT_SECONDS seconds until $TERMINATION_TIME..."
+        
+        # Use sleep (this is the only place we sleep, and it's intentional)
+        sleep $WAIT_SECONDS
+        
+        echo "✅ Wait completed, proceeding with termination check"
+    
+    - name: Check app health before termination
+      id: health_check
+      run: |
+        APP_URL="${{ steps.timing.outputs.app_url }}"
+        
+        echo "🩺 Checking app health before termination..."
+        
+        # Test if app is still responding
+        if curl -f --connect-timeout 10 --max-time 15 "$APP_URL/health" >/dev/null 2>&1; then
+          echo "✅ App is healthy - proceeding with termination"
+          echo "should_terminate=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ App is not responding - may already be terminated or failed"
+          echo "should_terminate=false" >> $GITHUB_OUTPUT
+          
+          # Check if app still exists via API
+          APP_ID="${{ steps.timing.outputs.app_id }}"
+          response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/apps/$APP_ID")
+          
+          if echo "$response" | jq -e '.app' >/dev/null 2>&1; then
+            echo "ℹ️  App exists but not responding - will still attempt termination"
+            echo "should_terminate=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️  App no longer exists - termination not needed"
+            echo "should_terminate=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+    
+    - name: Terminate app
+      if: steps.health_check.outputs.should_terminate == 'true'
+      id: terminate
+      run: |
+        APP_ID="${{ steps.timing.outputs.app_id }}"
+        
+        echo "🗑️  Terminating app $APP_ID..."
+        
+        # Delete the app
+        response=$(curl -w "%{http_code}" -s -X DELETE \
+          -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          "https://api.digitalocean.com/v2/apps/$APP_ID")
+        
+        http_code="${response: -3}"
+        response_body="${response%???}"
+        
+        if [ "$http_code" = "204" ]; then
+          echo "✅ App terminated successfully"
+          echo "termination_successful=true" >> $GITHUB_OUTPUT
+        elif [ "$http_code" = "404" ]; then
+          echo "ℹ️  App was already deleted"
+          echo "termination_successful=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Failed to terminate app (HTTP: $http_code)"
+          echo "Response: $response_body"
+          echo "termination_successful=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Handle termination failure (retry logic)
+      if: steps.health_check.outputs.should_terminate == 'true' && steps.terminate.outputs.termination_successful == 'false'
+      run: |
+        RETRY_COUNT="${{ steps.timing.outputs.retry_count }}"
+        MAX_RETRIES="${{ steps.timing.outputs.max_retries }}"
+        NEXT_RETRY=$((RETRY_COUNT + 1))
+        
+        echo "❌ Termination failed, retry $NEXT_RETRY/$MAX_RETRIES"
+        
+        if [ $NEXT_RETRY -le $MAX_RETRIES ]; then
+          echo "🔄 Scheduling retry in 5 minutes..."
+          
+          # Trigger this same workflow again with incremented retry count
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-terminate.yml/dispatches" \
+            -d "{
+              \"ref\": \"${{ github.ref_name }}\",
+              \"inputs\": {
+                \"app_id\": \"${{ steps.timing.outputs.app_id }}\",
+                \"app_url\": \"${{ steps.timing.outputs.app_url }}\",
+                \"delay_minutes\": \"5\",
+                \"retry_count\": \"$NEXT_RETRY\",
+                \"max_retries\": \"$MAX_RETRIES\"
+              }
+            }"
+          
+          echo "✅ Retry scheduled"
+        else
+          echo "❌ Maximum retries exceeded - manual cleanup required"
+          echo "Manual cleanup command: terraform destroy -auto-approve"
+        fi
+    
+    - name: Update status
+      run: |
+        if [ "${{ steps.health_check.outputs.should_terminate }}" = "true" ]; then
+          if [ "${{ steps.terminate.outputs.termination_successful }}" = "true" ]; then
+            echo "## ✅ Auto-Termination Successful" >> $GITHUB_STEP_SUMMARY
+            echo "App ${{ steps.timing.outputs.app_id }} was terminated successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Auto-Termination Failed" >> $GITHUB_STEP_SUMMARY
+            echo "App ${{ steps.timing.outputs.app_id }} termination failed" >> $GITHUB_STEP_SUMMARY
+            echo "Retry attempt: ${{ steps.timing.outputs.retry_count }}/${{ steps.timing.outputs.max_retries }}" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "## ℹ️ Auto-Termination Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "App ${{ steps.timing.outputs.app_id }} was already terminated or not responding" >> $GITHUB_STEP_SUMMARY
+        fi

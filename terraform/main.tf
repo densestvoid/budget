@@ -129,8 +129,7 @@ resource "digitalocean_app" "budget_app" {
       http_port = 8080
     }
 
-    # Note: DigitalOcean App Platform functions may not support cron triggers in Terraform
-    # Let's use a simpler approach with scheduled cleanup workflow instead
+    # Auto-termination is handled by GitHub Actions workflow_dispatch
   }
 }
 

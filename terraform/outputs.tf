@@ -44,8 +44,8 @@ output "termination_schedule" {
   value = var.auto_terminate_minutes > 0 ? {
     expected_termination_time = local.termination_display
     app_id = digitalocean_app.budget_app.id
-    method = "Scheduled cleanup workflow (every 5 minutes)"
-    note = "Apps older than ${var.auto_terminate_minutes} minutes will be automatically deleted"
+    method = "GitHub Actions workflow_dispatch with self-restart"
+    note = "Auto-termination workflow will be triggered with ${var.auto_terminate_minutes} minute delay"
   } : null
 }
 

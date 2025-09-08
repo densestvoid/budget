@@ -145,7 +145,7 @@ jobs:
         echo "🆔 App ID: ${APP_ID}"
         echo "💰 Estimated cost: ${COST}"
         echo "⏰ Expected termination: ${TERM_TIME}"
-        echo "🗑️ Cleanup method: ${CLEANUP_METHOD}"
+        echo "🔄 Cleanup method: ${CLEANUP_METHOD}"
     
     - name: Wait for App Platform deployment
       run: |
@@ -256,8 +256,8 @@ jobs:
             **🆔 App ID:** ${{ env.APP_ID }}
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
             **⏰ Expected Termination:** ${{ env.TERM_TIME }}
-            **🗑️ Cleanup Method:** ${{ env.CLEANUP_METHOD }}
-            **🕐 Cleanup Frequency:** Every 5 minutes
+            **🔄 Cleanup Method:** ${{ env.CLEANUP_METHOD }}
+            **🔁 Retry Logic:** Up to 3 attempts with 5-minute delays
             **🗃️ Database:** PostgreSQL (internal service in App Platform)
             **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             
@@ -305,5 +305,27 @@ jobs:
             Please fix the issues and push a new commit to retry the deployment.`
           })
 
-  # No sleep-based termination job needed!
-  # Termination is handled by the DigitalOcean Function with precise cron scheduling
+    - name: Schedule auto-termination via workflow dispatch
+      if: success()
+      run: |
+        echo "🕐 Scheduling auto-termination via workflow dispatch..."
+        
+        # Trigger the auto-termination workflow with a 30-minute delay
+        curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-terminate.yml/dispatches" \
+          -d "{
+            \"ref\": \"${{ github.head_ref }}\",
+            \"inputs\": {
+              \"app_id\": \"${{ env.APP_ID }}\",
+              \"app_url\": \"${{ env.APP_URL }}\",
+              \"delay_minutes\": \"30\",
+              \"retry_count\": \"0\",
+              \"max_retries\": \"3\"
+            }
+          }"
+        
+        echo "✅ Auto-termination workflow scheduled"
+        echo "🕐 App will be terminated in 30 minutes"
+        echo "🔄 Up to 3 retry attempts if termination fails"
