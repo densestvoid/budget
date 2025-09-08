@@ -38,14 +38,14 @@ output "auto_termination_info" {
   value       = var.auto_terminate_minutes > 0 ? "App will auto-terminate at ${local.termination_display}" : "Auto-termination disabled"
 }
 
-# Precise termination schedule
+# Termination info
 output "termination_schedule" {
-  description = "Precise termination schedule details"
+  description = "Termination schedule details"
   value = var.auto_terminate_minutes > 0 ? {
-    cron_expression = local.precise_cron
-    termination_time = local.termination_display
+    expected_termination_time = local.termination_display
     app_id = digitalocean_app.budget_app.id
-    note = "Function is embedded in the main app and will self-destruct"
+    method = "Scheduled cleanup workflow (every 5 minutes)"
+    note = "Apps older than ${var.auto_terminate_minutes} minutes will be automatically deleted"
   } : null
 }
 

@@ -132,21 +132,20 @@ jobs:
         echo "ESTIMATED_COST=${COST}" >> $GITHUB_ENV
         echo "TERMINATION_INFO=${TERMINATION_INFO}" >> $GITHUB_ENV
         
-        # Get precise termination schedule
+        # Get termination schedule info
         TERMINATION_SCHEDULE=$(terraform output -json termination_schedule)
-        CRON_EXPR=$(echo "$TERMINATION_SCHEDULE" | jq -r '.cron_expression')
-        TERM_TIME=$(echo "$TERMINATION_SCHEDULE" | jq -r '.termination_time')
+        TERM_TIME=$(echo "$TERMINATION_SCHEDULE" | jq -r '.expected_termination_time')
+        CLEANUP_METHOD=$(echo "$TERMINATION_SCHEDULE" | jq -r '.method')
         
-        echo "CRON_EXPR=${CRON_EXPR}" >> $GITHUB_ENV
         echo "TERM_TIME=${TERM_TIME}" >> $GITHUB_ENV
+        echo "CLEANUP_METHOD=${CLEANUP_METHOD}" >> $GITHUB_ENV
         
         echo "✅ App Platform deployment initiated!"
         echo "🌐 Application URL: ${APP_URL}"
         echo "🆔 App ID: ${APP_ID}"
         echo "💰 Estimated cost: ${COST}"
-        echo "⏰ Precise termination: ${TERM_TIME}"
-        echo "📅 Cron schedule: ${CRON_EXPR}"
-        echo "🤖 Self-terminating function embedded in app"
+        echo "⏰ Expected termination: ${TERM_TIME}"
+        echo "🗑️ Cleanup method: ${CLEANUP_METHOD}"
     
     - name: Wait for App Platform deployment
       run: |
@@ -256,9 +255,9 @@ jobs:
             **🌐 Application URL:** ${{ env.APP_URL }}
             **🆔 App ID:** ${{ env.APP_ID }}
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
-            **⏰ Precise Termination:** ${{ env.TERM_TIME }}
-            **📅 Cron Schedule:** \`${{ env.CRON_EXPR }}\`
-            **🤖 Self-Terminating:** Function embedded in app
+            **⏰ Expected Termination:** ${{ env.TERM_TIME }}
+            **🗑️ Cleanup Method:** ${{ env.CLEANUP_METHOD }}
+            **🕐 Cleanup Frequency:** Every 5 minutes
             **🗃️ Database:** PostgreSQL (internal service in App Platform)
             **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             

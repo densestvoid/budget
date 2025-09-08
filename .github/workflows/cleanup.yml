@@ -1,0 +1,84 @@
+name: Cleanup Old Deployments
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Run every 5 minutes
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Cleanup old budget apps
+      run: |
+        echo "🗑️ Checking for budget apps older than 30 minutes..."
+        
+        # Get current timestamp
+        current_time=$(date +%s)
+        
+        # Get all DigitalOcean apps
+        apps_json=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps")
+        
+        if [ $? -ne 0 ]; then
+          echo "❌ Failed to fetch apps from DigitalOcean API"
+          exit 1
+        fi
+        
+        # Check if we got a valid response
+        if ! echo "$apps_json" | jq -e '.apps' >/dev/null 2>&1; then
+          echo "❌ Invalid response from DigitalOcean API"
+          echo "Response: $apps_json"
+          exit 1
+        fi
+        
+        # Process each budget app
+        terminated_count=0
+        kept_count=0
+        
+        echo "$apps_json" | jq -r '.apps[] | select(.spec.name | startswith("budget-app-")) | "\(.id)|\(.spec.name)|\(.created_at)"' | \
+        while IFS='|' read -r app_id app_name created_at; do
+          if [ -n "$app_id" ] && [ -n "$created_at" ]; then
+            # Calculate age in minutes
+            created_timestamp=$(date -d "$created_at" +%s)
+            age_minutes=$(( (current_time - created_timestamp) / 60 ))
+            
+            echo "📱 App: $app_name"
+            echo "   Age: ${age_minutes} minutes"
+            echo "   Created: $created_at"
+            
+            if [ $age_minutes -gt 30 ]; then
+              echo "   🗑️  TERMINATING (older than 30 minutes)"
+              
+              # Delete the app
+              response=$(curl -w "%{http_code}" -s -X DELETE \
+                -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+                "https://api.digitalocean.com/v2/apps/${app_id}")
+              
+              http_code="${response: -3}"
+              if [ "$http_code" = "204" ]; then
+                echo "   ✅ Successfully terminated $app_name"
+                terminated_count=$((terminated_count + 1))
+              else
+                echo "   ❌ Failed to terminate $app_name (HTTP: $http_code)"
+                echo "   Response: ${response%???}"  # Remove HTTP code from response
+              fi
+            else
+              echo "   ⏰ KEEPING (only ${age_minutes} minutes old)"
+              kept_count=$((kept_count + 1))
+            fi
+            echo ""
+          fi
+        done
+        
+        echo "🏁 Cleanup Summary:"
+        echo "   Terminated: $terminated_count apps"
+        echo "   Kept: $kept_count apps"
+        echo "   Cleanup completed at $(date)"
+        
+        # Update GitHub Actions summary
+        echo "## 🗑️ App Cleanup Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Terminated:** $terminated_count apps (>30 minutes old)" >> $GITHUB_STEP_SUMMARY
+        echo "**Kept:** $kept_count apps (≤30 minutes old)" >> $GITHUB_STEP_SUMMARY
+        echo "**Run Time:** $(date)" >> $GITHUB_STEP_SUMMARY
