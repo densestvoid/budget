@@ -134,11 +134,22 @@ jobs:
         
         echo "✅ Terraform configuration recreated"
     
-    - name: Download Terraform state from deploy workflow
-      uses: actions/download-artifact@v4
-      with:
-        name: terraform-state-${{ steps.validate.outputs.app_id }}
-        path: terraform/
+    - name: Download Terraform state from repository
+      run: |
+        APP_ID="${{ steps.validate.outputs.app_id }}"
+        STATE_BRANCH="terraform-state-$APP_ID"
+        
+        echo "📦 Downloading Terraform state from branch: $STATE_BRANCH"
+        
+        # Fetch the state branch
+        git fetch origin "$STATE_BRANCH"
+        
+        # Get the terraform state and vars from the branch
+        git show "origin/$STATE_BRANCH:terraform.tfstate" > terraform/terraform.tfstate
+        git show "origin/$STATE_BRANCH:terraform.tfvars" > terraform/terraform.tfvars
+        
+        echo "✅ Terraform state and vars downloaded from branch"
+        echo "State file size: $(du -h terraform/terraform.tfstate)"
     
     - name: Initialize Terraform
       run: |
@@ -181,6 +192,13 @@ jobs:
           echo "🧹 All resources cleaned up properly"
           echo "📊 Terraform state is now clean"
           echo "result=success" >> $GITHUB_OUTPUT
+          
+          # Clean up the state branch
+          echo "🗑️ Cleaning up state branch..."
+          STATE_BRANCH="terraform-state-$APP_ID"
+          git push origin --delete "$STATE_BRANCH" || echo "State branch already deleted or not found"
+          echo "✅ State branch cleaned up"
+          
         else
           echo "❌ Terraform destroy failed"
           echo "📋 Terraform state may be inconsistent"
@@ -190,6 +208,9 @@ jobs:
           # Show terraform state for debugging
           echo "Current Terraform state:"
           terraform show || echo "Failed to show state"
+          
+          # Keep state branch for debugging if destroy failed
+          echo "🔍 State branch preserved for debugging: terraform-state-$APP_ID"
         fi
     
     - name: Comment on PR with termination result

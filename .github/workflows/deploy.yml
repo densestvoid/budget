@@ -148,13 +148,35 @@ jobs:
         echo "⏰ Auto-termination: ${DELAY_MINUTES} minutes via environment wait timer"
         echo "🔄 Method: ${CLEANUP_METHOD}"
     
-    - name: Upload Terraform state for auto-termination
+    - name: Store Terraform state in repository for auto-termination
       if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: terraform-state-${{ env.APP_ID }}
-        path: terraform/terraform.tfstate
-        retention-days: 1
+      run: |
+        echo "📦 Storing Terraform state for auto-termination workflow..."
+        
+        # Create a unique branch for this deployment's state
+        STATE_BRANCH="terraform-state-${{ env.APP_ID }}"
+        
+        # Configure git
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Create orphan branch for state storage
+        git checkout --orphan "$STATE_BRANCH"
+        git rm -rf .
+        
+        # Copy only the terraform state
+        cp terraform/terraform.tfstate .
+        cp terraform/terraform.tfvars .
+        
+        # Commit the state
+        git add terraform.tfstate terraform.tfvars
+        git commit -m "Terraform state for deployment ${{ env.APP_ID }}"
+        
+        # Push the state branch
+        git push origin "$STATE_BRANCH"
+        
+        echo "✅ Terraform state stored in branch: $STATE_BRANCH"
+        echo "🕐 Auto-terminate workflow will download state from this branch"
     
     - name: Wait for App Platform deployment
       run: |
