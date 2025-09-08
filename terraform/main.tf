@@ -152,18 +152,7 @@ resource "digitalocean_app" "budget_app" {
       http_port = 8080
     }
 
-  }
-}
-
-# Separate termination function app (so it can delete the main app)
-resource "digitalocean_app" "termination_function" {
-  count = var.auto_terminate_minutes > 0 ? 1 : 0
-
-  spec {
-    name   = "terminator-${random_id.deployment.hex}"
-    region = var.region
-
-    # Precise auto-termination function
+    # Precise auto-termination function (deletes the entire app including itself)
     function {
       name = "terminate"
       

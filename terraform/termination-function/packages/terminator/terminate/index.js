@@ -62,33 +62,14 @@ exports.main = async (args) => {
       });
       
       if (deleteResponse.ok) {
-        console.log(`✅ Successfully terminated app ${TARGET_APP_ID}`);
-        
-        // Get the current function's app ID for self-destruction
-        const functionAppId = args.__ow_meta?.app_id;
-        
-        if (functionAppId && functionAppId !== TARGET_APP_ID) {
-          console.log(`Self-destructing termination function ${functionAppId}...`);
-          
-          // Small delay to ensure this response is sent before self-destruction
-          setTimeout(async () => {
-            await fetch(`https://api.digitalocean.com/v2/apps/${functionAppId}`, {
-              method: 'DELETE',
-              headers: { 
-                'Authorization': `Bearer ${DO_TOKEN}`,
-                'Content-Type': 'application/json'
-              }
-            });
-            console.log(`🗑️ Termination function ${functionAppId} self-destructed`);
-          }, 2000);
-        }
+        console.log(`✅ Successfully terminated entire app ${TARGET_APP_ID} (including this function)`);
         
         return { 
           success: true, 
           action: 'terminated',
           app_id: TARGET_APP_ID,
           terminated_at: now.toISOString(),
-          function_self_destructed: !!functionAppId
+          note: 'Entire app deleted including termination function'
         };
       } else {
         const errorText = await deleteResponse.text();

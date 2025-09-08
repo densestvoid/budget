@@ -136,11 +136,9 @@ jobs:
         TERMINATION_SCHEDULE=$(terraform output -json termination_schedule)
         CRON_EXPR=$(echo "$TERMINATION_SCHEDULE" | jq -r '.cron_expression')
         TERM_TIME=$(echo "$TERMINATION_SCHEDULE" | jq -r '.termination_time')
-        TERMINATOR_ID=$(echo "$TERMINATION_SCHEDULE" | jq -r '.terminator_function_id')
         
         echo "CRON_EXPR=${CRON_EXPR}" >> $GITHUB_ENV
         echo "TERM_TIME=${TERM_TIME}" >> $GITHUB_ENV
-        echo "TERMINATOR_ID=${TERMINATOR_ID}" >> $GITHUB_ENV
         
         echo "✅ App Platform deployment initiated!"
         echo "🌐 Application URL: ${APP_URL}"
@@ -148,7 +146,7 @@ jobs:
         echo "💰 Estimated cost: ${COST}"
         echo "⏰ Precise termination: ${TERM_TIME}"
         echo "📅 Cron schedule: ${CRON_EXPR}"
-        echo "🤖 Terminator function: ${TERMINATOR_ID}"
+        echo "🤖 Self-terminating function embedded in app"
     
     - name: Wait for App Platform deployment
       run: |
@@ -260,7 +258,7 @@ jobs:
             **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
             **⏰ Precise Termination:** ${{ env.TERM_TIME }}
             **📅 Cron Schedule:** \`${{ env.CRON_EXPR }}\`
-            **🤖 Terminator Function:** ${{ env.TERMINATOR_ID }}
+            **🤖 Self-Terminating:** Function embedded in app
             **🗃️ Database:** PostgreSQL (internal service in App Platform)
             **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
             

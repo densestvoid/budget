@@ -45,7 +45,7 @@ output "termination_schedule" {
     cron_expression = local.precise_cron
     termination_time = local.termination_display
     app_id = digitalocean_app.budget_app.id
-    terminator_function_id = digitalocean_app.termination_function[0].id
+    note = "Function is embedded in the main app and will self-destruct"
   } : null
 }
 
