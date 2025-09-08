@@ -1,6 +1,9 @@
 name: Auto-Terminate Deployment
 
 on:
+  push:
+    branches:
+      - automated-deployment  # Temporary trigger to register workflow
   workflow_dispatch:
     inputs:
       app_id:
