@@ -23,6 +23,12 @@ jobs:
   auto-terminate:
     runs-on: ubuntu-latest
     
+    # Permissions for commenting on PRs
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    
     # Use environment with wait timer - this is the key!
     environment: 
       name: termination-delay
@@ -98,14 +104,33 @@ jobs:
         echo "🗑️ Terminating app $APP_ID after environment wait timer..."
         echo "Termination time: $(date -u)"
         
+        # First check if app exists
+        echo "Checking app status before deletion..."
+        check_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps/$APP_ID")
+        
+        if echo "$check_response" | jq -e '.app' >/dev/null 2>&1; then
+          app_name=$(echo "$check_response" | jq -r '.app.spec.name')
+          app_phase=$(echo "$check_response" | jq -r '.app.phase')
+          echo "App found: $app_name (phase: $app_phase)"
+        else
+          echo "App not found or API error"
+          echo "$check_response"
+        fi
+        
         # Delete the app
-        response=$(curl -w "%{http_code}" -s -X DELETE \
+        echo "Sending DELETE request..."
+        response=$(curl -w "\nHTTP_CODE:%{http_code}" -s -X DELETE \
           -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
           -H "Content-Type: application/json" \
           "https://api.digitalocean.com/v2/apps/$APP_ID")
         
-        http_code="${response: -3}"
-        response_body="${response%???}"
+        # Parse response
+        http_code=$(echo "$response" | grep "HTTP_CODE:" | cut -d: -f2)
+        response_body=$(echo "$response" | sed '/HTTP_CODE:/d')
+        
+        echo "HTTP Code: $http_code"
+        echo "Response Body: $response_body"
         
         if [ "$http_code" = "204" ]; then
           echo "✅ App terminated successfully"
@@ -113,6 +138,10 @@ jobs:
         elif [ "$http_code" = "404" ]; then
           echo "ℹ️  App was already deleted"
           echo "result=already_deleted" >> $GITHUB_OUTPUT
+        elif [ "$http_code" = "200" ]; then
+          echo "ℹ️  Got 200 response - app may be in deletion process"
+          echo "Response: $response_body"
+          echo "result=deletion_initiated" >> $GITHUB_OUTPUT
         else
           echo "❌ Failed to terminate app (HTTP: $http_code)"
           echo "Response: $response_body"
@@ -140,9 +169,14 @@ jobs:
             message += `✅ **Result:** App terminated successfully after 30-minute delay\n`;
           } else if (terminationResult === 'already_deleted') {
             message += `ℹ️ **Result:** App was already deleted by another process\n`;
+          } else if (terminationResult === 'deletion_initiated') {
+            message += `🔄 **Result:** App deletion initiated (HTTP 200 response)\n`;
+            message += `The app may take a few minutes to fully terminate.\n`;
           } else if (terminationResult === 'failed') {
             message += `❌ **Result:** Termination failed - manual cleanup may be required\n`;
             message += `\n**Manual cleanup:** \`cd terraform && terraform destroy -auto-approve\`\n`;
+          } else {
+            message += `❓ **Result:** Unknown termination result: ${terminationResult}\n`;
           }
           
           message += `\n*Auto-termination completed via environment wait timer (no runner time wasted during delay)*`;
