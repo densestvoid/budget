@@ -36,6 +36,14 @@ jobs:
       # This delays the job WITHOUT using runner time
     
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+    
     - name: Validate termination inputs
       id: validate
       run: |
@@ -48,6 +56,7 @@ jobs:
         echo "App URL: $APP_URL" 
         echo "PR Number: #$PR_NUMBER"
         echo "Triggered at: $(date -u)"
+        echo "Method: Terraform destroy (proper state management)"
         
         # Validate required inputs
         if [ -z "$APP_ID" ] || [ -z "$APP_URL" ] || [ -z "$PR_NUMBER" ]; then
@@ -55,7 +64,7 @@ jobs:
           exit 1
         fi
         
-        echo "✅ Inputs validated, proceeding with termination"
+        echo "✅ Inputs validated, proceeding with Terraform destroy"
         echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
         echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
         echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
@@ -95,57 +104,70 @@ jobs:
           fi
         fi
     
-    - name: Terminate app
+    - name: Recreate Terraform configuration
+      run: |
+        echo "🔧 Recreating Terraform configuration for destroy operation..."
+        cd terraform
+        
+        # Recreate terraform.tfvars with same configuration used for deployment
+        cat > terraform.tfvars << EOF
+        # DigitalOcean Configuration
+        do_token = "${{ env.DO_TOKEN }}"
+        
+        # Cost-optimized configuration
+        region = "nyc1"
+        
+        # Application Configuration
+        app_port = "8080"
+        app_env = "production"
+        log_level = "info"
+        
+        # Auto-termination
+        auto_terminate_minutes = 30
+        
+        # GitHub Integration (from original deployment)
+        github_repo = "${{ github.repository }}"
+        github_branch = "${{ github.ref_name }}"
+        docker_image_tag = "latest"  # Not needed for destroy
+        github_token = "${{ secrets.GITHUB_TOKEN }}"
+        EOF
+        
+        echo "✅ Terraform configuration recreated"
+    
+    - name: Initialize Terraform
+      run: |
+        cd terraform
+        terraform init
+        echo "✅ Terraform initialized"
+    
+    - name: Terminate deployment via Terraform destroy
       if: steps.health_check.outputs.should_terminate == 'true'
       id: terminate
       run: |
         APP_ID="${{ steps.validate.outputs.app_id }}"
+        APP_URL="${{ steps.validate.outputs.app_url }}"
         
-        echo "🗑️ Terminating app $APP_ID after environment wait timer..."
+        echo "🗑️ Terminating deployment $APP_ID via Terraform destroy..."
         echo "Termination time: $(date -u)"
+        echo "Method: terraform destroy (proper state management)"
         
-        # First check if app exists
-        echo "Checking app status before deletion..."
-        check_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/apps/$APP_ID")
+        cd terraform
         
-        if echo "$check_response" | jq -e '.app' >/dev/null 2>&1; then
-          app_name=$(echo "$check_response" | jq -r '.app.spec.name')
-          app_phase=$(echo "$check_response" | jq -r '.app.phase')
-          echo "App found: $app_name (phase: $app_phase)"
-        else
-          echo "App not found or API error"
-          echo "$check_response"
-        fi
-        
-        # Delete the app
-        echo "Sending DELETE request..."
-        response=$(curl -w "\nHTTP_CODE:%{http_code}" -s -X DELETE \
-          -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          -H "Content-Type: application/json" \
-          "https://api.digitalocean.com/v2/apps/$APP_ID")
-        
-        # Parse response
-        http_code=$(echo "$response" | grep "HTTP_CODE:" | cut -d: -f2)
-        response_body=$(echo "$response" | sed '/HTTP_CODE:/d')
-        
-        echo "HTTP Code: $http_code"
-        echo "Response Body: $response_body"
-        
-        if [ "$http_code" = "204" ]; then
-          echo "✅ App terminated successfully"
+        # Run terraform destroy
+        if terraform destroy -auto-approve; then
+          echo "✅ Deployment terminated successfully via Terraform"
+          echo "🧹 All resources cleaned up properly"
+          echo "📊 Terraform state is now clean"
           echo "result=success" >> $GITHUB_OUTPUT
-        elif [ "$http_code" = "404" ]; then
-          echo "ℹ️  App was already deleted"
-          echo "result=already_deleted" >> $GITHUB_OUTPUT
-        elif [ "$http_code" = "200" ]; then
-          echo "ℹ️  Got 200 response - app may be in deletion process"
-          echo "Response: $response_body"
-          echo "result=deletion_initiated" >> $GITHUB_OUTPUT
         else
-          echo "❌ Failed to terminate app (HTTP: $http_code)"
-          echo "Response: $response_body"
+          echo "❌ Terraform destroy failed"
+          echo "📋 Terraform state may be inconsistent"
+          echo "🔧 Manual cleanup may be required"
           echo "result=failed" >> $GITHUB_OUTPUT
+          
+          # Show terraform state for debugging
+          echo "Current Terraform state:"
+          terraform show || echo "Failed to show state"
         fi
     
     - name: Comment on PR with termination result
@@ -166,14 +188,10 @@ jobs:
           if (shouldTerminate === 'false') {
             message += `✅ **Result:** App was already terminated - no action needed\n`;
           } else if (terminationResult === 'success') {
-            message += `✅ **Result:** App terminated successfully after 30-minute delay\n`;
-          } else if (terminationResult === 'already_deleted') {
-            message += `ℹ️ **Result:** App was already deleted by another process\n`;
-          } else if (terminationResult === 'deletion_initiated') {
-            message += `🔄 **Result:** App deletion initiated (HTTP 200 response)\n`;
-            message += `The app may take a few minutes to fully terminate.\n`;
+            message += `✅ **Result:** Deployment terminated successfully via Terraform destroy\n`;
+            message += `🧹 All resources cleaned up properly with proper state management\n`;
           } else if (terminationResult === 'failed') {
-            message += `❌ **Result:** Termination failed - manual cleanup may be required\n`;
+            message += `❌ **Result:** Terraform destroy failed - manual cleanup may be required\n`;
             message += `\n**Manual cleanup:** \`cd terraform && terraform destroy -auto-approve\`\n`;
           } else {
             message += `❓ **Result:** Unknown termination result: ${terminationResult}\n`;
