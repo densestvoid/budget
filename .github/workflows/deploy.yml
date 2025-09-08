@@ -321,6 +321,16 @@ jobs:
         # The environment wait timer will handle the 30-minute delay WITHOUT using runner time
         echo "Triggering auto-termination workflow..."
         
+        # First, let's check if the workflow exists
+        echo "Checking if auto-terminate.yml workflow exists..."
+        workflow_check=$(curl -s \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/workflows")
+        
+        echo "Available workflows:"
+        echo "$workflow_check" | jq -r '.workflows[] | "\(.name) - \(.path)"' || echo "Failed to parse workflows"
+        
         response=$(curl -w "%{http_code}" -s -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
