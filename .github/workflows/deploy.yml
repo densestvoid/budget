@@ -273,7 +273,13 @@ jobs:
             - ✅ Managed container orchestration
             - ✅ No server management needed
             
-            ⚠️ **Note:** This deployment will automatically terminate after 30 minutes to save costs.
+            **Auto-Termination:**
+            - 🕐 Scheduled via environment wait timer (30 minutes)
+            - ⚡ No GitHub runner time wasted during delay
+            - 🔄 Automatic execution after environment approval
+            
+            ⚠️ **Setup Required:** Create \`termination-delay\` environment with 30-minute wait timer
+            📖 **Instructions:** See [Environment Setup Guide](.github/ENVIRONMENT-SETUP.md)
             
             Test your changes and provide feedback! 🎉`
           })
@@ -308,9 +314,10 @@ jobs:
     - name: Schedule auto-termination via workflow dispatch
       if: success()
       run: |
-        echo "🕐 Scheduling auto-termination via workflow dispatch..."
+        echo "🕐 Scheduling auto-termination via workflow dispatch with environment wait timer..."
         
-        # Trigger the auto-termination workflow with a 30-minute delay
+        # Trigger the auto-termination workflow
+        # The environment wait timer will handle the 30-minute delay WITHOUT using runner time
         curl -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
@@ -320,12 +327,11 @@ jobs:
             \"inputs\": {
               \"app_id\": \"${{ env.APP_ID }}\",
               \"app_url\": \"${{ env.APP_URL }}\",
-              \"delay_minutes\": \"30\",
-              \"retry_count\": \"0\",
-              \"max_retries\": \"3\"
+              \"pr_number\": \"${{ github.event.number }}\"
             }
           }"
         
-        echo "✅ Auto-termination workflow scheduled"
-        echo "🕐 App will be terminated in 30 minutes"
-        echo "🔄 Up to 3 retry attempts if termination fails"
+        echo "✅ Auto-termination workflow dispatched"
+        echo "🕐 Environment wait timer will delay execution by 30 minutes"
+        echo "⚡ No GitHub runner time wasted during delay!"
+        echo "🔄 Workflow will start automatically after environment approval"
