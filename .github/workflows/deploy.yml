@@ -71,6 +71,7 @@ jobs:
             echo "❌ Failed to create project (HTTP: $http_code)"
             echo "Response: ${create_response%???}"
             echo "project_exists=false" >> $GITHUB_OUTPUT
+            echo "create_error=${create_response%???}" >> $GITHUB_OUTPUT
             exit 1
           fi
         fi
@@ -84,16 +85,24 @@ jobs:
         apps_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
           "https://api.digitalocean.com/v2/apps")
         
-        existing_app=$(echo "$apps_response" | jq -r ".apps[] | select(.spec.name == \"budget-app-${{ env.DEPLOYMENT_ID }}\") | .id")
-        
-        if [ -n "$existing_app" ] && [ "$existing_app" != "null" ]; then
-          echo "♻️ Found existing deployment: $existing_app"
-          echo "Will replace existing deployment"
-          echo "existing_app_id=$existing_app" >> $GITHUB_OUTPUT
-          echo "is_redeployment=true" >> $GITHUB_OUTPUT
+        # Check if API response is valid
+        if echo "$apps_response" | jq -e '.apps' >/dev/null 2>&1; then
+          existing_app=$(echo "$apps_response" | jq -r ".apps[] | select(.spec.name == \"budget-app-${{ env.DEPLOYMENT_ID }}\") | .id // empty")
+          
+          if [ -n "$existing_app" ] && [ "$existing_app" != "null" ]; then
+            echo "♻️ Found existing deployment: $existing_app"
+            echo "Will replace existing deployment"
+            echo "existing_app_id=$existing_app" >> $GITHUB_OUTPUT
+            echo "is_redeployment=true" >> $GITHUB_OUTPUT
+          else
+            echo "🆕 No existing deployment found"
+            echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          fi
         else
-          echo "🆕 No existing deployment found"
+          echo "❌ Failed to get apps from DigitalOcean API"
+          echo "Response: $apps_response"
           echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          exit 1
         fi
     
     - name: Cancel existing auto-terminate workflow
@@ -409,19 +418,27 @@ jobs:
           let failedStep = 'Unknown';
           let errorMessage = 'Unknown error occurred';
           
-          // Determine which step failed based on step outputs
-          if ('${{ steps.ensure_project.outputs.project_exists }}' === 'false') {
+          // Determine which step failed based on step outputs and conclusions
+          const stepResults = {
+            project_exists: '${{ steps.ensure_project.outputs.project_exists }}',
+            deploy_success: '${{ steps.deploy_infra.outputs.deploy_success }}',
+            migrations_success: '${{ steps.migrations.outputs.migrations_success }}'
+          };
+          
+          console.log('Step results:', stepResults);
+          
+          if (stepResults.project_exists === 'false') {
             failedStep = 'Ensure shared project exists';
-            errorMessage = 'Failed to create or access DigitalOcean project budget-develop';
-          } else if ('${{ steps.deploy_infra.outputs.deploy_success }}' === 'false') {
+            errorMessage = 'Failed to create DigitalOcean project budget-develop. Error: ${{ steps.ensure_project.outputs.create_error }}';
+          } else if (stepResults.deploy_success === 'false') {
             failedStep = 'Deploy infrastructure';
-            errorMessage = 'Terraform deployment failed - check logs for details';
-          } else if ('${{ steps.migrations.outputs.migrations_success }}' === 'false') {
+            errorMessage = 'Terraform plan or apply failed. Check GitHub Actions logs for terraform error details.';
+          } else if (stepResults.migrations_success === 'false') {
             failedStep = 'Run database migrations';
-            errorMessage = 'Database migration failed - schema may be incompatible';
+            errorMessage = 'Database migration command failed. Database may not be ready or migration files may have errors.';
           } else {
-            failedStep = 'Wait for App Platform deployment';
-            errorMessage = 'Application failed to start or health check failed';
+            failedStep = 'Check for existing deployment';
+            errorMessage = 'DigitalOcean API returned null response. jq error: Cannot iterate over null (null)';
           }
           
           const message = [
