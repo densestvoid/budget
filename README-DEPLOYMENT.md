@@ -65,4 +65,4 @@ Internet → App Platform (Managed) → Web Service + PostgreSQL Service
 4. **Test your application**
 5. **Auto-termination** after 30 minutes
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed documentation.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed documentation.# Test workspace initialization
