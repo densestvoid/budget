@@ -58,7 +58,7 @@ resource "digitalocean_database_user" "budget_user" {
 # Create DigitalOcean App Platform application
 resource "digitalocean_app" "budget_app" {
   spec {
-    name   = var.deployment_id
+    name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
     region = var.region
 
     # Main application service (PostgreSQL now managed separately)
@@ -100,9 +100,14 @@ resource "digitalocean_app" "budget_app" {
         scope = "RUN_TIME"
       }
 
-      # Health check
+      # Health check - more forgiving for database startup
       health_check {
-        http_path = "/health"
+        http_path                = "/health"
+        initial_delay_seconds    = 60    # Wait 60s before first check
+        period_seconds           = 10    # Check every 10s
+        timeout_seconds          = 5     # 5s timeout per check
+        failure_threshold        = 5     # Allow 5 failures before marking unhealthy
+        success_threshold        = 1     # 1 success to mark healthy
       }
 
       # HTTP port
