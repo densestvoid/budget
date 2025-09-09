@@ -5,7 +5,7 @@ terraform {
     organization = "densestvoid"
     
     workspaces {
-      tags = ["budget-app"]
+      name = "budget-app-default"
     }
   }
   
