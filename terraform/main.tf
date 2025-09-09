@@ -14,7 +14,25 @@ terraform {
       source  = "digitalocean/digitalocean"
       version = "~> 2.0"
     }
+    tfe = {
+      source  = "hashicorp/tfe"
+      version = "~> 0.51"
+    }
   }
+}
+
+# Configure the TFE Provider for workspace management
+provider "tfe" {
+  token = var.tfe_token
+}
+
+# Dynamically create workspace with specific tags and configurations
+resource "tfe_workspace" "deployment_workspace" {
+  name         = var.deployment_id
+  organization = "densestvoid"
+  tag_names    = ["budget-develop"]
+  execution_mode = "local"
+  description  = "Workspace for deployment ${var.deployment_id}"
 }
 
 # Configure the DigitalOcean Provider

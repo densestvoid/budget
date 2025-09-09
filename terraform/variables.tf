@@ -25,7 +25,12 @@ variable "deployment_id" {
   type        = string
 }
 
-# Workspace name managed via TF_WORKSPACE environment variable
+# TFE token for workspace management
+variable "tfe_token" {
+  description = "Terraform Cloud API token for workspace management"
+  type        = string
+  sensitive   = true
+}
 
 # Docker image configuration for App Platform
 variable "github_repo" {

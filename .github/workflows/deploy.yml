@@ -44,46 +44,26 @@ jobs:
       with:
         terraform_version: 1.5.7
     
-    - name: Create workspace if needed using tfe provider
+    - name: Create workspace using tfe provider
+      env:
+        TF_WORKSPACE: default  # Use default workspace for tfe operations
       run: |
         cd terraform
         
-        WORKSPACE_NAME="${{ env.DEPLOYMENT_ID }}"
+        echo "🏗️ Creating workspace using tfe provider: ${{ env.DEPLOYMENT_ID }}"
         
-        # Create workspace creation configuration
-        cat > workspace-setup.tf << EOF
-        terraform {
-          required_providers {
-            tfe = {
-              source  = "hashicorp/tfe"
-              version = "~> 0.51"
-            }
-          }
-        }
-        
-        provider "tfe" {
+        # Set Terraform Cloud token
+        cat > ~/.terraformrc << EOF
+        credentials "app.terraform.io" {
           token = "${{ secrets.TF_API_TOKEN }}"
-        }
-        
-        resource "tfe_workspace" "deployment_workspace" {
-          name         = "$WORKSPACE_NAME"
-          organization = "densestvoid"
-          tag_names    = ["budget-develop"]
-          execution_mode = "local"
         }
         EOF
         
-        echo "🏗️ Ensuring workspace exists: $WORKSPACE_NAME"
-        
-        # Initialize and apply workspace creation
-        terraform init workspace-setup.tf
+        # Initialize and apply to create the deployment workspace
+        terraform init
         terraform apply -auto-approve -target=tfe_workspace.deployment_workspace
         
-        # Clean up workspace setup files
-        rm -f workspace-setup.tf .terraform.lock.hcl
-        rm -rf .terraform/
-        
-        echo "✅ Workspace ensured: $WORKSPACE_NAME"
+        echo "✅ Workspace created with tags: ${{ env.DEPLOYMENT_ID }}"
     
     - name: Initialize Terraform with existing workspace
       id: terraform_init
@@ -211,6 +191,7 @@ jobs:
         cd terraform
         cat > terraform.tfvars << EOF
         do_token = "${{ env.DO_TOKEN }}"
+        tfe_token = "${{ secrets.TF_API_TOKEN }}"
         region = "nyc1"
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
