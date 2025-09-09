@@ -44,21 +44,56 @@ jobs:
       with:
         terraform_version: 1.5.7
     
-    - name: Initialize Terraform and check workspace
+    - name: Create workspace if needed using tfe provider
+      run: |
+        cd terraform
+        
+        WORKSPACE_NAME="${{ env.DEPLOYMENT_ID }}"
+        
+        # Create workspace creation configuration
+        cat > workspace-setup.tf << EOF
+        terraform {
+          required_providers {
+            tfe = {
+              source  = "hashicorp/tfe"
+              version = "~> 0.51"
+            }
+          }
+        }
+        
+        provider "tfe" {
+          token = "${{ secrets.TF_API_TOKEN }}"
+        }
+        
+        resource "tfe_workspace" "deployment_workspace" {
+          name         = "$WORKSPACE_NAME"
+          organization = "densestvoid"
+          tag_names    = ["budget-develop"]
+          execution_mode = "local"
+        }
+        EOF
+        
+        echo "🏗️ Ensuring workspace exists: $WORKSPACE_NAME"
+        
+        # Initialize and apply workspace creation
+        terraform init workspace-setup.tf
+        terraform apply -auto-approve -target=tfe_workspace.deployment_workspace
+        
+        # Clean up workspace setup files
+        rm -f workspace-setup.tf .terraform.lock.hcl
+        rm -rf .terraform/
+        
+        echo "✅ Workspace ensured: $WORKSPACE_NAME"
+    
+    - name: Initialize Terraform with existing workspace
       id: terraform_init
       env:
         TF_WORKSPACE: ${{ env.DEPLOYMENT_ID }}
       run: |
         cd terraform
         
-        echo "🔧 Initializing Terraform with remote backend..."
+        echo "🔧 Initializing Terraform with pre-created workspace..."
         echo "Workspace: $TF_WORKSPACE"
-        
-        # Debug: Show contents of main.tf
-        echo "📋 DEBUG: Contents of main.tf file:"
-        echo "--- START main.tf ---"
-        cat main.tf
-        echo "--- END main.tf ---"
         
         # Set Terraform Cloud token
         cat > ~/.terraformrc << EOF
@@ -67,23 +102,21 @@ jobs:
         }
         EOF
         
-        echo "🔧 Initializing Terraform with workspace: $TF_WORKSPACE"
-        
+        # Initialize with existing tagged workspace
         if terraform init; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
           # Check if this is a new or existing deployment
           if terraform state list | grep -q "digitalocean_app.budget_app"; then
-            echo "♻️ Found existing deployment in workspace: $TF_WORKSPACE"
-            echo "Will update existing deployment"
+            echo "♻️ Found existing deployment in workspace"
             echo "is_redeployment=true" >> $GITHUB_OUTPUT
             
             # Show current state
             echo "📋 Current resources in workspace:"
             terraform state list
           else
-            echo "🆕 New deployment in workspace: $TF_WORKSPACE"
+            echo "🆕 New deployment (empty workspace)"
             echo "is_redeployment=false" >> $GITHUB_OUTPUT
           fi
         else
