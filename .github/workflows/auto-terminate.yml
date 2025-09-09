@@ -15,6 +15,10 @@ on:
         description: 'PR number for tracking'
         required: true
         type: string
+      deployment_id:
+        description: 'Unique deployment ID'
+        required: true
+        type: string
 
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
@@ -50,24 +54,26 @@ jobs:
         APP_ID="${{ github.event.inputs.app_id }}"
         APP_URL="${{ github.event.inputs.app_url }}"
         PR_NUMBER="${{ github.event.inputs.pr_number }}"
+        DEPLOYMENT_ID="${{ github.event.inputs.deployment_id }}"
         
         echo "🗑️ Auto-termination workflow started"
+        echo "Deployment ID: $DEPLOYMENT_ID"
         echo "App ID: $APP_ID"
         echo "App URL: $APP_URL" 
         echo "PR Number: #$PR_NUMBER"
         echo "Triggered at: $(date -u)"
-        echo "Method: Terraform destroy (proper state management)"
         
         # Validate required inputs
-        if [ -z "$APP_ID" ] || [ -z "$APP_URL" ] || [ -z "$PR_NUMBER" ]; then
+        if [ -z "$APP_ID" ] || [ -z "$APP_URL" ] || [ -z "$PR_NUMBER" ] || [ -z "$DEPLOYMENT_ID" ]; then
           echo "❌ Error: Missing required inputs"
           exit 1
         fi
         
-        echo "✅ Inputs validated, proceeding with Terraform destroy"
+        echo "✅ Inputs validated"
         echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
         echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
         echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        echo "deployment_id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
     
     - name: Check app health before termination
       id: health_check
@@ -104,28 +110,26 @@ jobs:
           fi
         fi
     
-    - name: Setup Terraform configuration for import
+    - name: Setup Terraform configuration for destroy
       id: setup
       run: |
-        echo "🔧 Setting up Terraform configuration for import and destroy..."
+        echo "🔧 Setting up Terraform configuration for destroy..."
         cd terraform
         
-        # Create minimal terraform.tfvars for destroy operation
-        cat > terraform.tfvars << EOF
-        # DigitalOcean Configuration
-        do_token = "${{ env.DO_TOKEN }}"
+        DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         
-        # Minimal configuration for destroy
+        # Create terraform.tfvars for destroy operation
+        cat > terraform.tfvars << EOF
+        do_token = "${{ env.DO_TOKEN }}"
         region = "nyc1"
-        app_port = "8080"
-        auto_terminate_minutes = 30
+        deployment_id = "$DEPLOYMENT_ID"
         github_repo = "${{ github.repository }}"
-        github_branch = "${{ github.ref_name }}"
-        docker_image_tag = "latest"
+        docker_image_tag = "$DEPLOYMENT_ID"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
+        auto_terminate_minutes = 30
         EOF
         
-        echo "✅ Terraform configuration created"
+        echo "✅ Terraform configuration created for deployment: $DEPLOYMENT_ID"
         echo "setup_success=true" >> $GITHUB_OUTPUT
     
     - name: Initialize Terraform with fresh state
@@ -142,166 +146,146 @@ jobs:
           exit 1
         fi
     
-    - name: Import deployment resources
+    - name: Import deployment resources by tags
       id: import
       run: |
         cd terraform
         
+        DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         APP_ID="${{ steps.validate.outputs.app_id }}"
-        echo "📥 Importing deployment resources for $APP_ID..."
         
-        # Extract random hex from app ID or app name
-        # Get app details from DigitalOcean API
-        echo "Getting app details from DigitalOcean API..."
-        app_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/apps/$APP_ID")
+        echo "📥 Importing deployment resources for: $DEPLOYMENT_ID"
         
-        if echo "$app_response" | jq -e '.app' >/dev/null 2>&1; then
-          app_name=$(echo "$app_response" | jq -r '.app.spec.name')
-          echo "Found app: $app_name"
-          
-          # Extract random hex from app name (budget-app-{random_hex})
-          random_hex=$(echo "$app_name" | sed 's/budget-app-//')
-          echo "Extracted random hex: $random_hex"
-          
-          # Import the DigitalOcean app
-          echo "Importing digitalocean_app.budget_app..."
-          if terraform import digitalocean_app.budget_app "$APP_ID"; then
-            echo "✅ App imported successfully"
-            app_import_success=true
-          else
-            echo "❌ Failed to import app"
-            app_import_success=false
-          fi
-          
-          # Import the random_id resource
-          echo "Importing random_id.deployment..."
-          if terraform import random_id.deployment "$random_hex"; then
-            echo "✅ Random ID imported successfully"
-            random_import_success=true
-          else
-            echo "⚠️ Failed to import random_id (non-critical)"
-            random_import_success=false
-          fi
-          
-          # Verify what we have in state now
-          echo "📋 Resources now in Terraform state:"
-          terraform state list || echo "No resources in state"
-          
-          if [ "$app_import_success" = true ]; then
-            echo "import_success=true" >> $GITHUB_OUTPUT
-          else
-            echo "import_success=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
+        # Import the shared project (always exists)
+        echo "Importing shared project..."
+        project_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/projects")
+        project_id=$(echo "$project_response" | jq -r '.projects[] | select(.name == "budget-develop") | .id')
+        
+        if [ -n "$project_id" ] && [ "$project_id" != "null" ]; then
+          terraform import digitalocean_project.budget_develop "$project_id" || echo "Failed to import project"
+        fi
+        
+        # Import the app
+        echo "Importing app: $APP_ID"
+        if terraform import digitalocean_app.budget_app "$APP_ID"; then
+          echo "✅ App imported successfully"
+          app_imported=true
         else
-          echo "❌ Failed to get app details from DigitalOcean API"
-          echo "Response: $app_response"
+          echo "❌ Failed to import app"
+          app_imported=false
+        fi
+        
+        # Import the managed database
+        echo "Importing managed database..."
+        db_name="budget-db-$DEPLOYMENT_ID"
+        db_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/databases")
+        db_id=$(echo "$db_response" | jq -r ".databases[] | select(.name == \"$db_name\") | .id")
+        
+        if [ -n "$db_id" ] && [ "$db_id" != "null" ]; then
+          if terraform import digitalocean_database_cluster.budget_db "$db_id"; then
+            echo "✅ Database imported successfully"
+            db_imported=true
+          else
+            echo "❌ Failed to import database"
+            db_imported=false
+          fi
+          
+          # Import database and user resources
+          terraform import digitalocean_database_db.budget_database "$db_id/budget" || echo "Failed to import database db"
+          terraform import digitalocean_database_user.budget_user "$db_id/budget_app" || echo "Failed to import database user"
+        else
+          echo "⚠️ Database not found for deployment $DEPLOYMENT_ID"
+          db_imported=false
+        fi
+        
+        # Import project resources assignment
+        terraform import digitalocean_project_resources.budget_resources "$project_id" || echo "Failed to import project resources"
+        
+        # Verify imports
+        echo "📋 Resources imported:"
+        terraform state list
+        
+        if [ "$app_imported" = true ]; then
+          echo "import_success=true" >> $GITHUB_OUTPUT
+        else
           echo "import_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
     
-    - name: Destroy imported deployment
+    - name: Destroy deployment (preserve shared project)
       if: steps.health_check.outputs.should_terminate == 'true' && steps.import.outputs.import_success == 'true'
       id: destroy
       run: |
-        APP_ID="${{ steps.validate.outputs.app_id }}"
+        DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         
-        echo "🗑️ Destroying imported deployment $APP_ID..."
+        echo "🗑️ Destroying deployment: $DEPLOYMENT_ID"
         echo "Termination time: $(date -u)"
+        echo "Note: Shared project 'budget-develop' will be preserved"
         
         cd terraform
         
-        # Show what will be destroyed
-        echo "📋 Planning destruction..."
-        terraform plan -destroy
+        # Remove shared project from state to preserve it
+        terraform state rm digitalocean_project.budget_develop || echo "Project not in state"
+        terraform state rm digitalocean_project_resources.budget_resources || echo "Project resources not in state"
         
-        # Run terraform destroy
+        # Show what will be destroyed (should only be app and database)
+        echo "📋 Resources to destroy:"
+        terraform state list
+        
+        # Run terraform destroy (only destroys app and database)
         echo "🗑️ Executing terraform destroy..."
         if terraform destroy -auto-approve; then
-          echo "✅ Deployment destroyed successfully via Terraform"
-          echo "🧹 All imported resources cleaned up properly"
-          echo "📊 Terraform state is now clean"
+          echo "✅ Deployment destroyed successfully"
+          echo "🧹 App and database cleaned up"
+          echo "🏗️ Shared project preserved"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
-          echo "resources_destroyed=true" >> $GITHUB_OUTPUT
         else
           echo "❌ Terraform destroy failed"
-          echo "📋 Some resources may still exist"
           echo "destroy_success=false" >> $GITHUB_OUTPUT
-          echo "resources_destroyed=false" >> $GITHUB_OUTPUT
-          
-          # Capture detailed error information
-          echo "=== TERRAFORM DESTROY ERROR DETAILS ===" >> destroy_error.log
-          terraform destroy -auto-approve 2>&1 | tee -a destroy_error.log || true
-          echo "=== END ERROR DETAILS ===" >> destroy_error.log
+          exit 1
         fi
     
     - name: Comment on PR with termination result
       uses: actions/github-script@v7
       with:
         script: |
-          const appId = '${{ steps.validate.outputs.app_id }}';
-          const appUrl = '${{ steps.validate.outputs.app_url }}';
-          const healthStatus = '${{ steps.health_check.outputs.health_status }}';
+          const deploymentId = '${{ steps.validate.outputs.deployment_id }}';
           const shouldTerminate = '${{ steps.health_check.outputs.should_terminate }}';
+          const destroySuccess = '${{ steps.destroy.outputs.destroy_success }}';
           const setupSuccess = '${{ steps.setup.outputs.setup_success }}';
           const initSuccess = '${{ steps.init.outputs.init_success }}';
           const importSuccess = '${{ steps.import.outputs.import_success }}';
-          const destroySuccess = '${{ steps.destroy.outputs.destroy_success }}';
-          const resourcesDestroyed = '${{ steps.destroy.outputs.resources_destroyed }}';
           const prNumber = '${{ steps.validate.outputs.pr_number }}';
           
-          let message = `## 🕐 Auto-Termination Report\n\n`;
-          message += `**App ID:** ${appId}\n`;
-          message += `**App URL:** ${appUrl}\n`;
-          message += `**Termination Time:** ${new Date().toISOString()}\n`;
-          message += `**Health Status:** ${healthStatus}\n\n`;
+          let message;
           
-          // Step-by-step results
-          message += `### 📋 Execution Steps:\n\n`;
-          message += `- **Setup Terraform:** ${setupSuccess === 'true' ? '✅ Success' : '❌ Failed'}\n`;
-          message += `- **Initialize Terraform:** ${initSuccess === 'true' ? '✅ Success' : '❌ Failed'}\n`;
-          message += `- **Import Resources:** ${importSuccess === 'true' ? '✅ Success' : '❌ Failed'}\n`;
-          message += `- **Destroy Deployment:** ${destroySuccess === 'true' ? '✅ Success' : '❌ Failed'}\n\n`;
-          
-          // Overall result
           if (shouldTerminate === 'false') {
-            message += `### ✅ Result: App was already terminated\n\nNo action needed - app was not responding and may have been deleted already.\n`;
+            message = `## ✅ Auto-Termination Completed\n\n**🆔 ID:** ${deploymentId}\n**Result:** Already terminated`;
           } else if (destroySuccess === 'true') {
-            message += `### ✅ Result: Deployment terminated successfully\n\n`;
-            message += `- All resources imported and destroyed via Terraform\n`;
-            message += `- Proper state management maintained\n`;
-            message += `- Clean resource cleanup completed\n`;
+            message = `## ✅ Auto-Termination Completed\n\n**🆔 ID:** ${deploymentId}\n**Result:** Successfully destroyed`;
           } else {
-            message += `### ❌ Result: Termination failed\n\n`;
+            // Determine which step failed for error message
+            let failedStep = 'Unknown';
+            let errorMsg = 'Unknown error occurred';
             
             if (setupSuccess !== 'true') {
-              message += `**Setup failed:** Terraform configuration could not be created\n`;
+              failedStep = 'Setup Terraform configuration';
+              errorMsg = 'Failed to create terraform.tfvars';
             } else if (initSuccess !== 'true') {
-              message += `**Initialization failed:** Terraform init failed\n`;
+              failedStep = 'Initialize Terraform';
+              errorMsg = 'terraform init failed';
             } else if (importSuccess !== 'true') {
-              message += `**Import failed:** Could not import deployment resources into Terraform state\n`;
-              message += `- App may have been deleted manually\n`;
-              message += `- App ID may be incorrect\n`;
-              message += `- DigitalOcean API access issues\n`;
-            } else if (destroySuccess !== 'true') {
-              message += `**Destroy failed:** Terraform destroy encountered errors\n`;
-              message += `- Some resources may still exist\n`;
-              message += `- Manual cleanup may be required\n`;
+              failedStep = 'Import deployment resources';
+              errorMsg = 'Failed to import app or database into Terraform state';
+            } else {
+              failedStep = 'Destroy deployment';
+              errorMsg = 'terraform destroy failed - some resources may still exist';
             }
             
-            message += `\n**Manual cleanup:**\n`;
-            message += `\`\`\`bash\n`;
-            message += `# Option 1: Direct API call\n`;
-            message += `curl -X DELETE -H "Authorization: Bearer YOUR_DO_TOKEN" \\\n`;
-            message += `  "https://api.digitalocean.com/v2/apps/${appId}"\n\n`;
-            message += `# Option 2: Terraform (if import worked)\n`;
-            message += `cd terraform && terraform destroy -auto-approve\n`;
-            message += `\`\`\`\n`;
+            message = `## ❌ Auto-Termination Failed\n\n**Workflow:** Auto-Terminate Deployment\n**Step:** ${failedStep}\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n**Cleanup:** Manual cleanup may be required`;
           }
-          
-          message += `\n---\n*Auto-termination via import-and-destroy method (no runner time wasted during 30-minute delay)*`;
           
           github.rest.issues.createComment({
             issue_number: parseInt(prNumber),

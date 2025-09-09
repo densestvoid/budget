@@ -19,31 +19,27 @@ variable "region" {
   }
 }
 
+# Deployment identification
+variable "deployment_id" {
+  description = "Unique deployment ID for this PR (format: pr-{number}-{branch})"
+  type        = string
+}
+
 # Docker image configuration for App Platform
 variable "github_repo" {
   description = "GitHub repository (user/repo format)"
   type        = string
-  default     = ""
 }
 
 variable "docker_image_tag" {
   description = "Docker image tag to deploy"
   type        = string
-  default     = "latest"
 }
 
 variable "github_token" {
   description = "GitHub token for pulling from GHCR"
   type        = string
   sensitive   = true
-  default     = ""
-}
-
-# Application configuration
-variable "app_port" {
-  description = "Port the application runs on"
-  type        = string
-  default     = "8080"
 }
 
 # Domain configuration (optional)
@@ -53,29 +49,9 @@ variable "domain_name" {
   default     = ""
 }
 
-# Environment variables
-variable "app_env" {
-  description = "Application environment"
-  type        = string
-  default     = "production"
-}
-
-variable "log_level" {
-  description = "Application log level"
-  type        = string
-  default     = "info"
-}
-
 # Auto-termination configuration
 variable "auto_terminate_minutes" {
-  description = "Number of minutes after which to automatically terminate the deployment (0 to disable)"
+  description = "Number of minutes after which to automatically terminate the deployment"
   type        = number
   default     = 30
-}
-
-# GitHub deployment configuration
-variable "github_branch" {
-  description = "GitHub branch that triggered this deployment"
-  type        = string
-  default     = "main"
 }

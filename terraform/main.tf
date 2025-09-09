@@ -5,10 +5,6 @@ terraform {
       source  = "digitalocean/digitalocean"
       version = "~> 2.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.1"
-    }
   }
 }
 
@@ -17,61 +13,47 @@ provider "digitalocean" {
   token = var.do_token
 }
 
-# Generate a random ID for unique resource naming
-resource "random_id" "deployment" {
-  byte_length = 4
+# Shared DigitalOcean project for all deployments
+resource "digitalocean_project" "budget_develop" {
+  name        = "budget-develop"
+  description = "Shared project for Budget App PR deployments"
+  purpose     = "Web Application"
+  environment = "Development"
+  
+  # No tags on project as requested
 }
 
-# No complex timing calculation needed - GitHub Actions handles termination scheduling
+# Managed PostgreSQL database with deployment tagging
+resource "digitalocean_database_cluster" "budget_db" {
+  name       = "budget-db-${var.deployment_id}"
+  engine     = "pg"
+  version    = "16"
+  size       = "db-s-1vcpu-1gb"  # Cheapest managed DB option
+  region     = var.region
+  node_count = 1
+
+  tags = ["deployment-id:${var.deployment_id}"]
+}
+
+# Create database within the cluster
+resource "digitalocean_database_db" "budget_database" {
+  cluster_id = digitalocean_database_cluster.budget_db.id
+  name       = "budget"
+}
+
+# Create database user
+resource "digitalocean_database_user" "budget_user" {
+  cluster_id = digitalocean_database_cluster.budget_db.id
+  name       = "budget_app"
+}
 
 # Create DigitalOcean App Platform application
 resource "digitalocean_app" "budget_app" {
   spec {
-    name   = "budget-app-${random_id.deployment.hex}"
+    name   = "budget-app-${var.deployment_id}"
     region = var.region
 
-    # PostgreSQL database service
-    service {
-      name               = "postgres"
-      instance_count     = 1
-      instance_size_slug = "basic-xxs"  # $5/month
-
-      image {
-        registry_type = "DOCKER_HUB"
-        repository    = "postgres"
-        tag           = "16-alpine"
-      }
-
-      env {
-        key   = "POSTGRES_DB"
-        value = "budget"
-        scope = "RUN_TIME"
-      }
-
-      env {
-        key   = "POSTGRES_USER"
-        value = "postgres"
-        scope = "RUN_TIME"
-      }
-
-      env {
-        key   = "POSTGRES_PASSWORD"
-        value = "budget_password"
-        scope = "RUN_TIME"
-        type  = "SECRET"
-      }
-
-      env {
-        key   = "POSTGRES_HOST_AUTH_METHOD"
-        value = "trust"
-        scope = "RUN_TIME"
-      }
-
-      # Internal service - no external access
-      internal_ports = [5432]
-    }
-
-    # Main application service
+    # Main application service (PostgreSQL now managed separately)
     service {
       name               = "web"
       instance_count     = 1
@@ -87,7 +69,7 @@ resource "digitalocean_app" "budget_app" {
       # Environment variables (with BUDGET_ prefix for viper)
       env {
         key   = "BUDGET_DATABASE_URL"
-        value = "postgres://postgres:budget_password@postgres:5432/budget?sslmode=disable"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
@@ -106,26 +88,31 @@ resource "digitalocean_app" "budget_app" {
 
       env {
         key   = "BUDGET_LOG_LEVEL"
-        value = "debug"
+        value = "info"
         scope = "RUN_TIME"
       }
 
-      # Health check with longer startup time
+      # Health check
       health_check {
-        http_path             = "/health"
-        initial_delay_seconds = 60  # Give PostgreSQL time to start
-        period_seconds        = 10
-        timeout_seconds       = 5
-        success_threshold     = 1
-        failure_threshold     = 3
+        http_path = "/health"
       }
 
       # HTTP port
       http_port = 8080
     }
-
-    # Auto-termination is handled by GitHub Actions workflow_dispatch
   }
+  
+  # Assign to shared project
+  depends_on = [digitalocean_project.budget_develop]
+}
+
+# Assign resources to the shared project
+resource "digitalocean_project_resources" "budget_resources" {
+  project = digitalocean_project.budget_develop.id
+  resources = [
+    digitalocean_app.budget_app.urn,
+    digitalocean_database_cluster.budget_db.urn
+  ]
 }
 
 # Create a domain record (optional)

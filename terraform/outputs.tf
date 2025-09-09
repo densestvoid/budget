@@ -9,53 +9,41 @@ output "app_id" {
   value       = digitalocean_app.budget_app.id
 }
 
-output "app_status" {
-  description = "Application deployment status"
-  value       = digitalocean_app.budget_app.active_deployment_id
+output "deployment_id" {
+  description = "Unique deployment identifier"
+  value       = var.deployment_id
 }
 
-# Database info
-output "database_type" {
-  description = "Database type being used"
-  value       = "PostgreSQL (containerized in App Platform)"
+# Database outputs
+output "database_host" {
+  description = "Managed PostgreSQL host"
+  value       = digitalocean_database_cluster.budget_db.private_host
+  sensitive   = true
 }
 
 output "database_connection_string" {
   description = "Database connection string"
-  value       = "postgres://budget_user:budget_password@postgres:5432/budget?sslmode=disable"
+  value       = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
   sensitive   = true
 }
 
-# Cost optimization info
-output "estimated_monthly_cost" {
-  description = "Estimated monthly cost in USD"
-  value       = "$10 (web service $5 + postgres service $5)"
+# Project info
+output "project_id" {
+  description = "Shared DigitalOcean project ID"
+  value       = digitalocean_project.budget_develop.id
 }
 
-# Auto-termination info
-output "auto_termination_info" {
-  description = "Auto-termination configuration"
-  value       = var.auto_terminate_minutes > 0 ? "App will auto-terminate after ${var.auto_terminate_minutes} minutes via workflow_dispatch" : "Auto-termination disabled"
+# Cost information
+output "estimated_total_cost" {
+  description = "Total estimated cost for 30-minute deployment"
+  value       = "$0.26"  # ($15 DB + $5 App) / 60 * 0.5 hours = $0.167, rounded to $0.26 for safety
 }
 
-# Termination method info
-output "termination_method" {
-  description = "Auto-termination method"
-  value = var.auto_terminate_minutes > 0 ? {
-    method = "GitHub Actions workflow_dispatch with environment wait timer"
-    delay_minutes = var.auto_terminate_minutes
-    note = "Requires 'termination-delay' environment with ${var.auto_terminate_minutes}-minute wait timer"
-  } : null
-}
-
-# Deployment info
-output "deployment_info" {
-  description = "Deployment information"
+# Termination info
+output "termination_info" {
+  description = "Auto-termination details"
   value = {
-    app_name     = digitalocean_app.budget_app.spec[0].name
-    region       = var.region
-    github_repo  = var.github_repo
-    github_branch = var.github_branch
-    docker_tag   = var.docker_image_tag
+    minutes_until_termination = var.auto_terminate_minutes
+    method = "workflow_dispatch with environment wait timer"
   }
 }

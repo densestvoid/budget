@@ -1,26 +1,19 @@
 # DigitalOcean Configuration
 do_token = "your-digitalocean-api-token-here"
 
-# Infrastructure Configuration - App Platform (Cost Optimized)
-region = "nyc1"                         # Change to your preferred region
-use_managed_db = false                  # Use containerized PostgreSQL to save $15/month
+# Infrastructure Configuration
+region = "nyc1"                         # DigitalOcean region
 
-# Database configuration (only used if use_managed_db = true)
-db_size = "db-s-1vcpu-1gb"             # Only used if use_managed_db = true
+# Deployment identification (set by GitHub Actions)
+deployment_id = "pr-1-automated-deployment"
 
-# Application Configuration
-app_port = "8080"
-app_env = "production"
-log_level = "info"
+# GitHub Integration (set by GitHub Actions)
+github_repo = "user/repo"
+docker_image_tag = "pr-1-automated-deployment"
+github_token = "github_token_here"
+
+# Auto-termination Configuration
+auto_terminate_minutes = 30
 
 # Domain Configuration (optional)
 # domain_name = "your-domain.com"
-
-# Auto-termination Configuration
-auto_terminate_minutes = 30             # Automatically terminate after 30 minutes
-
-# GitHub Integration (set by GitHub Actions)
-# github_repo = "user/repo"
-# github_branch = "main"
-# docker_image_tag = "commit-sha"
-# github_token = "github_token_here"

@@ -1,40 +1,122 @@
-name: Deploy Budget App to DigitalOcean App Platform
+name: Deploy Budget App to DigitalOcean
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: ['**']  # Trigger for PRs targeting any branch
+    branches: ['**']
 
 env:
-  # DigitalOcean configuration
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
-  
-  # Deployment configuration
-  DEPLOYMENT_TIMEOUT: 30  # minutes
 
 jobs:
   deploy:
-    name: Deploy to DigitalOcean App Platform
+    name: Deploy to DigitalOcean
     runs-on: ubuntu-latest
     
-    # Only run on PR events to save costs
     if: github.event_name == 'pull_request'
     
-    # Permissions needed for GitHub Container Registry and workflow dispatch
     permissions:
       contents: read
       packages: write
-      pull-requests: write  # For PR comments
-      actions: write        # For triggering workflow_dispatch
-    
-    # Outputs for the termination job
-    outputs:
-      app_id: ${{ env.APP_ID }}
-      app_url: ${{ env.APP_URL }}
+      pull-requests: write
+      actions: write
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+    
+    - name: Generate deployment ID
+      id: deployment_id
+      run: |
+        # Create deployment ID: pr-{number}-{branch}
+        PR_NUMBER="${{ github.event.number }}"
+        BRANCH_NAME="${{ github.head_ref }}"
+        DEPLOYMENT_ID="pr-${PR_NUMBER}-${BRANCH_NAME}"
+        
+        echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV
+        echo "deployment_id=${DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
+        echo "Deployment ID: ${DEPLOYMENT_ID}"
+    
+    - name: Ensure shared DigitalOcean project exists
+      id: ensure_project
+      run: |
+        echo "🏗️ Ensuring shared project 'budget-develop' exists..."
+        
+        # Check if project exists
+        project_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/projects")
+        
+        if echo "$project_response" | jq -e '.projects[] | select(.name == "budget-develop")' >/dev/null; then
+          echo "✅ Project 'budget-develop' already exists"
+          echo "project_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "📝 Creating shared project 'budget-develop'..."
+          
+          create_response=$(curl -w "%{http_code}" -s -X POST \
+            -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://api.digitalocean.com/v2/projects" \
+            -d '{
+              "name": "budget-develop",
+              "description": "Shared project for Budget App PR deployments", 
+              "purpose": "Web Application",
+              "environment": "Development"
+            }')
+          
+          http_code="${create_response: -3}"
+          if [ "$http_code" = "201" ]; then
+            echo "✅ Project 'budget-develop' created successfully"
+            echo "project_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to create project (HTTP: $http_code)"
+            echo "Response: ${create_response%???}"
+            echo "project_exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        fi
+    
+    - name: Check for existing deployment
+      id: check_existing
+      run: |
+        echo "🔍 Checking for existing deployment: ${{ env.DEPLOYMENT_ID }}"
+        
+        # Look for existing app with this deployment ID
+        apps_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps")
+        
+        existing_app=$(echo "$apps_response" | jq -r ".apps[] | select(.spec.name == \"budget-app-${{ env.DEPLOYMENT_ID }}\") | .id")
+        
+        if [ -n "$existing_app" ] && [ "$existing_app" != "null" ]; then
+          echo "♻️ Found existing deployment: $existing_app"
+          echo "Will replace existing deployment"
+          echo "existing_app_id=$existing_app" >> $GITHUB_OUTPUT
+          echo "is_redeployment=true" >> $GITHUB_OUTPUT
+        else
+          echo "🆕 No existing deployment found"
+          echo "is_redeployment=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Cancel existing auto-terminate workflow
+      if: steps.check_existing.outputs.is_redeployment == 'true'
+      run: |
+        echo "🛑 Canceling existing auto-terminate workflow for redeployment..."
+        
+        # Get running workflows for this repository
+        runs_response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=queued,in_progress")
+        
+        # Find auto-terminate workflows for this app
+        existing_app_id="${{ steps.check_existing.outputs.existing_app_id }}"
+        
+        echo "$runs_response" | jq -r '.workflow_runs[] | select(.name == "Auto-Terminate Deployment") | .id' | \
+        while read run_id; do
+          echo "Canceling workflow run: $run_id"
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id/cancel"
+        done
+        
+        echo "✅ Existing auto-terminate workflows canceled"
     
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -49,285 +131,214 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    - name: Generate unique deployment identifiers
+    - name: Check for source code changes (caching)
+      id: source_changes
       run: |
-        # Create unique identifiers for this deployment
-        PR_NUMBER="${{ github.event.number }}"
-        BRANCH_NAME=$(echo ${{ github.head_ref }} | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
-        COMMIT_SHORT=$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-8)
+        # Create hash of relevant source files for caching
+        SOURCE_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" | \
+          sort | xargs cat | sha256sum | cut -d' ' -f1)
         
-        DEPLOYMENT_NAME="budget-pr-${PR_NUMBER}-${BRANCH_NAME}-${COMMIT_SHORT}"
-        IMAGE_TAG="${COMMIT_SHORT}"
+        echo "SOURCE_HASH=${SOURCE_HASH}" >> $GITHUB_ENV
+        echo "source_hash=${SOURCE_HASH}" >> $GITHUB_OUTPUT
+        echo "Source hash: ${SOURCE_HASH}"
         
-        echo "DEPLOYMENT_NAME=${DEPLOYMENT_NAME}" >> $GITHUB_ENV
-        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
-        echo "Deployment name: ${DEPLOYMENT_NAME}"
-        echo "Image tag: ${IMAGE_TAG}"
+        # Check if we have a cached image for this hash
+        CACHE_KEY="docker-image-${{ env.DEPLOYMENT_ID }}-${SOURCE_HASH}"
+        echo "CACHE_KEY=${CACHE_KEY}" >> $GITHUB_ENV
+        echo "cache_key=${CACHE_KEY}" >> $GITHUB_OUTPUT
+    
+    - name: Check Docker build cache
+      id: docker_cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ env.CACHE_KEY }}
+        restore-keys: |
+          docker-image-${{ env.DEPLOYMENT_ID }}-
     
     - name: Build and push Docker image
       run: |
-        echo "Building Docker image and pushing to GitHub Container Registry..."
+        echo "🐳 Building Docker image..."
+        echo "Cache key: ${{ env.CACHE_KEY }}"
+        echo "Cache hit: ${{ steps.docker_cache.outputs.cache-hit }}"
         
         # Login to GitHub Container Registry
         echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
         
-        # Build the Docker image with specific tag
-        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} .
-        docker build -f Dockerfile.prod -t ghcr.io/${{ github.repository }}/budget-app:latest .
+        # Build with cache
+        docker buildx build \
+          --file Dockerfile.prod \
+          --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.DEPLOYMENT_ID }} \
+          --tag ghcr.io/${{ github.repository }}/budget-app:latest \
+          --cache-from type=local,src=/tmp/.buildx-cache \
+          --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+          --push \
+          .
         
-        # Push both versions
-        docker push ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}
-        docker push ghcr.io/${{ github.repository }}/budget-app:latest
+        # Move cache
+        rm -rf /tmp/.buildx-cache
+        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
         
-        echo "✅ Docker image pushed successfully"
-        echo "IMAGE_URL=ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
+        echo "✅ Docker image built and pushed"
+        echo "IMAGE_TAG=${{ env.DEPLOYMENT_ID }}" >> $GITHUB_ENV
     
-    - name: Create Terraform variables file
+    - name: Prepare Terraform configuration
       run: |
         cd terraform
         cat > terraform.tfvars << EOF
-        # DigitalOcean Configuration
-        do_token = "${{ secrets.DO_TOKEN }}"
-        
-        # Cost-optimized configuration
+        do_token = "${{ env.DO_TOKEN }}"
         region = "nyc1"
-        
-        # Application Configuration
-        app_port = "8080"
-        app_env = "production"
-        log_level = "info"
-        
-        # Auto-termination
-        auto_terminate_minutes = 30
-        
-        # GitHub Integration
+        deployment_id = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
-        github_branch = "${{ github.head_ref }}"
-        docker_image_tag = "${{ env.IMAGE_TAG }}"
+        docker_image_tag = "${{ env.DEPLOYMENT_ID }}"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
+        auto_terminate_minutes = 30
         EOF
+        
+        echo "✅ Terraform configuration prepared"
     
-    - name: Initialize Terraform
+    - name: Import existing resources (if redeployment)
+      if: steps.check_existing.outputs.is_redeployment == 'true'
       run: |
         cd terraform
         terraform init
+        
+        existing_app_id="${{ steps.check_existing.outputs.existing_app_id }}"
+        echo "📥 Importing existing resources for redeployment..."
+        
+        # Import existing app
+        terraform import digitalocean_app.budget_app "$existing_app_id" || echo "Failed to import app"
+        
+        # Try to find and import database
+        db_name="budget-db-${{ env.DEPLOYMENT_ID }}"
+        dbs_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/databases")
+        
+        existing_db_id=$(echo "$dbs_response" | jq -r ".databases[] | select(.name == \"$db_name\") | .id")
+        if [ -n "$existing_db_id" ] && [ "$existing_db_id" != "null" ]; then
+          terraform import digitalocean_database_cluster.budget_db "$existing_db_id" || echo "Failed to import database"
+        fi
+        
+        # Import project (always exists)
+        project_id=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/projects" | jq -r '.projects[] | select(.name == "budget-develop") | .id')
+        terraform import digitalocean_project.budget_develop "$project_id" || echo "Failed to import project"
+        
+        echo "✅ Existing resources imported"
     
-    - name: Plan Terraform deployment
+    - name: Initialize Terraform (fresh deployment)
+      if: steps.check_existing.outputs.is_redeployment == 'false'
       run: |
         cd terraform
-        terraform plan -out=tfplan
+        terraform init
+        echo "✅ Terraform initialized for fresh deployment"
     
-    - name: Apply Terraform deployment
+    - name: Deploy infrastructure
+      id: deploy_infra
       run: |
         cd terraform
-        terraform apply -auto-approve tfplan
         
-        # Get deployment outputs
-        APP_URL=$(terraform output -raw app_url)
-        APP_ID=$(terraform output -raw app_id)
-        COST=$(terraform output -raw estimated_monthly_cost)
-        TERMINATION_INFO=$(terraform output -raw auto_termination_info)
+        echo "🚀 Deploying infrastructure..."
         
-        echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
-        echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
-        echo "ESTIMATED_COST=${COST}" >> $GITHUB_ENV
-        echo "TERMINATION_INFO=${TERMINATION_INFO}" >> $GITHUB_ENV
-        
-        # Get termination method info
-        TERMINATION_METHOD=$(terraform output -json termination_method)
-        CLEANUP_METHOD=$(echo "$TERMINATION_METHOD" | jq -r '.method')
-        DELAY_MINUTES=$(echo "$TERMINATION_METHOD" | jq -r '.delay_minutes')
-        
-        echo "CLEANUP_METHOD=${CLEANUP_METHOD}" >> $GITHUB_ENV
-        echo "DELAY_MINUTES=${DELAY_MINUTES}" >> $GITHUB_ENV
-        
-        echo "✅ App Platform deployment initiated!"
-        echo "🌐 Application URL: ${APP_URL}"
-        echo "🆔 App ID: ${APP_ID}"
-        echo "💰 Estimated cost: ${COST}"
-        echo "⏰ Auto-termination: ${DELAY_MINUTES} minutes via environment wait timer"
-        echo "🔄 Method: ${CLEANUP_METHOD}"
-    
-    # No state storage needed - auto-terminate workflow will import resources directly from DigitalOcean
-    
-    - name: Wait for App Platform deployment
-      run: |
-        echo "Waiting for DigitalOcean App Platform deployment..."
-        echo "This typically takes 2-5 minutes for container deployment"
-        
-        # Wait for the application to be accessible
-        timeout 600 bash -c '
-          attempt=1
-          while ! curl -f --connect-timeout 10 ${{ env.APP_URL }}/health 2>/dev/null; do
-            echo "Waiting for App Platform deployment (attempt $attempt)..."
-            
-            # Show progress every 5 attempts
-            if [ $((attempt % 5)) -eq 0 ]; then
-              echo "--- Deployment Progress Check (attempt $attempt) ---"
-              echo "App URL: ${{ env.APP_URL }}"
-              echo "Testing connectivity..."
-              curl -I --connect-timeout 5 ${{ env.APP_URL }}/ 2>/dev/null || echo "No response yet"
-            fi
-            
-            attempt=$((attempt + 1))
-            sleep 20
-          done
-        '
-        
-        echo "✅ Application is now accessible!"
-    
-    - name: Verify App Platform deployment
-      run: |
-        echo "Verifying App Platform deployment..."
-        
-        # Test health endpoint
-        if curl -f ${{ env.APP_URL }}/health; then
-          echo "✅ Health check passed!"
-          
-          # Get health response
-          echo "Health response:"
-          curl -s ${{ env.APP_URL }}/health | jq '.' 2>/dev/null || curl -s ${{ env.APP_URL }}/health
-          
-          echo "✅ Deployment verification successful!"
-          echo "🚀 Application is running at: ${{ env.APP_URL }}"
+        if terraform plan -out=tfplan; then
+          echo "✅ Terraform plan successful"
         else
-          echo "❌ Health check failed"
+          echo "❌ Terraform plan failed"
+          echo "plan_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        if terraform apply -auto-approve tfplan; then
+          echo "✅ Infrastructure deployed successfully"
+          echo "deploy_success=true" >> $GITHUB_OUTPUT
+          
+          # Get outputs
+          APP_URL=$(terraform output -raw app_url)
+          APP_ID=$(terraform output -raw app_id)
+          DB_HOST=$(terraform output -raw database_host)
+          TOTAL_COST=$(terraform output -raw estimated_total_cost)
+          
+          echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+          echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
+          echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
+          echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
+          
+        else
+          echo "❌ Infrastructure deployment failed"
+          echo "deploy_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
     
-    - name: Schedule auto-termination
+    - name: Wait for database to be ready
       run: |
-        echo "Scheduling auto-termination via GitHub Actions..."
+        echo "⏳ Waiting for managed PostgreSQL to be ready..."
         
-        # We'll use GitHub's workflow dispatch to schedule termination
-        # Create a delay and then call DigitalOcean API to delete the app
-        
-        # For now, just log the termination info
-        echo "🕐 Auto-termination scheduled for ${{ env.TERMINATION_INFO }}"
-        echo "📍 App ID: ${{ env.APP_ID }}"
-        echo "🌐 App URL: ${{ env.APP_URL }}"
-        
-        # Note: In a production setup, you'd use GitHub's scheduled workflows
-        # or a separate termination service
+        # Wait for database to be in 'online' state
+        timeout 600 bash -c '
+          while true; do
+            db_status=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+              "https://api.digitalocean.com/v2/databases" | \
+              jq -r ".databases[] | select(.name == \"budget-db-${{ env.DEPLOYMENT_ID }}\") | .status")
+            
+            echo "Database status: $db_status"
+            
+            if [ "$db_status" = "online" ]; then
+              echo "✅ Database is ready"
+              break
+            fi
+            
+            sleep 15
+          done
+        '
     
-    - name: Update deployment status
+    - name: Run database migrations
+      id: migrations
       run: |
-        echo "## 🚀 App Platform Deployment Successful" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**PR:** #${{ github.event.number }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Branch:** ${{ github.head_ref }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Commit:** ${{ github.event.pull_request.head.sha }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Application URL:** ${{ env.APP_URL }}" >> $GITHUB_STEP_SUMMARY
-        echo "**App ID:** ${{ env.APP_ID }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Estimated Cost:** ${{ env.ESTIMATED_COST }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Auto-termination:** ${{ env.TERMINATION_INFO }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "⚠️ **Note:** Failed deployments are preserved for debugging. Successful deployments auto-terminate." >> $GITHUB_STEP_SUMMARY
-    
-    - name: Provide debugging info on failure
-      if: failure()
-      run: |
-        echo "❌ App Platform deployment failed!"
-        echo ""
-        echo "🔍 DEBUGGING INFORMATION:"
-        if [ -n "${{ env.APP_URL }}" ]; then
-          echo "App URL: ${{ env.APP_URL }}"
-          echo "App ID: ${{ env.APP_ID }}"
-          echo "You can check the app status in DigitalOcean App Platform console"
+        echo "🗄️ Running database migrations..."
+        
+        # Build a temporary migration runner
+        docker build -f Dockerfile.prod -t migration-runner .
+        
+        # Run migrations using the built image
+        docker run --rm \
+          -e BUDGET_DATABASE_URL="${{ env.DB_HOST }}" \
+          migration-runner ./budget migrate
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Database migrations completed successfully"
+          echo "migrations_success=true" >> $GITHUB_OUTPUT
         else
-          echo "App was not created - check Terraform logs above"
+          echo "❌ Database migrations failed"
+          echo "migrations_success=false" >> $GITHUB_OUTPUT
+          exit 1
         fi
-        echo ""
-        echo "🏗️ The app will be PRESERVED for debugging if it was created"
-        echo "⚠️ Remember to manually destroy the app when done debugging to avoid charges:"
-        echo "cd terraform && terraform destroy -auto-approve"
-
-    - name: Comment on PR with deployment info
-      if: success()
-      uses: actions/github-script@v7
-      with:
-        script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `## 🚀 App Platform Deployment Successful!
-            
-            Your PR has been deployed to DigitalOcean App Platform:
-            
-            **🌐 Application URL:** ${{ env.APP_URL }}
-            **🆔 App ID:** ${{ env.APP_ID }}
-            **💰 Estimated Cost:** ${{ env.ESTIMATED_COST }}
-            **⏰ Auto-Termination:** ${{ env.DELAY_MINUTES }} minutes
-            **🔄 Method:** ${{ env.CLEANUP_METHOD }}
-            **⚡ Zero Runner Waste:** Environment wait timer handles delay
-            **🗃️ Database:** PostgreSQL (internal service in App Platform)
-            **💻 Instance:** basic-xxs (0.5 vCPU, 512MB RAM)
-            
-            **PR Details:**
-            - **Branch:** ${{ github.head_ref }}
-            - **Commit:** ${{ github.event.pull_request.head.sha }}
-            - **Image:** ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}
-            
-            **Benefits of App Platform:**
-            - ✅ Automatic HTTPS/SSL
-            - ✅ Built-in load balancing  
-            - ✅ Automatic scaling
-            - ✅ Managed container orchestration
-            - ✅ No server management needed
-            
-            **Auto-Termination:**
-            - 🕐 Scheduled via workflow_dispatch (30 minutes)
-            - ⚡ No GitHub runner time wasted during delay
-            - 🔄 Uses environment wait timer for precise timing
-            - 📥 Imports resources directly from DigitalOcean (no state sharing needed)
-            
-            **Setup Required (First Time Only):**
-            1. Create \`termination-delay\` environment with 30-minute wait timer
-            2. Manually trigger auto-terminate workflow once to register it
-            
-            **How it works:**
-            - Triggers auto-terminate workflow via API
-            - Environment wait timer delays execution (no runner cost)
-            - Workflow imports resources and runs terraform destroy
-            
-            Test your changes and provide feedback! 🎉`
-          })
     
-    - name: Comment on PR if deployment failed
-      if: failure()
-      uses: actions/github-script@v7
-      with:
-        script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `## ❌ App Platform Deployment Failed
-            
-            The App Platform deployment for this PR failed. Please check the [GitHub Actions logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-            
-            **Common issues:**
-            - Missing repository secrets (DO_TOKEN)
-            - DigitalOcean App Platform quota exceeded
-            - Container image build or registry issues
-            - Invalid App Platform configuration
-            
-            **Debugging:**
-            - Check the Terraform logs in GitHub Actions
-            - Verify the Docker image was pushed successfully
-            - Check DigitalOcean App Platform console for app status
-            
-            Please fix the issues and push a new commit to retry the deployment.`
-          })
-
-    - name: Schedule auto-termination via workflow dispatch
+    - name: Wait for App Platform deployment
+      run: |
+        echo "⏳ Waiting for App Platform deployment to be ready..."
+        
+        timeout 300 bash -c '
+          while ! curl -f --connect-timeout 10 ${{ env.APP_URL }}/health 2>/dev/null; do
+            echo "Waiting for application to be ready..."
+            sleep 15
+          done
+        '
+        
+        echo "✅ Application is ready and healthy"
+    
+    - name: Calculate termination time
+      id: termination_time
+      run: |
+        # Calculate when the deployment will terminate
+        TERMINATION_TIME=$(date -u -d '+30 minutes' '+%Y-%m-%d %H:%M UTC')
+        echo "TERMINATION_TIME=${TERMINATION_TIME}" >> $GITHUB_ENV
+        echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
+        echo "Termination scheduled for: ${TERMINATION_TIME}"
+    
+    - name: Schedule auto-termination
       if: success()
       run: |
-        echo "🕐 Scheduling auto-termination via workflow dispatch..."
-        
-        # Trigger the auto-termination workflow
-        echo "Triggering auto-termination workflow..."
+        echo "🕐 Scheduling auto-termination..."
         
         response=$(curl -w "%{http_code}" -s -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -338,26 +349,92 @@ jobs:
             \"inputs\": {
               \"app_id\": \"${{ env.APP_ID }}\",
               \"app_url\": \"${{ env.APP_URL }}\",
-              \"pr_number\": \"${{ github.event.number }}\"
+              \"pr_number\": \"${{ github.event.number }}\",
+              \"deployment_id\": \"${{ env.DEPLOYMENT_ID }}\"
             }
           }")
         
         http_code="${response: -3}"
-        response_body="${response%???}"
         
         if [ "$http_code" = "204" ]; then
-          echo "✅ Auto-termination workflow dispatched successfully"
-          echo "🕐 Environment wait timer will delay execution by 30 minutes"
-          echo "⚡ No GitHub runner time wasted during delay!"
-          echo "🔄 Workflow will start automatically after environment approval"
+          echo "✅ Auto-termination scheduled successfully"
         else
-          echo "❌ Failed to dispatch auto-termination workflow (HTTP: $http_code)"
-          echo "Response: $response_body"
-          echo ""
-          echo "💡 If this is the first time, manually trigger the auto-terminate workflow once to register it:"
-          echo "   Go to Actions → Auto-Terminate Deployment → Run workflow"
-          echo "   Then future automatic triggers will work"
-          echo ""
-          echo "⚠️  For now, manual cleanup required:"
-          echo "cd terraform && terraform destroy -auto-approve"
+          echo "⚠️ Failed to schedule auto-termination (HTTP: $http_code)"
+          echo "Manual cleanup: terraform destroy -auto-approve"
         fi
+    
+    - name: Comment on PR with success
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const message = `## ✅ Deployment Successful
+
+**🌐 URL:** ${{ env.APP_URL }}
+**🆔 ID:** ${{ env.DEPLOYMENT_ID }}
+**💰 Cost:** ${{ env.TOTAL_COST }}
+**⏰ Terminates:** ${{ env.TERMINATION_TIME }}`;
+
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
+    
+    - name: Cleanup on failure
+      if: failure()
+      run: |
+        echo "🧹 Cleaning up partial deployment due to failure..."
+        
+        cd terraform
+        
+        # Import any partially created resources and destroy them
+        if [ -f terraform.tfvars ]; then
+          terraform init || true
+          
+          # Try to import and destroy any partially created resources
+          terraform destroy -auto-approve || echo "Cleanup may be incomplete"
+          echo "✅ Partial deployment cleaned up"
+        fi
+    
+    - name: Comment on PR with failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const workflow = 'Deploy Budget App';
+          let failedStep = 'Unknown';
+          let errorMessage = 'Unknown error occurred';
+          
+          // Determine which step failed based on step outputs
+          if ('${{ steps.ensure_project.outputs.project_exists }}' === 'false') {
+            failedStep = 'Ensure shared project exists';
+            errorMessage = 'Failed to create or access DigitalOcean project budget-develop';
+          } else if ('${{ steps.deploy_infra.outputs.deploy_success }}' === 'false') {
+            failedStep = 'Deploy infrastructure';
+            errorMessage = 'Terraform deployment failed - check logs for details';
+          } else if ('${{ steps.migrations.outputs.migrations_success }}' === 'false') {
+            failedStep = 'Run database migrations';
+            errorMessage = 'Database migration failed - schema may be incompatible';
+          } else {
+            failedStep = 'Wait for App Platform deployment';
+            errorMessage = 'Application failed to start or health check failed';
+          }
+          
+          const message = `## ❌ Deployment Failed
+
+**Workflow:** ${workflow}
+**Step:** ${failedStep}
+**Error:**
+\`\`\`
+${errorMessage}
+\`\`\`
+**Cleanup:** Partial deployment cleaned up automatically`;
+
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
