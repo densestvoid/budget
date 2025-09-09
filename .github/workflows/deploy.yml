@@ -42,7 +42,7 @@ jobs:
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
       with:
-        terraform_version: 1.6.0
+        terraform_version: 1.5.7
     
     - name: Initialize Terraform and check workspace
       id: terraform_init
