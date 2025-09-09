@@ -88,40 +88,43 @@ jobs:
         
         echo "🔧 Initializing Terraform with remote backend..."
         
-        # Set Terraform Cloud token and workspace
+        # Set Terraform Cloud token
         cat > ~/.terraformrc << EOF
         credentials "app.terraform.io" {
           token = "${{ secrets.TF_API_TOKEN }}"
         }
         EOF
         
-        # Set workspace via environment variable
-        export TF_WORKSPACE="${{ env.DEPLOYMENT_ID }}"
-        echo "TF_WORKSPACE=${TF_WORKSPACE}" >> $GITHUB_ENV
+        WORKSPACE_NAME="${{ env.DEPLOYMENT_ID }}"
         
-        echo "🔧 Initializing Terraform with workspace: $TF_WORKSPACE"
+        echo "🔧 Initializing Terraform (will prompt for workspace)..."
         
-        if terraform init; then
+        # Initialize with automatic workspace creation
+        if echo "$WORKSPACE_NAME" | terraform init; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
-          
-          # Check if this is a new or existing deployment
-          if terraform state list | grep -q "digitalocean_app.budget_app"; then
-            echo "♻️ Found existing deployment in workspace"
-            echo "Will update existing deployment"
-            echo "is_redeployment=true" >> $GITHUB_OUTPUT
-            
-            # Show current state
-            echo "📋 Current resources in workspace:"
-            terraform state list
-          else
-            echo "🆕 New deployment (empty workspace)"
-            echo "is_redeployment=false" >> $GITHUB_OUTPUT
-          fi
         else
           echo "❌ Terraform initialization failed"
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
+        fi
+        
+        # Set workspace for subsequent commands
+        export TF_WORKSPACE="$WORKSPACE_NAME"
+        echo "TF_WORKSPACE=${TF_WORKSPACE}" >> $GITHUB_ENV
+        
+        # Check if this is a new or existing deployment
+        if terraform state list | grep -q "digitalocean_app.budget_app"; then
+          echo "♻️ Found existing deployment in workspace: $WORKSPACE_NAME"
+          echo "Will update existing deployment"
+          echo "is_redeployment=true" >> $GITHUB_OUTPUT
+          
+          # Show current state
+          echo "📋 Current resources in workspace:"
+          terraform state list
+        else
+          echo "🆕 New deployment in workspace: $WORKSPACE_NAME"
+          echo "is_redeployment=false" >> $GITHUB_OUTPUT
         fi
     
     - name: Cancel existing auto-terminate workflow
