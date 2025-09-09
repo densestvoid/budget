@@ -5,7 +5,7 @@ terraform {
     endpoints = {
       s3 = "https://nyc3.digitaloceanspaces.com"
     }
-    bucket                      = "budget-terraform-state"
+    bucket                      = "budget-develop-terraform-states"
     # key will be set dynamically via terraform init -backend-config
     region                      = "us-east-1"
     skip_credentials_validation = true
