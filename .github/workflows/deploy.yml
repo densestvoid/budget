@@ -180,6 +180,9 @@ jobs:
     
     - name: Deploy infrastructure
       id: deploy_infra
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
       run: |
         cd terraform
         
@@ -331,6 +334,9 @@ jobs:
     
     - name: Cleanup on failure
       if: failure()
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
       run: |
         echo "🧹 Cleaning up partial deployment due to failure..."
         
