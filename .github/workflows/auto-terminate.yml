@@ -146,25 +146,20 @@ jobs:
         }
         EOF
         
-        echo "🔧 Initializing Terraform with remote backend..."
+        # Set workspace via environment variable
+        export TF_WORKSPACE="$WORKSPACE_NAME"
+        echo "TF_WORKSPACE=${TF_WORKSPACE}" >> $GITHUB_ENV
+        
+        echo "🔧 Initializing Terraform with workspace: $TF_WORKSPACE"
         if terraform init; then
           echo "✅ Terraform initialized successfully"
-        else
-          echo "❌ Terraform initialization failed"
-          echo "init_success=false" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
-        echo "📂 Selecting workspace: $WORKSPACE_NAME"
-        if terraform workspace select "$WORKSPACE_NAME"; then
-          echo "✅ Workspace selected successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
           # Show what resources exist in this workspace
           echo "📋 Resources in workspace:"
           terraform state list || echo "No resources in workspace"
         else
-          echo "❌ Workspace not found: $WORKSPACE_NAME"
+          echo "❌ Terraform initialization failed"
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
@@ -194,11 +189,8 @@ jobs:
           echo "🧹 All resources cleaned up"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
           
-          # Delete the workspace since deployment is complete
-          echo "🗂️ Deleting workspace: $DEPLOYMENT_ID"
-          terraform workspace select default
-          terraform workspace delete "$DEPLOYMENT_ID"
-          echo "✅ Workspace deleted"
+          # Note: Terraform Cloud workspaces are automatically cleaned up
+          echo "📂 Workspace will be automatically cleaned up by Terraform Cloud"
         else
           echo "❌ Terraform destroy failed"
           echo "destroy_success=false" >> $GITHUB_OUTPUT
