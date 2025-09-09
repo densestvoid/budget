@@ -1,12 +1,18 @@
 terraform {
   required_version = ">= 1.0"
   
-  cloud {
-    organization = "densestvoid"
-    
-    workspaces {
-      tags = ["budget-develop"]
+  backend "s3" {
+    endpoints = {
+      s3 = "https://nyc3.digitaloceanspaces.com"
     }
+    bucket                      = "budget-terraform-state"
+    # key will be set dynamically via terraform init -backend-config
+    region                      = "us-east-1"
+    skip_credentials_validation = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    skip_s3_checksum            = true
   }
   
   required_providers {

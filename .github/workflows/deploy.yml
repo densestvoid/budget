@@ -44,59 +44,32 @@ jobs:
       with:
         terraform_version: 1.5.7
     
-    - name: Create workspace using tfe provider
-      env:
-        TF_WORKSPACE: default  # Use default workspace for tfe operations
-      run: |
-        cd terraform
-        
-        echo "🏗️ Creating workspace using tfe provider: ${{ env.DEPLOYMENT_ID }}"
-        
-        # Set Terraform Cloud token
-        cat > ~/.terraformrc << EOF
-        credentials "app.terraform.io" {
-          token = "${{ secrets.TF_API_TOKEN }}"
-        }
-        EOF
-        
-        # Initialize and apply to create the deployment workspace
-        terraform init
-        terraform apply -auto-approve -target=tfe_workspace.deployment_workspace
-        
-        echo "✅ Workspace created with tags: ${{ env.DEPLOYMENT_ID }}"
-    
-    - name: Initialize Terraform with existing workspace
+    - name: Initialize Terraform with DigitalOcean Spaces backend
       id: terraform_init
       env:
-        TF_WORKSPACE: ${{ env.DEPLOYMENT_ID }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
       run: |
         cd terraform
         
-        echo "🔧 Initializing Terraform with pre-created workspace..."
-        echo "Workspace: $TF_WORKSPACE"
+        echo "🔧 Initializing Terraform with DigitalOcean Spaces backend..."
+        echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
         
-        # Set Terraform Cloud token
-        cat > ~/.terraformrc << EOF
-        credentials "app.terraform.io" {
-          token = "${{ secrets.TF_API_TOKEN }}"
-        }
-        EOF
-        
-        # Initialize with existing tagged workspace
-        if terraform init; then
+        # Initialize with deployment-specific state file
+        if terraform init -backend-config="key=deployments/${{ env.DEPLOYMENT_ID }}.tfstate"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
           # Check if this is a new or existing deployment
           if terraform state list | grep -q "digitalocean_app.budget_app"; then
-            echo "♻️ Found existing deployment in workspace"
+            echo "♻️ Found existing deployment state"
             echo "is_redeployment=true" >> $GITHUB_OUTPUT
             
             # Show current state
-            echo "📋 Current resources in workspace:"
+            echo "📋 Current resources in state:"
             terraform state list
           else
-            echo "🆕 New deployment (empty workspace)"
+            echo "🆕 New deployment (empty state)"
             echo "is_redeployment=false" >> $GITHUB_OUTPUT
           fi
         else
@@ -191,7 +164,8 @@ jobs:
         cd terraform
         cat > terraform.tfvars << EOF
         do_token = "${{ env.DO_TOKEN }}"
-        tfe_token = "${{ secrets.TF_API_TOKEN }}"
+        spaces_access_key = "${{ secrets.DO_SPACES_ACCESS_KEY }}"
+        spaces_secret_key = "${{ secrets.DO_SPACES_SECRET_KEY }}"
         region = "nyc1"
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"

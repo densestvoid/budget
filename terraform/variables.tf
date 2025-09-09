@@ -25,9 +25,15 @@ variable "deployment_id" {
   type        = string
 }
 
-# TFE token for workspace management
-variable "tfe_token" {
-  description = "Terraform Cloud API token for workspace management"
+# DigitalOcean Spaces credentials for state backend
+variable "spaces_access_key" {
+  description = "DigitalOcean Spaces access key for Terraform state backend"
+  type        = string
+  sensitive   = true
+}
+
+variable "spaces_secret_key" {
+  description = "DigitalOcean Spaces secret key for Terraform state backend"
   type        = string
   sensitive   = true
 }

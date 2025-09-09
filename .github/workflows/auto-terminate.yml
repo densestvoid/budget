@@ -121,6 +121,8 @@ jobs:
         # Create terraform.tfvars for destroy operation
         cat > terraform.tfvars << EOF
         do_token = "${{ env.DO_TOKEN }}"
+        spaces_access_key = "${{ secrets.DO_SPACES_ACCESS_KEY }}"
+        spaces_secret_key = "${{ secrets.DO_SPACES_SECRET_KEY }}"
         region = "nyc1"
         deployment_id = "$DEPLOYMENT_ID"
         github_repo = "${{ github.repository }}"
@@ -132,41 +134,34 @@ jobs:
         echo "✅ Terraform configuration created for deployment: $DEPLOYMENT_ID"
         echo "setup_success=true" >> $GITHUB_OUTPUT
     
-    - name: Initialize Terraform and select workspace
+    - name: Initialize Terraform with DigitalOcean Spaces backend
       id: init
       env:
-        TF_WORKSPACE: ${{ steps.validate.outputs.deployment_id }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
       run: |
         cd terraform
         
-        echo "🔧 Initializing Terraform with remote backend..."
-        echo "Workspace: $TF_WORKSPACE"
+        echo "🔧 Initializing Terraform with DigitalOcean Spaces backend..."
+        echo "Deployment ID: ${{ steps.validate.outputs.deployment_id }}"
         
-        # Set Terraform Cloud token
-        cat > ~/.terraformrc << EOF
-        credentials "app.terraform.io" {
-          token = "${{ secrets.TF_API_TOKEN }}"
-        }
-        EOF
-        
-        echo "🔧 Initializing Terraform with workspace: $TF_WORKSPACE"
-        
-        if terraform init; then
+        # Initialize with deployment-specific state file
+        if terraform init -backend-config="key=deployments/${{ steps.validate.outputs.deployment_id }}.tfstate"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
-          # Show what resources exist in this workspace
-          echo "📋 Resources in workspace:"
-          terraform state list || echo "No resources in workspace"
+          # Show what resources exist in state
+          echo "📋 Resources in state:"
+          terraform state list || echo "No resources in state"
         else
           echo "❌ Terraform initialization failed"
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
     
-    # No import needed - workspace contains the deployment state automatically
+    # No import needed - state file contains the deployment state automatically
     
-    - name: Destroy deployment and cleanup workspace
+    - name: Destroy deployment
       if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true'
       id: destroy
       run: |
@@ -179,7 +174,7 @@ jobs:
         cd terraform
         
         # Show what will be destroyed
-        echo "📋 Resources in workspace:"
+        echo "📋 Resources in state:"
         terraform state list
         
         # Run terraform destroy
@@ -189,8 +184,8 @@ jobs:
           echo "🧹 All resources cleaned up"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
           
-          # Note: Terraform Cloud workspaces are automatically cleaned up
-          echo "📂 Workspace will be automatically cleaned up by Terraform Cloud"
+          # Note: State file remains in DigitalOcean Spaces for audit purposes
+          echo "📂 State file preserved in DigitalOcean Spaces"
         else
           echo "❌ Terraform destroy failed"
           echo "destroy_success=false" >> $GITHUB_OUTPUT
