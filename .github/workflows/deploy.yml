@@ -37,44 +37,7 @@ jobs:
         echo "deployment_id=${DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
         echo "Deployment ID: ${DEPLOYMENT_ID}"
     
-    - name: Ensure shared DigitalOcean project exists
-      id: ensure_project
-      run: |
-        echo "🏗️ Ensuring shared project 'budget-develop' exists..."
-        
-        # Check if project exists
-        project_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/projects")
-        
-        if echo "$project_response" | jq -e '.projects[] | select(.name == "budget-develop")' >/dev/null; then
-          echo "✅ Project 'budget-develop' already exists"
-          echo "project_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "📝 Creating shared project 'budget-develop'..."
-          
-          create_response=$(curl -w "%{http_code}" -s -X POST \
-            -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            "https://api.digitalocean.com/v2/projects" \
-            -d '{
-              "name": "budget-develop",
-              "description": "Shared project for Budget App PR deployments", 
-              "purpose": "Web Application",
-              "environment": "Development"
-            }')
-          
-          http_code="${create_response: -3}"
-          if [ "$http_code" = "201" ]; then
-            echo "✅ Project 'budget-develop' created successfully"
-            echo "project_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Failed to create project (HTTP: $http_code)"
-            echo "Response: ${create_response%???}"
-            echo "project_exists=false" >> $GITHUB_OUTPUT
-            echo "create_error=${create_response%???}" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        fi
+    # Using existing 'budget' project via Terraform data source
     
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -397,18 +360,18 @@ jobs:
           let failedStep = 'Unknown';
           let errorMessage = 'Unknown error occurred';
           
-          // Determine which step failed based on step outputs and conclusions
+          // Determine which step failed based on step outputs
           const stepResults = {
-            project_exists: '${{ steps.ensure_project.outputs.project_exists }}',
+            init_success: '${{ steps.terraform_init.outputs.init_success }}',
             deploy_success: '${{ steps.deploy_infra.outputs.deploy_success }}',
             migrations_success: '${{ steps.migrations.outputs.migrations_success }}'
           };
           
           console.log('Step results:', stepResults);
           
-          if (stepResults.project_exists === 'false') {
-            failedStep = 'Ensure shared project exists';
-            errorMessage = '${{ steps.ensure_project.outputs.create_error }}' || 'Failed to create DigitalOcean project budget-develop';
+          if (stepResults.init_success === 'false') {
+            failedStep = 'Initialize Terraform and check workspace';
+            errorMessage = 'Terraform initialization failed. Check TF_API_TOKEN secret and Terraform Cloud organization access.';
           } else if (stepResults.deploy_success === 'false') {
             failedStep = 'Deploy infrastructure';
             errorMessage = 'Terraform plan or apply failed. Check GitHub Actions logs for detailed terraform error output.';
@@ -416,8 +379,8 @@ jobs:
             failedStep = 'Run database migrations';
             errorMessage = 'Database migration command failed. Database may not be ready or migration files may have errors.';
           } else {
-            failedStep = 'Check for existing deployment';
-            errorMessage = '${{ steps.check_existing.outputs.api_error }}' || 'Failed to check existing deployments';
+            failedStep = 'Wait for App Platform deployment';
+            errorMessage = 'Application failed to start or health check failed after deployment.';
           }
           
           const message = [

@@ -29,8 +29,8 @@ output "database_connection_string" {
 
 # Project info
 output "project_id" {
-  description = "Shared DigitalOcean project ID"
-  value       = digitalocean_project.budget_develop.id
+  description = "Existing DigitalOcean project ID"
+  value       = data.digitalocean_project.budget.id
 }
 
 # Cost information

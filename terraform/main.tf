@@ -22,14 +22,9 @@ provider "digitalocean" {
   token = var.do_token
 }
 
-# Shared DigitalOcean project for all deployments
-resource "digitalocean_project" "budget_develop" {
-  name        = "budget-develop"
-  description = "Shared project for Budget App PR deployments"
-  purpose     = "Web Application"
-  environment = "Development"
-  
-  # No tags on project as requested
+# Reference existing DigitalOcean project
+data "digitalocean_project" "budget" {
+  name = "budget"
 }
 
 # Managed PostgreSQL database with deployment tagging
@@ -110,14 +105,11 @@ resource "digitalocean_app" "budget_app" {
       http_port = 8080
     }
   }
-  
-  # Assign to shared project
-  depends_on = [digitalocean_project.budget_develop]
 }
 
-# Assign resources to the shared project
+# Assign resources to the existing project
 resource "digitalocean_project_resources" "budget_resources" {
-  project = digitalocean_project.budget_develop.id
+  project = data.digitalocean_project.budget.id
   resources = [
     digitalocean_app.budget_app.urn,
     digitalocean_database_cluster.budget_db.urn
