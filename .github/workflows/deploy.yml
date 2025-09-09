@@ -76,45 +76,55 @@ jobs:
           fi
         fi
     
-    - name: Check for existing deployment
-      id: check_existing
+    - name: Initialize Terraform and check workspace
+      id: terraform_init
       run: |
-        echo "🔍 Checking for existing deployment: ${{ env.DEPLOYMENT_ID }}"
+        cd terraform
         
-        # Look for existing app with this deployment ID
-        apps_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/apps")
+        echo "🔧 Initializing Terraform with remote backend..."
         
-        # Check if API response is valid (should have pagination even if no apps)
-        if echo "$apps_response" | jq -e '.pagination' >/dev/null 2>&1; then
-          echo "✅ Valid API response received"
-          
-          # Check if there are any apps, and if so, look for existing deployment
-          if echo "$apps_response" | jq -e '.apps' >/dev/null 2>&1; then
-            existing_app=$(echo "$apps_response" | jq -r ".apps[] | select(.spec.name == \"budget-app-${{ env.DEPLOYMENT_ID }}\") | .id // empty")
-            
-            if [ -n "$existing_app" ] && [ "$existing_app" != "null" ]; then
-              echo "♻️ Found existing deployment: $existing_app"
-              echo "Will replace existing deployment"
-              echo "existing_app_id=$existing_app" >> $GITHUB_OUTPUT
-              echo "is_redeployment=true" >> $GITHUB_OUTPUT
-            else
-              echo "🆕 No existing deployment found (apps exist but none match)"
-              echo "is_redeployment=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "🆕 No apps exist yet (fresh account or first deployment)"
-            echo "is_redeployment=false" >> $GITHUB_OUTPUT
-          fi
+        # Set Terraform Cloud token
+        cat > ~/.terraformrc << EOF
+        credentials "app.terraform.io" {
+          token = "${{ secrets.TF_API_TOKEN }}"
+        }
+        EOF
+        
+        if terraform init; then
+          echo "✅ Terraform initialized successfully"
+          echo "init_success=true" >> $GITHUB_OUTPUT
         else
-          echo "❌ Invalid API response from DigitalOcean"
-          echo "Response: $apps_response"
-          echo "api_error=$apps_response" >> $GITHUB_OUTPUT
+          echo "❌ Terraform initialization failed"
+          echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
+        fi
+        
+        # Check if workspace exists for this deployment
+        WORKSPACE_NAME="${{ env.DEPLOYMENT_ID }}"
+        echo "🔍 Checking for existing workspace: $WORKSPACE_NAME"
+        
+        if terraform workspace select "$WORKSPACE_NAME" 2>/dev/null; then
+          echo "♻️ Found existing workspace: $WORKSPACE_NAME"
+          echo "Will update existing deployment"
+          echo "is_redeployment=true" >> $GITHUB_OUTPUT
+          
+          # Show current state
+          echo "📋 Current resources in workspace:"
+          terraform state list || echo "No resources in state"
+        else
+          echo "🆕 Creating new workspace: $WORKSPACE_NAME"
+          if terraform workspace new "$WORKSPACE_NAME"; then
+            echo "✅ New workspace created"
+            echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to create workspace"
+            echo "workspace_error=Failed to create workspace $WORKSPACE_NAME" >> $GITHUB_OUTPUT
+            exit 1
+          fi
         fi
     
     - name: Cancel existing auto-terminate workflow
-      if: steps.check_existing.outputs.is_redeployment == 'true'
+      if: steps.terraform_init.outputs.is_redeployment == 'true'
       run: |
         echo "🛑 Canceling existing auto-terminate workflow for redeployment..."
         
@@ -214,41 +224,7 @@ jobs:
         
         echo "✅ Terraform configuration prepared"
     
-    - name: Import existing resources (if redeployment)
-      if: steps.check_existing.outputs.is_redeployment == 'true'
-      run: |
-        cd terraform
-        terraform init
-        
-        existing_app_id="${{ steps.check_existing.outputs.existing_app_id }}"
-        echo "📥 Importing existing resources for redeployment..."
-        
-        # Import existing app
-        terraform import digitalocean_app.budget_app "$existing_app_id" || echo "Failed to import app"
-        
-        # Try to find and import database
-        db_name="budget-db-${{ env.DEPLOYMENT_ID }}"
-        dbs_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/databases")
-        
-        existing_db_id=$(echo "$dbs_response" | jq -r ".databases[] | select(.name == \"$db_name\") | .id")
-        if [ -n "$existing_db_id" ] && [ "$existing_db_id" != "null" ]; then
-          terraform import digitalocean_database_cluster.budget_db "$existing_db_id" || echo "Failed to import database"
-        fi
-        
-        # Import project (always exists)
-        project_id=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/projects" | jq -r '.projects[] | select(.name == "budget-develop") | .id')
-        terraform import digitalocean_project.budget_develop "$project_id" || echo "Failed to import project"
-        
-        echo "✅ Existing resources imported"
-    
-    - name: Initialize Terraform (fresh deployment)
-      if: steps.check_existing.outputs.is_redeployment == 'false'
-      run: |
-        cd terraform
-        terraform init
-        echo "✅ Terraform initialized for fresh deployment"
+    # Terraform workspace automatically handles existing vs new deployments
     
     - name: Deploy infrastructure
       id: deploy_infra

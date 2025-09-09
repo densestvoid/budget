@@ -1,5 +1,14 @@
 terraform {
   required_version = ">= 1.0"
+  
+  cloud {
+    organization = "YOUR_TERRAFORM_CLOUD_ORG"  # Replace with your organization name
+    
+    workspaces {
+      tags = ["budget-app", "pr-deployments"]
+    }
+  }
+  
   required_providers {
     digitalocean = {
       source  = "digitalocean/digitalocean"

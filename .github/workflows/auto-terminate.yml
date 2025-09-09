@@ -132,90 +132,47 @@ jobs:
         echo "✅ Terraform configuration created for deployment: $DEPLOYMENT_ID"
         echo "setup_success=true" >> $GITHUB_OUTPUT
     
-    - name: Initialize Terraform with fresh state
+    - name: Initialize Terraform and select workspace
       id: init
       run: |
         cd terraform
         
+        WORKSPACE_NAME="${{ steps.validate.outputs.deployment_id }}"
+        
+        # Set Terraform Cloud token
+        cat > ~/.terraformrc << EOF
+        credentials "app.terraform.io" {
+          token = "${{ secrets.TF_API_TOKEN }}"
+        }
+        EOF
+        
+        echo "🔧 Initializing Terraform with remote backend..."
         if terraform init; then
           echo "✅ Terraform initialized successfully"
-          echo "init_success=true" >> $GITHUB_OUTPUT
         else
           echo "❌ Terraform initialization failed"
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
-    
-    - name: Import deployment resources by tags
-      id: import
-      run: |
-        cd terraform
         
-        DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
-        APP_ID="${{ steps.validate.outputs.app_id }}"
-        
-        echo "📥 Importing deployment resources for: $DEPLOYMENT_ID"
-        
-        # Import the shared project (always exists)
-        echo "Importing shared project..."
-        project_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/projects")
-        project_id=$(echo "$project_response" | jq -r '.projects[] | select(.name == "budget-develop") | .id')
-        
-        if [ -n "$project_id" ] && [ "$project_id" != "null" ]; then
-          terraform import digitalocean_project.budget_develop "$project_id" || echo "Failed to import project"
-        fi
-        
-        # Import the app
-        echo "Importing app: $APP_ID"
-        if terraform import digitalocean_app.budget_app "$APP_ID"; then
-          echo "✅ App imported successfully"
-          app_imported=true
-        else
-          echo "❌ Failed to import app"
-          app_imported=false
-        fi
-        
-        # Import the managed database
-        echo "Importing managed database..."
-        db_name="budget-db-$DEPLOYMENT_ID"
-        db_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/databases")
-        db_id=$(echo "$db_response" | jq -r ".databases[] | select(.name == \"$db_name\") | .id")
-        
-        if [ -n "$db_id" ] && [ "$db_id" != "null" ]; then
-          if terraform import digitalocean_database_cluster.budget_db "$db_id"; then
-            echo "✅ Database imported successfully"
-            db_imported=true
-          else
-            echo "❌ Failed to import database"
-            db_imported=false
-          fi
+        echo "📂 Selecting workspace: $WORKSPACE_NAME"
+        if terraform workspace select "$WORKSPACE_NAME"; then
+          echo "✅ Workspace selected successfully"
+          echo "init_success=true" >> $GITHUB_OUTPUT
           
-          # Import database and user resources
-          terraform import digitalocean_database_db.budget_database "$db_id/budget" || echo "Failed to import database db"
-          terraform import digitalocean_database_user.budget_user "$db_id/budget_app" || echo "Failed to import database user"
+          # Show what resources exist in this workspace
+          echo "📋 Resources in workspace:"
+          terraform state list || echo "No resources in workspace"
         else
-          echo "⚠️ Database not found for deployment $DEPLOYMENT_ID"
-          db_imported=false
-        fi
-        
-        # Import project resources assignment
-        terraform import digitalocean_project_resources.budget_resources "$project_id" || echo "Failed to import project resources"
-        
-        # Verify imports
-        echo "📋 Resources imported:"
-        terraform state list
-        
-        if [ "$app_imported" = true ]; then
-          echo "import_success=true" >> $GITHUB_OUTPUT
-        else
-          echo "import_success=false" >> $GITHUB_OUTPUT
+          echo "❌ Workspace not found: $WORKSPACE_NAME"
+          echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
     
-    - name: Destroy deployment (preserve shared project)
-      if: steps.health_check.outputs.should_terminate == 'true' && steps.import.outputs.import_success == 'true'
+    # No import needed - workspace contains the deployment state automatically
+    
+    - name: Destroy deployment and cleanup workspace
+      if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true'
       id: destroy
       run: |
         DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
@@ -226,21 +183,22 @@ jobs:
         
         cd terraform
         
-        # Remove shared project from state to preserve it
-        terraform state rm digitalocean_project.budget_develop || echo "Project not in state"
-        terraform state rm digitalocean_project_resources.budget_resources || echo "Project resources not in state"
-        
-        # Show what will be destroyed (should only be app and database)
-        echo "📋 Resources to destroy:"
+        # Show what will be destroyed
+        echo "📋 Resources in workspace:"
         terraform state list
         
-        # Run terraform destroy (only destroys app and database)
+        # Run terraform destroy
         echo "🗑️ Executing terraform destroy..."
         if terraform destroy -auto-approve; then
           echo "✅ Deployment destroyed successfully"
-          echo "🧹 App and database cleaned up"
-          echo "🏗️ Shared project preserved"
+          echo "🧹 All resources cleaned up"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
+          
+          # Delete the workspace since deployment is complete
+          echo "🗂️ Deleting workspace: $DEPLOYMENT_ID"
+          terraform workspace select default
+          terraform workspace delete "$DEPLOYMENT_ID"
+          echo "✅ Workspace deleted"
         else
           echo "❌ Terraform destroy failed"
           echo "destroy_success=false" >> $GITHUB_OUTPUT
