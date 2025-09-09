@@ -134,10 +134,13 @@ jobs:
     
     - name: Initialize Terraform and select workspace
       id: init
+      env:
+        TF_WORKSPACE: ${{ steps.validate.outputs.deployment_id }}
       run: |
         cd terraform
         
-        WORKSPACE_NAME="${{ steps.validate.outputs.deployment_id }}"
+        echo "🔧 Initializing Terraform with remote backend..."
+        echo "Workspace: $TF_WORKSPACE"
         
         # Set Terraform Cloud token
         cat > ~/.terraformrc << EOF
@@ -146,10 +149,7 @@ jobs:
         }
         EOF
         
-        echo "🔧 Initializing Terraform with workspace: $WORKSPACE_NAME"
-        
-        # Set workspace via environment variable
-        export TF_WORKSPACE="$WORKSPACE_NAME"
+        echo "🔧 Initializing Terraform with workspace: $TF_WORKSPACE"
         
         if terraform init; then
           echo "✅ Terraform initialized successfully"
