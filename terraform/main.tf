@@ -2,9 +2,7 @@ terraform {
   required_version = ">= 1.0"
   
   backend "s3" {
-    endpoints = {
-      s3 = "https://nyc3.digitaloceanspaces.com"
-    }
+    endpoint                    = "https://nyc3.digitaloceanspaces.com"
     bucket                      = "budget-develop-terraform-states"
     # key will be set dynamically via terraform init -backend-config
     region                      = "us-east-1"
