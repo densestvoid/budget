@@ -3,10 +3,7 @@ terraform {
   
   cloud {
     organization = "densestvoid"
-    
-    workspaces {
-      name = var.workspace_name
-    }
+    # Workspace managed via TF_WORKSPACE environment variable
   }
   
   required_providers {

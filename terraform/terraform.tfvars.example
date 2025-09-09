@@ -6,7 +6,7 @@ region = "nyc1"                         # DigitalOcean region
 
 # Deployment identification (set by GitHub Actions)
 deployment_id = "pr-1-automated-deployment"
-workspace_name = "pr-1-automated-deployment"
+# Workspace managed via TF_WORKSPACE environment variable
 
 # GitHub Integration (set by GitHub Actions)
 github_repo = "user/repo"

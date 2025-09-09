@@ -97,13 +97,16 @@ jobs:
         
         echo "🔧 Initializing Terraform with workspace: ${{ env.DEPLOYMENT_ID }}"
         
+        # Set workspace via environment variable
+        export TF_WORKSPACE="${{ env.DEPLOYMENT_ID }}"
+        
         if terraform init; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
           # Check if this is a new or existing deployment
           if terraform state list | grep -q "digitalocean_app.budget_app"; then
-            echo "♻️ Found existing deployment in workspace"
+            echo "♻️ Found existing deployment in workspace: $TF_WORKSPACE"
             echo "Will update existing deployment"
             echo "is_redeployment=true" >> $GITHUB_OUTPUT
             
@@ -111,7 +114,7 @@ jobs:
             echo "📋 Current resources in workspace:"
             terraform state list
           else
-            echo "🆕 New deployment (empty workspace)"
+            echo "🆕 New deployment in workspace: $TF_WORKSPACE"
             echo "is_redeployment=false" >> $GITHUB_OUTPUT
           fi
         else
@@ -208,7 +211,6 @@ jobs:
         do_token = "${{ env.DO_TOKEN }}"
         region = "nyc1"
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
-        workspace_name = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
         docker_image_tag = "${{ env.DEPLOYMENT_ID }}"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
