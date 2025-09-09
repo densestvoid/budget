@@ -18,10 +18,6 @@ terraform {
       source  = "digitalocean/digitalocean"
       version = "~> 2.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.1"
-    }
   }
 }
 
@@ -35,14 +31,9 @@ data "digitalocean_project" "budget" {
   name = "budget-develop"
 }
 
-# Random suffix for unique database cluster naming
-resource "random_id" "db_suffix" {
-  byte_length = 4
-}
-
 # Managed PostgreSQL database with deployment tagging
 resource "digitalocean_database_cluster" "budget_db" {
-  name       = "budget-db-${var.deployment_id}-${random_id.db_suffix.hex}"
+  name       = "budget-db-${var.deployment_id}"
   engine     = "pg"
   version    = "16"
   size       = "db-s-1vcpu-1gb"  # Cheapest managed DB option
@@ -126,6 +117,12 @@ resource "digitalocean_project_resources" "budget_resources" {
   resources = [
     digitalocean_app.budget_app.urn,
     digitalocean_database_cluster.budget_db.urn
+  ]
+  
+  # Ensure resources are created before assignment
+  depends_on = [
+    digitalocean_app.budget_app,
+    digitalocean_database_cluster.budget_db
   ]
 }
 

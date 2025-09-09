@@ -188,15 +188,7 @@ jobs:
         
         echo "🚀 Deploying infrastructure..."
         
-        if terraform plan -out=tfplan; then
-          echo "✅ Terraform plan successful"
-        else
-          echo "❌ Terraform plan failed"
-          echo "plan_success=false" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
-        if terraform apply -auto-approve tfplan; then
+        if terraform apply -auto-approve; then
           echo "✅ Infrastructure deployed successfully"
           echo "deploy_success=true" >> $GITHUB_OUTPUT
           
@@ -342,13 +334,30 @@ jobs:
         
         cd terraform
         
-        # Import any partially created resources and destroy them
+        # Only cleanup if we have terraform config and state exists
         if [ -f terraform.tfvars ]; then
-          terraform init || true
+          echo "📋 Checking for partially created resources..."
           
-          # Try to import and destroy any partially created resources
-          terraform destroy -auto-approve || echo "Cleanup may be incomplete"
-          echo "✅ Partial deployment cleaned up"
+          # Check if we have any state (either local or need to re-init)
+          if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
+            echo "🔧 Re-initializing to check remote state..."
+            terraform init -backend-config="key=deployments/${{ env.DEPLOYMENT_ID }}.tfstate" || true
+          fi
+          
+          # Show what resources exist before cleanup
+          echo "📋 Resources to clean up:"
+          terraform state list || echo "No resources found in state"
+          
+          # Only destroy if we have resources in state
+          if terraform state list | grep -q .; then
+            echo "🗑️ Destroying partially created resources..."
+            terraform destroy -auto-approve || echo "⚠️ Cleanup may be incomplete - manual cleanup may be required"
+            echo "✅ Partial deployment cleaned up"
+          else
+            echo "ℹ️ No resources found in state - nothing to clean up"
+          fi
+        else
+          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
         fi
     
     - name: Comment on PR with failure
