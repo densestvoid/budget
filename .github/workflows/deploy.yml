@@ -85,23 +85,31 @@ jobs:
         apps_response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
           "https://api.digitalocean.com/v2/apps")
         
-        # Check if API response is valid
-        if echo "$apps_response" | jq -e '.apps' >/dev/null 2>&1; then
-          existing_app=$(echo "$apps_response" | jq -r ".apps[] | select(.spec.name == \"budget-app-${{ env.DEPLOYMENT_ID }}\") | .id // empty")
+        # Check if API response is valid (should have pagination even if no apps)
+        if echo "$apps_response" | jq -e '.pagination' >/dev/null 2>&1; then
+          echo "✅ Valid API response received"
           
-          if [ -n "$existing_app" ] && [ "$existing_app" != "null" ]; then
-            echo "♻️ Found existing deployment: $existing_app"
-            echo "Will replace existing deployment"
-            echo "existing_app_id=$existing_app" >> $GITHUB_OUTPUT
-            echo "is_redeployment=true" >> $GITHUB_OUTPUT
+          # Check if there are any apps, and if so, look for existing deployment
+          if echo "$apps_response" | jq -e '.apps' >/dev/null 2>&1; then
+            existing_app=$(echo "$apps_response" | jq -r ".apps[] | select(.spec.name == \"budget-app-${{ env.DEPLOYMENT_ID }}\") | .id // empty")
+            
+            if [ -n "$existing_app" ] && [ "$existing_app" != "null" ]; then
+              echo "♻️ Found existing deployment: $existing_app"
+              echo "Will replace existing deployment"
+              echo "existing_app_id=$existing_app" >> $GITHUB_OUTPUT
+              echo "is_redeployment=true" >> $GITHUB_OUTPUT
+            else
+              echo "🆕 No existing deployment found (apps exist but none match)"
+              echo "is_redeployment=false" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "🆕 No existing deployment found"
+            echo "🆕 No apps exist yet (fresh account or first deployment)"
             echo "is_redeployment=false" >> $GITHUB_OUTPUT
           fi
         else
-          echo "❌ Failed to get apps from DigitalOcean API"
+          echo "❌ Invalid API response from DigitalOcean"
           echo "Response: $apps_response"
-          echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          echo "api_error=$apps_response" >> $GITHUB_OUTPUT
           exit 1
         fi
     
@@ -429,16 +437,16 @@ jobs:
           
           if (stepResults.project_exists === 'false') {
             failedStep = 'Ensure shared project exists';
-            errorMessage = 'Failed to create DigitalOcean project budget-develop. Error: ${{ steps.ensure_project.outputs.create_error }}';
+            errorMessage = '${{ steps.ensure_project.outputs.create_error }}' || 'Failed to create DigitalOcean project budget-develop';
           } else if (stepResults.deploy_success === 'false') {
             failedStep = 'Deploy infrastructure';
-            errorMessage = 'Terraform plan or apply failed. Check GitHub Actions logs for terraform error details.';
+            errorMessage = 'Terraform plan or apply failed. Check GitHub Actions logs for detailed terraform error output.';
           } else if (stepResults.migrations_success === 'false') {
             failedStep = 'Run database migrations';
             errorMessage = 'Database migration command failed. Database may not be ready or migration files may have errors.';
           } else {
             failedStep = 'Check for existing deployment';
-            errorMessage = 'DigitalOcean API returned null response. jq error: Cannot iterate over null (null)';
+            errorMessage = '${{ steps.check_existing.outputs.api_error }}' || 'Failed to check existing deployments';
           }
           
           const message = [
