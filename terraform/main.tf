@@ -58,7 +58,7 @@ resource "digitalocean_database_user" "budget_user" {
 # Create DigitalOcean App Platform application
 resource "digitalocean_app" "budget_app" {
   spec {
-    name   = "budget-app-${var.deployment_id}"
+    name   = var.deployment_id
     region = var.region
 
     # Main application service (PostgreSQL now managed separately)
