@@ -3,6 +3,10 @@ terraform {
   
   cloud {
     organization = "densestvoid"
+    
+    workspaces {
+      tags = ["budget-app"]
+    }
   }
   
   required_providers {
