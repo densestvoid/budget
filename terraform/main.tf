@@ -28,7 +28,7 @@ provider "digitalocean" {
 
 # Reference existing DigitalOcean project
 data "digitalocean_project" "budget" {
-  name = "budget"
+  name = "budget-develop"
 }
 
 # Managed PostgreSQL database with deployment tagging
