@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.0"
   
   cloud {
-    organization = "YOUR_TERRAFORM_CLOUD_ORG"  # Replace with your organization name
+    organization = "densestvoid"
     
     workspaces {
       tags = ["budget-app", "pr-deployments"]
