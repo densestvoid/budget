@@ -95,41 +95,30 @@ jobs:
         }
         EOF
         
-        echo "🔧 Initializing Terraform with default workspace..."
+        echo "🔧 Initializing Terraform with workspace: ${{ env.DEPLOYMENT_ID }}"
         
         if terraform init; then
           echo "✅ Terraform initialized successfully"
+          echo "init_success=true" >> $GITHUB_OUTPUT
+          
+          # Check if this is a new or existing deployment
+          if terraform state list | grep -q "digitalocean_app.budget_app"; then
+            echo "♻️ Found existing deployment in workspace"
+            echo "Will update existing deployment"
+            echo "is_redeployment=true" >> $GITHUB_OUTPUT
+            
+            # Show current state
+            echo "📋 Current resources in workspace:"
+            terraform state list
+          else
+            echo "🆕 New deployment (empty workspace)"
+            echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          fi
         else
           echo "❌ Terraform initialization failed"
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
-        
-        # Now handle workspace selection/creation
-        WORKSPACE_NAME="${{ env.DEPLOYMENT_ID }}"
-        echo "📂 Managing workspace: $WORKSPACE_NAME"
-        
-        # Try to select existing workspace
-        if terraform workspace select "$WORKSPACE_NAME" 2>/dev/null; then
-          echo "♻️ Selected existing workspace: $WORKSPACE_NAME"
-          echo "is_redeployment=true" >> $GITHUB_OUTPUT
-          
-          # Show current state
-          echo "📋 Current resources in workspace:"
-          terraform state list || echo "No resources in workspace"
-        else
-          echo "🆕 Creating new workspace: $WORKSPACE_NAME"
-          if terraform workspace new "$WORKSPACE_NAME"; then
-            echo "✅ New workspace created and selected"
-            echo "is_redeployment=false" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Failed to create workspace"
-            echo "init_success=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        fi
-        
-        echo "init_success=true" >> $GITHUB_OUTPUT
     
     - name: Cancel existing auto-terminate workflow
       if: steps.terraform_init.outputs.is_redeployment == 'true'
@@ -219,6 +208,7 @@ jobs:
         do_token = "${{ env.DO_TOKEN }}"
         region = "nyc1"
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
+        workspace_name = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
         docker_image_tag = "${{ env.DEPLOYMENT_ID }}"
         github_token = "${{ secrets.GITHUB_TOKEN }}"

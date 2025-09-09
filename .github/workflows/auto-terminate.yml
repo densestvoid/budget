@@ -123,6 +123,7 @@ jobs:
         do_token = "${{ env.DO_TOKEN }}"
         region = "nyc1"
         deployment_id = "$DEPLOYMENT_ID"
+        workspace_name = "$DEPLOYMENT_ID"
         github_repo = "${{ github.repository }}"
         docker_image_tag = "$DEPLOYMENT_ID"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
@@ -146,11 +147,8 @@ jobs:
         }
         EOF
         
-        # Set workspace via environment variable
-        export TF_WORKSPACE="$WORKSPACE_NAME"
-        echo "TF_WORKSPACE=${TF_WORKSPACE}" >> $GITHUB_ENV
+        echo "🔧 Initializing Terraform with workspace: $WORKSPACE_NAME"
         
-        echo "🔧 Initializing Terraform with workspace: $TF_WORKSPACE"
         if terraform init; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT

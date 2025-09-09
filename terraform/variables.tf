@@ -25,6 +25,12 @@ variable "deployment_id" {
   type        = string
 }
 
+# Terraform Cloud workspace name
+variable "workspace_name" {
+  description = "Terraform Cloud workspace name for this deployment"
+  type        = string
+}
+
 # Docker image configuration for App Platform
 variable "github_repo" {
   description = "GitHub repository (user/repo format)"
