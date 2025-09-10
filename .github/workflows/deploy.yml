@@ -4,10 +4,20 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: ['**']
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to deploy'
+        required: true
+        type: string
+      branch_name:
+        description: 'Branch name to deploy (leave empty to auto-detect from PR)'
+        required: false
+        type: string
 
 # Prevent concurrent deployments for the same PR
 concurrency:
-  group: deploy-pr-${{ github.event.number }}
+  group: deploy-pr-${{ github.event.number || github.event.inputs.pr_number }}
   cancel-in-progress: true
 
 env:
@@ -17,8 +27,6 @@ jobs:
   deploy:
     name: Deploy to DigitalOcean
     runs-on: ubuntu-latest
-    
-    if: github.event_name == 'pull_request'
     
     permissions:
       contents: read
@@ -33,14 +41,29 @@ jobs:
     - name: Generate deployment ID
       id: deployment_id
       run: |
-        # Create deployment ID: pr-{number}-{branch} with sanitized branch name
-        PR_NUMBER="${{ github.event.number }}"
-        BRANCH_NAME="${{ github.head_ref }}"
+        # Handle both PR events and manual dispatch
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          PR_NUMBER="${{ github.event.number }}"
+          BRANCH_NAME="${{ github.head_ref }}"
+        else
+          # Manual workflow_dispatch
+          PR_NUMBER="${{ github.event.inputs.pr_number }}"
+          BRANCH_NAME="${{ github.event.inputs.branch_name }}"
+          
+          # If no branch name provided, get it from PR API
+          if [ -z "$BRANCH_NAME" ]; then
+            BRANCH_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" | \
+              jq -r '.head.ref')
+          fi
+        fi
         
         # Sanitize branch name: replace invalid characters with hyphens
         SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9.-]/-/g')
         DEPLOYMENT_ID="pr-${PR_NUMBER}-${SANITIZED_BRANCH}"
         
+        echo "Event type: ${{ github.event_name }}"
+        echo "PR number: ${PR_NUMBER}"
         echo "Original branch: ${BRANCH_NAME}"
         echo "Sanitized branch: ${SANITIZED_BRANCH}"
         echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV

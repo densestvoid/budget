@@ -3,25 +3,25 @@ name: Auto-Terminate Deployment
 on:
   workflow_dispatch:
     inputs:
-      app_id:
-        description: 'DigitalOcean App ID to terminate'
-        required: true
-        type: string
-      migration_app_id:
-        description: 'Migration App Platform application ID'
-        required: true
-        type: string
-      app_url:
-        description: 'Application URL'
-        required: true
-        type: string
       pr_number:
-        description: 'PR number for tracking'
+        description: 'PR number to terminate'
         required: true
         type: string
       deployment_id:
-        description: 'Unique deployment ID'
-        required: true
+        description: 'Deployment ID (leave empty to auto-generate from PR)'
+        required: false
+        type: string
+      app_id:
+        description: 'DigitalOcean App ID (leave empty to auto-detect)'
+        required: false
+        type: string
+      migration_app_id:
+        description: 'Migration App ID (leave empty to auto-detect)'
+        required: false
+        type: string
+      app_url:
+        description: 'Application URL (leave empty to auto-detect)'
+        required: false
         type: string
 
 # Prevent multiple auto-terminate workflows for the same PR

@@ -6,14 +6,21 @@ WORKDIR /app
 # Install git and ca-certificates for dependencies
 RUN apk add --no-cache git ca-certificates
 
-# Copy go mod files
+# Copy go mod files first for better caching
 COPY go.mod go.sum ./
 
-# Download dependencies
+# Download dependencies (cached if go.mod/go.sum unchanged)
 RUN go mod download
 
-# Copy source code
-COPY . .
+# Copy only necessary source files for build
+COPY main.go ./
+COPY cmd/ cmd/
+COPY server/ server/
+COPY app/ app/
+COPY data/ data/
+COPY templates/ templates/
+COPY scripts/ scripts/
+COPY config.yaml ./
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o budget main.go
