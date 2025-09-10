@@ -106,8 +106,7 @@ resource "digitalocean_app" "budget_migrations" {
     null_resource.database_health_check
   ]
   
-  # Tag for deployment identification
-  tags = ["deployment-id:${var.deployment_id}"]
+  # Note: App Platform doesn't support tags - using name for identification
 
   spec {
     name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
@@ -163,8 +162,7 @@ resource "digitalocean_app" "budget_app" {
     digitalocean_app.budget_migrations
   ]
   
-  # Tag for deployment identification
-  tags = ["deployment-id:${var.deployment_id}"]
+  # Note: App Platform doesn't support tags - using name for identification
 
   spec {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
