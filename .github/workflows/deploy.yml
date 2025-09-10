@@ -197,6 +197,7 @@ jobs:
         fi
     
     - name: Check Docker build cache
+      if: steps.docker_image_check.outputs.skip_docker_build == 'false'
       id: docker_cache
       uses: actions/cache@v4
       with:
