@@ -65,6 +65,53 @@ resource "digitalocean_database_user" "budget_user" {
   name       = "budget-app-${var.deployment_id}"
 }
 
+# Create budget schema and grant privileges using null_resource
+resource "null_resource" "database_schema_setup" {
+  depends_on = [
+    digitalocean_database_cluster.budget_db,
+    digitalocean_database_db.budget_database,
+    digitalocean_database_user.budget_user
+  ]
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "🗄️ Setting up database schema and permissions..."
+      
+      # Install postgresql-client if not available
+      which psql || (echo "Installing postgresql-client..." && apt-get update && apt-get install -y postgresql-client)
+      
+      # Connect as admin user to create schema and grant permissions
+      ADMIN_URL="postgres://${digitalocean_database_cluster.budget_db.user}:${digitalocean_database_cluster.budget_db.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+      
+      echo "Creating budget schema and setting up permissions..."
+      psql "$ADMIN_URL" <<SQL
+        -- Create budget schema
+        CREATE SCHEMA IF NOT EXISTS budget;
+        
+        -- Grant all privileges on budget schema to our user
+        GRANT ALL PRIVILEGES ON SCHEMA budget TO "${digitalocean_database_user.budget_user.name}";
+        
+        -- Grant usage on public schema (needed for goose version table)
+        GRANT ALL PRIVILEGES ON SCHEMA public TO "${digitalocean_database_user.budget_user.name}";
+        
+        -- Set default privileges for future tables
+        ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON TABLES TO "${digitalocean_database_user.budget_user.name}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${digitalocean_database_user.budget_user.name}";
+        
+        -- Allow user to create tables
+        GRANT CREATE ON DATABASE "${digitalocean_database_db.budget_database.name}" TO "${digitalocean_database_user.budget_user.name}";
+SQL
+      
+      if [ $? -eq 0 ]; then
+        echo "✅ Database schema and permissions configured successfully"
+      else
+        echo "❌ Failed to configure database schema and permissions"
+        exit 1
+      fi
+    EOT
+  }
+}
+
 # Note: No initial firewall rules = allow all connections during deployment
 # Database is open during app deployment, then restricted by final firewall
 
@@ -101,9 +148,10 @@ resource "null_resource" "database_health_check" {
 
 # Create migration app that runs migrations and exits
 resource "digitalocean_app" "budget_migrations" {
-  # Ensure database is ready and health-checked
+  # Ensure database is ready, health-checked, and schema configured
   depends_on = [
-    null_resource.database_health_check
+    null_resource.database_health_check,
+    null_resource.database_schema_setup
   ]
   
   # Note: App Platform doesn't support tags - using name for identification
@@ -149,8 +197,8 @@ resource "digitalocean_app" "budget_migrations" {
         scope = "RUN_TIME"
       }
 
-      # Run migrations with debugging
-      run_command = "sh -c 'echo \"🔍 Migration job starting...\"; echo \"Environment:\"; env | grep BUDGET; echo \"🔍 Testing DB connection...\"; ./budget migrate status; echo \"🔄 Running migrations...\"; ./budget migrate; echo \"✅ Migration completed successfully\"'"
+      # Run migrations with proper error handling
+      run_command = "sh -c 'echo \"🔍 Migration job starting...\"; echo \"Environment:\"; env | grep BUDGET; echo \"🔍 Testing DB connection...\"; ./budget migrate status; echo \"🔄 Running migrations...\"; if ./budget migrate; then echo \"✅ Migration completed successfully\"; exit 0; else echo \"❌ Migration failed with exit code $?\"; exit 1; fi'"
     }
   }
 }
