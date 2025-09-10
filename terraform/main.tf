@@ -35,7 +35,7 @@ data "digitalocean_project" "budget" {
 resource "digitalocean_vpc" "budget_vpc" {
   name     = substr("budget-vpc-${var.deployment_id}", 0, 32)  # VPC name limit
   region   = var.region
-  ip_range = "10.116.0.0/20"  # Private IP range
+  ip_range = "172.16.0.0/16"  # Private IP range (avoiding conflicts)
   
   # Note: VPC doesn't support tags, but name includes deployment_id for identification
 }
@@ -56,13 +56,13 @@ resource "digitalocean_database_cluster" "budget_db" {
 # Create database within the cluster
 resource "digitalocean_database_db" "budget_database" {
   cluster_id = digitalocean_database_cluster.budget_db.id
-  name       = "budget"
+  name       = "budget-${var.deployment_id}"
 }
 
 # Create database user
 resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
-  name       = "budget_app"
+  name       = "budget-app-${var.deployment_id}"
 }
 
 # Note: No initial firewall rules = allow all connections during deployment
@@ -105,6 +105,9 @@ resource "digitalocean_app" "budget_migrations" {
   depends_on = [
     null_resource.database_health_check
   ]
+  
+  # Tag for deployment identification
+  tags = ["deployment-id:${var.deployment_id}"]
 
   spec {
     name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
@@ -159,6 +162,9 @@ resource "digitalocean_app" "budget_app" {
   depends_on = [
     digitalocean_app.budget_migrations
   ]
+  
+  # Tag for deployment identification
+  tags = ["deployment-id:${var.deployment_id}"]
 
   spec {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
