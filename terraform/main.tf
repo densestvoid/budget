@@ -55,13 +55,29 @@ resource "digitalocean_database_user" "budget_user" {
   name       = "budget_app"
 }
 
-# Create migration app that runs migrations and exits
-resource "digitalocean_app" "budget_migrations" {
-  # Ensure database is created first
+# Stage 1: Initial database firewall - allow App Platform during deployment
+resource "digitalocean_database_firewall" "budget_db_firewall_initial" {
+  cluster_id = digitalocean_database_cluster.budget_db.id
+  
   depends_on = [
     digitalocean_database_cluster.budget_db,
     digitalocean_database_db.budget_database,
     digitalocean_database_user.budget_user
+  ]
+
+  # Temporary broad rule to allow App Platform connections during deployment
+  # This will be replaced with specific app rules after apps are created
+  rule {
+    type  = "ip_addr"
+    value = "0.0.0.0/0"  # Temporary - will be restricted in stage 2
+  }
+}
+
+# Create migration app that runs migrations and exits
+resource "digitalocean_app" "budget_migrations" {
+  # Ensure database and initial firewall are ready
+  depends_on = [
+    digitalocean_database_firewall.budget_db_firewall_initial
   ]
 
   spec {
@@ -172,8 +188,8 @@ resource "digitalocean_app" "budget_app" {
   }
 }
 
-# Configure database firewall to allow both migration and main app access
-resource "digitalocean_database_firewall" "budget_db_firewall" {
+# Stage 2: Final database firewall - restrict to specific apps only
+resource "digitalocean_database_firewall" "budget_db_firewall_final" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   
   depends_on = [
@@ -208,7 +224,7 @@ resource "digitalocean_project_resources" "budget_resources" {
     digitalocean_app.budget_migrations,
     digitalocean_app.budget_app,
     digitalocean_database_cluster.budget_db,
-    digitalocean_database_firewall.budget_db_firewall
+    digitalocean_database_firewall.budget_db_firewall_final
   ]
 }
 
