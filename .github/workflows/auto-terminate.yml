@@ -24,6 +24,11 @@ on:
         required: true
         type: string
 
+# Prevent multiple auto-terminate workflows for the same deployment
+concurrency:
+  group: auto-terminate-${{ github.event.inputs.deployment_id }}
+  cancel-in-progress: true
+
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
@@ -154,9 +159,18 @@ jobs:
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
-          # Show what resources exist in state
+          # Check if deployment still exists
           echo "📋 Resources in state:"
+          RESOURCE_COUNT=$(terraform state list | wc -l)
           terraform state list || echo "No resources in state"
+          
+          if [ "$RESOURCE_COUNT" -eq 0 ]; then
+            echo "ℹ️ No resources found - deployment already terminated"
+            echo "already_terminated=true" >> $GITHUB_OUTPUT
+          else
+            echo "🎯 Found $RESOURCE_COUNT resources - proceeding with termination"
+            echo "already_terminated=false" >> $GITHUB_OUTPUT
+          fi
         else
           echo "❌ Terraform initialization failed"
           echo "init_success=false" >> $GITHUB_OUTPUT
@@ -166,7 +180,7 @@ jobs:
     # No import needed - state file contains the deployment state automatically
     
     - name: Destroy deployment
-      if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true'
+      if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true' && steps.init.outputs.already_terminated == 'false'
       id: destroy
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
@@ -210,6 +224,8 @@ jobs:
         fi
     
     - name: Comment on PR with termination result
+      # Only comment if we actually attempted termination (not already terminated)
+      if: steps.init.outputs.already_terminated == 'false'
       uses: actions/github-script@v7
       with:
         script: |
@@ -218,6 +234,7 @@ jobs:
           const destroySuccess = '${{ steps.destroy.outputs.destroy_success }}';
           const setupSuccess = '${{ steps.setup.outputs.setup_success }}';
           const initSuccess = '${{ steps.init.outputs.init_success }}';
+          const alreadyTerminated = '${{ steps.init.outputs.already_terminated }}';
           const importSuccess = '${{ steps.import.outputs.import_success }}';
           const prNumber = '${{ steps.validate.outputs.pr_number }}';
           
