@@ -28,11 +28,16 @@ jobs:
     - name: Generate deployment ID
       id: deployment_id
       run: |
-        # Create deployment ID: pr-{number}-{branch}
+        # Create deployment ID: pr-{number}-{branch} with sanitized branch name
         PR_NUMBER="${{ github.event.number }}"
         BRANCH_NAME="${{ github.head_ref }}"
-        DEPLOYMENT_ID="pr-${PR_NUMBER}-${BRANCH_NAME}"
         
+        # Sanitize branch name: replace invalid characters with hyphens
+        SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9.-]/-/g')
+        DEPLOYMENT_ID="pr-${PR_NUMBER}-${SANITIZED_BRANCH}"
+        
+        echo "Original branch: ${BRANCH_NAME}"
+        echo "Sanitized branch: ${SANITIZED_BRANCH}"
         echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV
         echo "deployment_id=${DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
         echo "Deployment ID: ${DEPLOYMENT_ID}"
