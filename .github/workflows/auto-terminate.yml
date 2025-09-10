@@ -7,6 +7,10 @@ on:
         description: 'DigitalOcean App ID to terminate'
         required: true
         type: string
+      migration_app_id:
+        description: 'Migration App Platform application ID'
+        required: true
+        type: string
       app_url:
         description: 'Application URL'
         required: true
@@ -184,8 +188,18 @@ jobs:
           echo "🧹 All resources cleaned up"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
           
-          # Note: State file remains in DigitalOcean Spaces for audit purposes
-          echo "📂 State file preserved in DigitalOcean Spaces"
+          # Remove state file from DigitalOcean Spaces bucket
+          echo "🗑️ Removing state file from DigitalOcean Spaces..."
+          STATE_FILE_KEY="deployments/$DEPLOYMENT_ID.tfstate"
+          
+          # Use AWS CLI syntax for DigitalOcean Spaces
+          if aws s3 rm "s3://budget-develop-terraform-states/$STATE_FILE_KEY" \
+               --endpoint-url="https://nyc3.digitaloceanspaces.com" \
+               --region=us-east-1; then
+            echo "✅ State file removed from DigitalOcean Spaces"
+          else
+            echo "⚠️ Failed to remove state file (may not exist)"
+          fi
         else
           echo "❌ Terraform destroy failed"
           echo "destroy_success=false" >> $GITHUB_OUTPUT

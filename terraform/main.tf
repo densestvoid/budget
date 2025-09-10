@@ -100,8 +100,8 @@ resource "digitalocean_app" "budget_migrations" {
         scope = "RUN_TIME"
       }
 
-      # Run migrations and exit
-      run_command = "./budget migrate"
+      # Run migrations with retry logic and exit
+      run_command = "sh -c 'for i in 1 2 3; do echo \"Migration attempt $i/3...\"; if ./budget migrate; then echo \"✅ Migration successful\"; exit 0; else echo \"❌ Migration attempt $i failed\"; if [ $i -eq 3 ]; then echo \"💥 All migration attempts failed\"; exit 1; fi; sleep 10; fi; done'"
     }
   }
 }

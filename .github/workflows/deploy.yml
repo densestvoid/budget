@@ -195,11 +195,13 @@ jobs:
           # Get outputs
           APP_URL=$(terraform output -raw app_url)
           APP_ID=$(terraform output -raw app_id)
+          MIGRATION_APP_ID=$(terraform output -raw migration_app_id)
           DB_HOST=$(terraform output -raw database_host)
           TOTAL_COST=$(terraform output -raw estimated_total_cost)
           
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
           echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
+          echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
           echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
           echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
           
@@ -288,6 +290,7 @@ jobs:
             \"ref\": \"${{ github.head_ref }}\",
             \"inputs\": {
               \"app_id\": \"${{ env.APP_ID }}\",
+              \"migration_app_id\": \"${{ env.MIGRATION_APP_ID }}\",
               \"app_url\": \"${{ env.APP_URL }}\",
               \"pr_number\": \"${{ github.event.number }}\",
               \"deployment_id\": \"${{ env.DEPLOYMENT_ID }}\"
@@ -312,9 +315,13 @@ jobs:
             '## ✅ Deployment Successful',
             '',
             '🌐 **URL:** ${{ env.APP_URL }}',
-            '🆔 **ID:** ${{ env.DEPLOYMENT_ID }}',
+            '🆔 **App ID:** ${{ env.APP_ID }}',
+            '🔧 **Migration ID:** ${{ env.MIGRATION_APP_ID }}',
+            '📦 **Deployment:** ${{ env.DEPLOYMENT_ID }}',
             '💰 **Cost:** ${{ env.TOTAL_COST }}',
-            '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}'
+            '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}',
+            '',
+            '_Architecture: Database → Migration Container → Application Container_'
           ].join('\n');
 
           await github.rest.issues.createComment({
@@ -372,24 +379,25 @@ jobs:
           // Determine which step failed based on step outputs
           const stepResults = {
             init_success: '${{ steps.terraform_init.outputs.init_success }}',
-            deploy_success: '${{ steps.deploy_infra.outputs.deploy_success }}',
-            migrations_success: '${{ steps.migrations.outputs.migrations_success }}'
+            deploy_success: '${{ steps.deploy_infra.outputs.deploy_success }}'
           };
           
           console.log('Step results:', stepResults);
           
           if (stepResults.init_success === 'false') {
-            failedStep = 'Initialize Terraform and check workspace';
-            errorMessage = 'Terraform initialization failed. Check TF_API_TOKEN secret and Terraform Cloud organization access.';
+            failedStep = 'Initialize Terraform with DigitalOcean Spaces backend';
+            errorMessage = 'Terraform initialization failed. Check DO_SPACES_ACCESS_KEY and DO_SPACES_SECRET_KEY secrets.';
           } else if (stepResults.deploy_success === 'false') {
-            failedStep = 'Deploy infrastructure';
-            errorMessage = 'Terraform plan or apply failed. Check GitHub Actions logs for detailed terraform error output.';
-          } else if (stepResults.migrations_success === 'false') {
-            failedStep = 'Run database migrations';
-            errorMessage = 'Database migration command failed. Database may not be ready or migration files may have errors.';
+            failedStep = 'Deploy infrastructure (Database → Migration → Application)';
+            errorMessage = 'Terraform deployment failed. This could be:\\n' +
+                          '• Database cluster creation failure\\n' +
+                          '• Migration container failure (check migration logs in DigitalOcean App Platform)\\n' +
+                          '• Application container deployment failure\\n' +
+                          '• Database firewall configuration failure\\n' +
+                          'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
           } else {
-            failedStep = 'Wait for App Platform deployment';
-            errorMessage = 'Application failed to start or health check failed after deployment.';
+            failedStep = 'Post-deployment verification';
+            errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
           }
           
           const message = [
