@@ -58,13 +58,42 @@ resource "digitalocean_database_user" "budget_user" {
 # Note: No initial firewall rules = allow all connections during deployment
 # Database is open during app deployment, then restricted by final firewall
 
-# Create migration app that runs migrations and exits
-resource "digitalocean_app" "budget_migrations" {
-  # Ensure database is ready (no firewall restrictions during deployment)
+# Health check to ensure database is ready for connections
+resource "null_resource" "database_health_check" {
   depends_on = [
     digitalocean_database_cluster.budget_db,
     digitalocean_database_db.budget_database,
     digitalocean_database_user.budget_user
+  ]
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "🔍 Testing database connectivity..."
+      
+      # Install postgresql-client if not available
+      which pg_isready || (echo "Installing postgresql-client..." && apt-get update && apt-get install -y postgresql-client)
+      
+      for i in {1..30}; do
+        echo "Connection attempt $i/30..."
+        if pg_isready -h ${digitalocean_database_cluster.budget_db.host} -p ${digitalocean_database_cluster.budget_db.port} -U ${digitalocean_database_user.budget_user.name}; then
+          echo "✅ Database is ready for connections"
+          exit 0
+        else
+          echo "⏳ Database not ready yet, waiting 10s..."
+          sleep 10
+        fi
+      done
+      echo "❌ Database failed to become ready after 5 minutes"
+      exit 1
+    EOT
+  }
+}
+
+# Create migration app that runs migrations and exits
+resource "digitalocean_app" "budget_migrations" {
+  # Ensure database is ready and health-checked
+  depends_on = [
+    null_resource.database_health_check
   ]
 
   spec {
@@ -103,8 +132,8 @@ resource "digitalocean_app" "budget_migrations" {
         scope = "RUN_TIME"
       }
 
-      # Run migrations with retry logic and exit
-      run_command = "sh -c 'for i in 1 2 3; do echo \"Migration attempt $i/3...\"; if ./budget migrate; then echo \"✅ Migration successful\"; exit 0; else echo \"❌ Migration attempt $i failed\"; if [ $i -eq 3 ]; then echo \"💥 All migration attempts failed\"; exit 1; fi; sleep 10; fi; done'"
+      # Run migrations with debugging
+      run_command = "sh -c 'echo \"🔍 Migration job starting...\"; echo \"Environment:\"; env | grep BUDGET; echo \"🔍 Testing DB connection...\"; ./budget migrate status; echo \"🔄 Running migrations...\"; ./budget migrate; echo \"✅ Migration completed successfully\"'"
     }
   }
 }
