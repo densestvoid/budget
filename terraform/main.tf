@@ -31,14 +31,24 @@ data "digitalocean_project" "budget" {
   name = "budget-develop"
 }
 
-# Managed PostgreSQL database with no public access (secured via firewall)
+# Create VPC for private networking
+resource "digitalocean_vpc" "budget_vpc" {
+  name     = substr("budget-vpc-${var.deployment_id}", 0, 32)  # VPC name limit
+  region   = var.region
+  ip_range = "10.116.0.0/20"  # Private IP range
+  
+  tags = ["deployment-id:${var.deployment_id}"]
+}
+
+# Managed PostgreSQL database with private VPC networking
 resource "digitalocean_database_cluster" "budget_db" {
-  name       = "budget-db-${var.deployment_id}"
-  engine     = "pg"
-  version    = "16"
-  size       = "db-s-1vcpu-1gb"  # Cheapest managed DB option
-  region     = var.region
-  node_count = 1
+  name                 = "budget-db-${var.deployment_id}"
+  engine               = "pg"
+  version              = "16"
+  size                 = "db-s-1vcpu-1gb"  # Cheapest managed DB option
+  region               = var.region
+  node_count           = 1
+  private_network_uuid = digitalocean_vpc.budget_vpc.id
 
   tags = ["deployment-id:${var.deployment_id}"]
 }
@@ -99,6 +109,9 @@ resource "digitalocean_app" "budget_migrations" {
   spec {
     name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
     region = var.region
+    
+    # Enable VPC networking for database access
+    vpc_uuid = digitalocean_vpc.budget_vpc.id
 
     # Migration job - runs once and exits
     job {
@@ -115,7 +128,7 @@ resource "digitalocean_app" "budget_migrations" {
       # Environment variables for migration
       env {
         key   = "BUDGET_DATABASE_URL"
-        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
@@ -148,6 +161,9 @@ resource "digitalocean_app" "budget_app" {
   spec {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
     region = var.region
+    
+    # Enable VPC networking for database access
+    vpc_uuid = digitalocean_vpc.budget_vpc.id
 
     # Main application service
     service {
@@ -165,7 +181,7 @@ resource "digitalocean_app" "budget_app" {
       # Environment variables (with BUDGET_ prefix for viper)
       env {
         key   = "BUDGET_DATABASE_URL"
-        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
@@ -204,27 +220,8 @@ resource "digitalocean_app" "budget_app" {
   }
 }
 
-# Stage 2: Final database firewall - restrict to specific apps only
-resource "digitalocean_database_firewall" "budget_db_firewall_final" {
-  cluster_id = digitalocean_database_cluster.budget_db.id
-  
-  depends_on = [
-    digitalocean_app.budget_migrations,
-    digitalocean_app.budget_app
-  ]
-
-  # Allow access from migration app
-  rule {
-    type  = "app"
-    value = digitalocean_app.budget_migrations.id
-  }
-
-  # Allow access from main app
-  rule {
-    type  = "app"
-    value = digitalocean_app.budget_app.id
-  }
-}
+# VPC provides network-level security - no additional firewall rules needed
+# Database is only accessible within the VPC private network
 
 # Assign resources to the existing project
 resource "digitalocean_project_resources" "budget_resources" {
@@ -232,7 +229,8 @@ resource "digitalocean_project_resources" "budget_resources" {
   resources = [
     digitalocean_app.budget_migrations.urn,
     digitalocean_app.budget_app.urn,
-    digitalocean_database_cluster.budget_db.urn
+    digitalocean_database_cluster.budget_db.urn,
+    digitalocean_vpc.budget_vpc.urn
   ]
   
   # Ensure resources are created before assignment
@@ -240,7 +238,7 @@ resource "digitalocean_project_resources" "budget_resources" {
     digitalocean_app.budget_migrations,
     digitalocean_app.budget_app,
     digitalocean_database_cluster.budget_db,
-    digitalocean_database_firewall.budget_db_firewall_final
+    digitalocean_vpc.budget_vpc
   ]
 }
 

@@ -211,58 +211,17 @@ jobs:
           exit 1
         fi
     
-    - name: Wait for database to be ready
-      run: |
-        echo "⏳ Waiting for managed PostgreSQL to be ready..."
-        
-        # Wait for database to be in 'online' state
-        timeout 600 bash -c '
-          while true; do
-            db_status=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-              "https://api.digitalocean.com/v2/databases" | \
-              jq -r ".databases[] | select(.name == \"budget-db-${{ env.DEPLOYMENT_ID }}\") | .status")
-            
-            echo "Database status: $db_status"
-            
-            if [ "$db_status" = "online" ]; then
-              echo "✅ Database is ready"
-              break
-            fi
-            
-            sleep 15
-          done
-        '
+    # Database readiness, migrations, and app deployment all handled by Terraform
     
-    - name: Run database migrations
-      id: migrations
+    - name: Verify deployment health
       run: |
-        echo "🗄️ Running database migrations..."
+        echo "🏥 Performing final health check..."
         
-        # Build a temporary migration runner
-        docker build -f Dockerfile.prod -t migration-runner .
-        
-        # Run migrations using the built image
-        docker run --rm \
-          -e BUDGET_DATABASE_URL="${{ env.DB_HOST }}" \
-          migration-runner ./budget migrate
-        
-        if [ $? -eq 0 ]; then
-          echo "✅ Database migrations completed successfully"
-          echo "migrations_success=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ Database migrations failed"
-          echo "migrations_success=false" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-    
-    - name: Wait for App Platform deployment
-      run: |
-        echo "⏳ Waiting for App Platform deployment to be ready..."
-        
-        timeout 300 bash -c '
+        # Simple health check to verify deployment is accessible
+        timeout 60 bash -c '
           while ! curl -f --connect-timeout 10 ${{ env.APP_URL }}/health 2>/dev/null; do
             echo "Waiting for application to be ready..."
-            sleep 15
+            sleep 10
           done
         '
         
