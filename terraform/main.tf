@@ -68,7 +68,43 @@ resource "digitalocean_app" "budget_app" {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
     region = var.region
 
-    # Main application service (PostgreSQL now managed separately)
+    # Pre-deploy job for database migrations
+    job {
+      name = "migrations"
+      kind = "PRE_DEPLOY"
+      
+      image {
+        registry_type = "GHCR"
+        registry      = "ghcr.io"
+        repository    = "${var.github_repo}/budget-app"
+        tag           = var.docker_image_tag
+      }
+
+      # Environment variables for migration job
+      env {
+        key   = "BUDGET_DATABASE_URL"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+        scope = "RUN_TIME"
+        type  = "SECRET"
+      }
+
+      env {
+        key   = "BUDGET_ENV"
+        value = "production"
+        scope = "RUN_TIME"
+      }
+
+      env {
+        key   = "BUDGET_LOG_LEVEL"
+        value = "info"
+        scope = "RUN_TIME"
+      }
+
+      # Run migrations command
+      run_command = "./budget migrate"
+    }
+
+    # Main application service (starts after migrations complete)
     service {
       name               = "web"
       instance_count     = 1
@@ -107,13 +143,13 @@ resource "digitalocean_app" "budget_app" {
         scope = "RUN_TIME"
       }
 
-      # Health check - more forgiving for database startup
+      # Health check - faster since migrations handled by pre-deploy job
       health_check {
         http_path                = "/health"
-        initial_delay_seconds    = 60    # Wait 60s before first check
+        initial_delay_seconds    = 30    # Reduced from 60s
         period_seconds           = 10    # Check every 10s
         timeout_seconds          = 5     # 5s timeout per check
-        failure_threshold        = 5     # Allow 5 failures before marking unhealthy
+        failure_threshold        = 3     # Reduced from 5 (faster startup)
         success_threshold        = 1     # 1 success to mark healthy
       }
 
