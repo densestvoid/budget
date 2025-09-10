@@ -153,6 +153,9 @@ resource "digitalocean_app" "budget_migrations" {
   ]
   
   # Note: App Platform doesn't support tags - using name for identification
+  
+  # Terraform will automatically detect if image tag changed
+  # If image tag is same (cache hit), no redeployment needed
 
   spec {
     name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
@@ -209,6 +212,9 @@ resource "digitalocean_app" "budget_app" {
   ]
   
   # Note: App Platform doesn't support tags - using name for identification
+  
+  # Terraform will automatically detect if image tag changed
+  # If image tag is same (cache hit), no redeployment needed
 
   spec {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
