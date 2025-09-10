@@ -9,6 +9,11 @@ output "app_id" {
   value       = digitalocean_app.budget_app.id
 }
 
+output "migration_app_id" {
+  description = "DigitalOcean App Platform migration application ID"
+  value       = digitalocean_app.budget_migrations.id
+}
+
 output "deployment_id" {
   description = "Unique deployment identifier"
   value       = var.deployment_id

@@ -55,8 +55,8 @@ resource "digitalocean_database_user" "budget_user" {
   name       = "budget_app"
 }
 
-# Create DigitalOcean App Platform application with dependencies
-resource "digitalocean_app" "budget_app" {
+# Create migration app that runs migrations and exits
+resource "digitalocean_app" "budget_migrations" {
   # Ensure database is created first
   depends_on = [
     digitalocean_database_cluster.budget_db,
@@ -65,13 +65,13 @@ resource "digitalocean_app" "budget_app" {
   ]
 
   spec {
-    name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
+    name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
     region = var.region
 
-    # Pre-deploy job for database migrations
+    # Migration job - runs once and exits
     job {
-      name = "migrations"
-      kind = "PRE_DEPLOY"
+      name = "migrate"
+      kind = "DEPLOY"  # Runs during deployment, not pre-deploy
       
       image {
         registry_type = "GHCR"
@@ -80,7 +80,7 @@ resource "digitalocean_app" "budget_app" {
         tag           = var.docker_image_tag
       }
 
-      # Environment variables for migration job
+      # Environment variables for migration
       env {
         key   = "BUDGET_DATABASE_URL"
         value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
@@ -100,11 +100,24 @@ resource "digitalocean_app" "budget_app" {
         scope = "RUN_TIME"
       }
 
-      # Run migrations command
+      # Run migrations and exit
       run_command = "./budget migrate"
     }
+  }
+}
 
-    # Main application service (starts after migrations complete)
+# Create main application after migrations complete
+resource "digitalocean_app" "budget_app" {
+  # Ensure database and migrations are completed first
+  depends_on = [
+    digitalocean_app.budget_migrations
+  ]
+
+  spec {
+    name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
+    region = var.region
+
+    # Main application service
     service {
       name               = "web"
       instance_count     = 1
@@ -159,13 +172,22 @@ resource "digitalocean_app" "budget_app" {
   }
 }
 
-# Configure database firewall to allow App Platform access
+# Configure database firewall to allow both migration and main app access
 resource "digitalocean_database_firewall" "budget_db_firewall" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   
-  depends_on = [digitalocean_app.budget_app]
+  depends_on = [
+    digitalocean_app.budget_migrations,
+    digitalocean_app.budget_app
+  ]
 
-  # Allow access from App Platform
+  # Allow access from migration app
+  rule {
+    type  = "app"
+    value = digitalocean_app.budget_migrations.id
+  }
+
+  # Allow access from main app
   rule {
     type  = "app"
     value = digitalocean_app.budget_app.id
@@ -176,12 +198,14 @@ resource "digitalocean_database_firewall" "budget_db_firewall" {
 resource "digitalocean_project_resources" "budget_resources" {
   project = data.digitalocean_project.budget.id
   resources = [
+    digitalocean_app.budget_migrations.urn,
     digitalocean_app.budget_app.urn,
     digitalocean_database_cluster.budget_db.urn
   ]
   
   # Ensure resources are created before assignment
   depends_on = [
+    digitalocean_app.budget_migrations,
     digitalocean_app.budget_app,
     digitalocean_database_cluster.budget_db,
     digitalocean_database_firewall.budget_db_firewall
