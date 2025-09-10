@@ -142,45 +142,91 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    - name: Check for source code changes (caching)
-      id: source_changes
+    - name: Level 1 - Check Go source changes
+      id: go_changes
       run: |
-        # Create hash of relevant source files for caching
-        SOURCE_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" | \
+        # Create hash of Go source files for build caching
+        GO_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" | \
           sort | xargs cat | sha256sum | cut -d' ' -f1)
         
-        echo "SOURCE_HASH=${SOURCE_HASH}" >> $GITHUB_ENV
-        echo "source_hash=${SOURCE_HASH}" >> $GITHUB_OUTPUT
-        echo "Source hash: ${SOURCE_HASH}"
+        echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
+        echo "go_hash=${GO_HASH}" >> $GITHUB_OUTPUT
+        echo "Go source hash: ${GO_HASH}"
+    
+    - name: Level 1 - Restore Go build cache
+      id: go_cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: go-build-${{ env.GO_HASH }}
+        restore-keys: |
+          go-build-
+    
+    - name: Level 2 - Check Docker context changes  
+      id: docker_changes
+      run: |
+        # Create hash of all files that affect Docker image
+        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
+          sort | xargs cat | sha256sum | cut -d' ' -f1)
         
-        # Check if we have a cached image for this hash
-        CACHE_KEY="docker-image-${{ env.DEPLOYMENT_ID }}-${SOURCE_HASH}"
-        echo "CACHE_KEY=${CACHE_KEY}" >> $GITHUB_ENV
-        echo "cache_key=${CACHE_KEY}" >> $GITHUB_OUTPUT
+        echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
+        echo "docker_hash=${DOCKER_HASH}" >> $GITHUB_OUTPUT
+        echo "Docker context hash: ${DOCKER_HASH}"
+        
+        # Set image tag based on hash for cache detection
+        IMAGE_TAG="${{ env.DEPLOYMENT_ID }}-${DOCKER_HASH}"
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+    
+    - name: Level 2 - Check if Docker image exists
+      id: docker_image_check
+      run: |
+        echo "🔍 Checking if Docker image exists in GHCR..."
+        
+        # Check if image exists in GitHub Container Registry
+        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} >/dev/null 2>&1; then
+          echo "✅ Docker image cache hit - image exists"
+          echo "docker_cache_hit=true" >> $GITHUB_OUTPUT
+          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Docker image cache miss - build required"
+          echo "docker_cache_hit=false" >> $GITHUB_OUTPUT
+          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
+        fi
     
     - name: Check Docker build cache
       id: docker_cache
       uses: actions/cache@v4
       with:
         path: /tmp/.buildx-cache
-        key: ${{ env.CACHE_KEY }}
+        key: docker-buildx-${{ env.DOCKER_HASH }}
         restore-keys: |
           docker-image-${{ env.DEPLOYMENT_ID }}-
     
+    - name: Skip Docker build (cache hit)
+      if: steps.docker_image_check.outputs.skip_docker_build == 'true'
+      run: |
+        echo "🚀 Docker image cache hit - skipping build"
+        echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}"
+        echo "✅ Build phase skipped due to cache"
+    
     - name: Build and push Docker image
+      if: steps.docker_image_check.outputs.skip_docker_build == 'false'
       run: |
         echo "🐳 Building Docker image..."
-        echo "Cache key: ${{ env.CACHE_KEY }}"
+        echo "Docker hash: ${{ env.DOCKER_HASH }}"
         echo "Cache hit: ${{ steps.docker_cache.outputs.cache-hit }}"
         
         # Login to GitHub Container Registry
         echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
         
-        # Build with cache
+        # Build with cache using hash-based tag
         docker buildx build \
           --file Dockerfile.prod \
+          --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.DEPLOYMENT_ID }} \
-          --tag ghcr.io/${{ github.repository }}/budget-app:latest \
           --cache-from type=local,src=/tmp/.buildx-cache \
           --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
           --push \
@@ -191,7 +237,7 @@ jobs:
         mv /tmp/.buildx-cache-new /tmp/.buildx-cache
         
         echo "✅ Docker image built and pushed"
-        echo "IMAGE_TAG=${{ env.DEPLOYMENT_ID }}" >> $GITHUB_ENV
+        echo "Build completed with tag: ${{ env.IMAGE_TAG }}"
     
     - name: Prepare Terraform configuration
       run: |
@@ -203,7 +249,7 @@ jobs:
         region = "nyc1"
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
-        docker_image_tag = "${{ env.DEPLOYMENT_ID }}"
+        docker_image_tag = "${{ env.IMAGE_TAG }}"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
         auto_terminate_minutes = 30
         EOF
