@@ -99,67 +99,14 @@ resource "null_resource" "database_health_check" {
   }
 }
 
-# Create migration app that runs migrations and exits
-resource "digitalocean_app" "budget_migrations" {
-  # Ensure database is ready and health-checked
-  depends_on = [
-    null_resource.database_health_check
-  ]
-  
-  # Note: App Platform doesn't support tags - using name for identification
-
-  spec {
-    name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
-    region = var.region
-    
-    # Enable VPC networking for database access
-    vpc {
-      id = digitalocean_vpc.budget_vpc.id
-    }
-
-    # Migration job - runs once and exits
-    job {
-      name = "migrate"
-      kind = "PRE_DEPLOY"  # Runs before main service deployment
-      
-      image {
-        registry_type = "GHCR"
-        registry      = "ghcr.io"
-        repository    = "${var.github_repo}/budget-app"
-        tag           = var.docker_image_tag
-      }
-
-      # Environment variables for migration
-      env {
-        key   = "BUDGET_DATABASE_URL"
-        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
-        scope = "RUN_TIME"
-        type  = "SECRET"
-      }
-
-      env {
-        key   = "BUDGET_ENV"
-        value = "production"
-        scope = "RUN_TIME"
-      }
-
-      env {
-        key   = "BUDGET_LOG_LEVEL"
-        value = "info"
-        scope = "RUN_TIME"
-      }
-
-      # Run migrations with debugging
-      run_command = "sh -c 'echo \"🔍 Migration job starting...\"; echo \"Environment:\"; env | grep BUDGET; echo \"🔍 Testing DB connection...\"; ./budget migrate status; echo \"🔄 Running migrations...\"; ./budget migrate; echo \"✅ Migration completed successfully\"'"
-    }
-  }
-}
+# Migration job is now defined in migration_job.tf for better organization
 
 # Create main application after migrations complete
 resource "digitalocean_app" "budget_app" {
   # Ensure database and migrations are completed first
   depends_on = [
-    digitalocean_app.budget_migrations
+    digitalocean_app.budget_migrations_enhanced,
+    null_resource.migration_validation
   ]
   
   # Note: App Platform doesn't support tags - using name for identification
@@ -235,7 +182,7 @@ resource "digitalocean_app" "budget_app" {
 resource "digitalocean_project_resources" "budget_resources" {
   project = data.digitalocean_project.budget.id
   resources = [
-    digitalocean_app.budget_migrations.urn,
+    digitalocean_app.budget_migrations_enhanced.urn,
     digitalocean_app.budget_app.urn,
     digitalocean_database_cluster.budget_db.urn
     # Note: VPC cannot be assigned to projects (not in supported resource types)
@@ -243,7 +190,7 @@ resource "digitalocean_project_resources" "budget_resources" {
   
   # Ensure resources are created before assignment
   depends_on = [
-    digitalocean_app.budget_migrations,
+    digitalocean_app.budget_migrations_enhanced,
     digitalocean_app.budget_app,
     digitalocean_database_cluster.budget_db
   ]

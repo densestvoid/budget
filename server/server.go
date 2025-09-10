@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,25 +24,33 @@ import (
 )
 
 type Server struct {
-	router *chi.Mux
-	db     *sql.DB
-	store  *data.Storage
-	port   string
+	router       *chi.Mux
+	db           *sql.DB
+	store        *data.Storage
+	port         string
+	logger       *Logger
+	errorHandler *ErrorHandler
 }
 
 func NewServer(port string) *Server {
+	logger := NewLoggerFromEnv()
+	errorHandler := NewErrorHandler(true, ErrorLevelWarning) // Include stack traces in development
+	
 	return &Server{
-		router: chi.NewRouter(),
-		port:   port,
+		router:       chi.NewRouter(),
+		port:         port,
+		logger:       logger,
+		errorHandler: errorHandler,
 	}
 }
 
 func (s *Server) SetupMiddleware() {
 	// Basic middleware
-	s.router.Use(middleware.Logger)
-	s.router.Use(middleware.Recoverer)
-	s.router.Use(middleware.RealIP)
 	s.router.Use(middleware.RequestID)
+	s.router.Use(middleware.RealIP)
+	s.router.Use(middleware.Recoverer)
+	s.router.Use(s.errorHandler.ErrorMiddleware()) // Our custom error handling
+	s.router.Use(s.loggingMiddleware())           // Our custom logging
 	s.router.Use(middleware.Timeout(60 * time.Second))
 
 	// CORS middleware
@@ -55,6 +62,32 @@ func (s *Server) SetupMiddleware() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+}
+
+// loggingMiddleware provides structured HTTP request logging
+func (s *Server) loggingMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			
+			// Wrap the ResponseWriter to capture status code
+			wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			
+			// Process the request
+			next.ServeHTTP(wrapped, r)
+			
+			// Log the request
+			duration := time.Since(start)
+			LogHTTPRequest(
+				r.Method,
+				r.URL.Path,
+				r.UserAgent(),
+				r.RemoteAddr,
+				duration,
+				wrapped.Status(),
+			)
+		})
+	}
 }
 
 func (s *Server) SetupRoutes() {
@@ -116,10 +149,49 @@ func (s *Server) SetupRoutes() {
 
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	response := `{"status":"ok","timestamp":"` + time.Now().Format(time.RFC3339) + `"}`
+	
+	// Check database connectivity
+	dbStatus := "ok"
+	dbError := ""
+	if s.store != nil {
+		if err := s.store.Ping(); err != nil {
+			dbStatus = "error"
+			dbError = err.Error()
+			s.logger.Error("Health check database ping failed", err, map[string]interface{}{
+				"component": "health_check",
+			})
+		}
+	} else {
+		dbStatus = "not_initialized"
+		dbError = "database not initialized"
+	}
+	
+	status := "ok"
+	statusCode := http.StatusOK
+	if dbStatus != "ok" {
+		status = "degraded"
+		statusCode = http.StatusServiceUnavailable
+	}
+	
+	response := fmt.Sprintf(`{
+		"status": "%s",
+		"database": "%s",
+		"timestamp": "%s"
+		%s
+	}`, status, dbStatus, time.Now().Format(time.RFC3339),
+		func() string {
+			if dbError != "" {
+				return fmt.Sprintf(`,
+		"database_error": "%s"`, dbError)
+			}
+			return ""
+		}())
+	
+	w.WriteHeader(statusCode)
 	if _, err := w.Write([]byte(response)); err != nil {
-		log.Printf("Error writing health response: %v", err)
+		s.logger.Error("Error writing health response", err, map[string]interface{}{
+			"component": "health_check",
+		})
 	}
 }
 
@@ -127,14 +199,19 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	var isAuthenticated bool
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
-		log.Printf("Home handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+		s.logger.Debug("Home handler: User is authenticated", map[string]interface{}{
+			"authenticated": isAuthenticated,
+		})
 	} else {
-		log.Printf("Home handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
+		s.logger.Debug("Home handler: User is not authenticated", map[string]interface{}{
+			"authenticated": isAuthenticated,
+		})
 	}
+	
 	page := templates.HomePage()
 	if err := templates.BaseLayoutWithAuth("Home - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering home page: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		HTTPError(w, r, http.StatusInternalServerError, "Failed to render home page", err)
+		return
 	}
 }
 
@@ -142,14 +219,19 @@ func (s *Server) aboutHandler(w http.ResponseWriter, r *http.Request) {
 	var isAuthenticated bool
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
-		log.Printf("About handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+		s.logger.Debug("About handler: User is authenticated", map[string]interface{}{
+			"authenticated": isAuthenticated,
+		})
 	} else {
-		log.Printf("About handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
+		s.logger.Debug("About handler: User is not authenticated", map[string]interface{}{
+			"authenticated": isAuthenticated,
+		})
 	}
+	
 	page := templates.AboutPage()
 	if err := templates.BaseLayoutWithAuth("About - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering about page: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		HTTPError(w, r, http.StatusInternalServerError, "Failed to render about page", err)
+		return
 	}
 }
 
@@ -583,7 +665,10 @@ func (s *Server) SetDB(db *sql.DB) {
 }
 
 func (s *Server) Run() error {
-	log.Printf("Server starting on port %s", s.port)
+	s.logger.Info("Server starting", map[string]interface{}{
+		"port": s.port,
+		"component": "server",
+	})
 
 	// Create HTTP/2 server
 	h2s := &http2.Server{}
@@ -593,7 +678,15 @@ func (s *Server) Run() error {
 		ReadHeaderTimeout: 20 * time.Second, // Prevent Slowloris attacks
 	}
 
-	return server.ListenAndServe()
+	if err := server.ListenAndServe(); err != nil {
+		s.logger.Fatal("Server failed to start", err, map[string]interface{}{
+			"port": s.port,
+			"component": "server",
+		})
+		return err
+	}
+	
+	return nil
 }
 
 // PATCH handler for transactions

@@ -21,6 +21,11 @@ type Account struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// GetID returns the account ID (for error handler interface)
+func (a *Account) GetID() int {
+	return a.ID
+}
+
 // Session represents a user session
 type Session struct {
 	ID        int       `json:"id"`

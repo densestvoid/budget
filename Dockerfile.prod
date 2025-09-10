@@ -33,9 +33,11 @@ COPY --from=builder /app/budget .
 COPY --from=builder /app/config.yaml .
 COPY --from=builder /app/templates ./templates/
 
-# Copy startup script
+# Copy scripts
 COPY --from=builder /app/scripts/start-with-retry.sh .
-RUN chmod +x start-with-retry.sh
+COPY --from=builder /app/scripts/run-migrations.sh ./scripts/
+RUN chmod +x start-with-retry.sh && \
+    chmod +x scripts/run-migrations.sh
 
 # Create non-root user and set permissions
 RUN adduser -D -s /bin/sh budget && \

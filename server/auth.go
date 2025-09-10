@@ -5,7 +5,6 @@ import (
 	"budget/templates"
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 )
@@ -47,7 +46,10 @@ func (h *AuthHandler) RegisterPage(w http.ResponseWriter, r *http.Request) {
 // Register handles user registration from form submission
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		LogAuthentication("registration", "unknown", "form_parse_error", map[string]interface{}{
+			"error": err.Error(),
+		})
+		HTTPError(w, r, http.StatusBadRequest, "Invalid form data", err)
 		return
 	}
 
@@ -55,36 +57,76 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	name := r.FormValue("name")
 
+	LogAuthentication("registration", email, "attempt", map[string]interface{}{
+		"name": name,
+	})
+
 	// Validate input
 	if email == "" || password == "" || name == "" {
-		http.Error(w, "Email, password, and name are required", http.StatusBadRequest)
+		LogAuthentication("registration", email, "validation_failed", map[string]interface{}{
+			"missing_fields": func() []string {
+				var missing []string
+				if email == "" {
+					missing = append(missing, "email")
+				}
+				if password == "" {
+					missing = append(missing, "password")
+				}
+				if name == "" {
+					missing = append(missing, "name")
+				}
+				return missing
+			}(),
+		})
+		HTTPError(w, r, http.StatusBadRequest, "Email, password, and name are required", nil)
 		return
 	}
 
 	// Check if account already exists
 	existing, err := h.store.GetAccountByEmail(email)
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		LogAuthentication("registration", email, "database_error", map[string]interface{}{
+			"operation": "check_existing_account",
+			"error":     err.Error(),
+		})
+		HTTPError(w, r, http.StatusInternalServerError, "Internal server error", err)
 		return
 	}
 	if existing != nil {
-		http.Error(w, "Account already exists", http.StatusConflict)
+		LogAuthentication("registration", email, "account_exists", nil)
+		HTTPError(w, r, http.StatusConflict, "Account already exists", nil)
 		return
 	}
 
 	// Create account
 	account, err := h.store.CreateAccount(email, password, name)
 	if err != nil {
-		http.Error(w, "Failed to create account", http.StatusInternalServerError)
+		LogAuthentication("registration", email, "account_creation_failed", map[string]interface{}{
+			"error": err.Error(),
+		})
+		HTTPError(w, r, http.StatusInternalServerError, "Failed to create account", err)
 		return
 	}
+
+	LogAuthentication("registration", email, "account_created", map[string]interface{}{
+		"account_id": account.ID,
+	})
 
 	// Create session
 	session, err := h.store.CreateSession(account.ID, 24*time.Hour)
 	if err != nil {
-		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		LogAuthentication("registration", email, "session_creation_failed", map[string]interface{}{
+			"account_id": account.ID,
+			"error":      err.Error(),
+		})
+		HTTPError(w, r, http.StatusInternalServerError, "Failed to create session", err)
 		return
 	}
+
+	LogAuthentication("registration", email, "success", map[string]interface{}{
+		"account_id": account.ID,
+		"session_id": session.ID,
+	})
 
 	// Set session cookie
 	http.SetCookie(w, &http.Cookie{
@@ -104,32 +146,61 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 // Login handles user login from form submission
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		LogAuthentication("login", "unknown", "form_parse_error", map[string]interface{}{
+			"error": err.Error(),
+		})
+		HTTPError(w, r, http.StatusBadRequest, "Invalid form data", err)
 		return
 	}
 
 	email := r.FormValue("email")
 	password := r.FormValue("password")
 
+	LogAuthentication("login", email, "attempt", nil)
+
 	// Validate input
 	if email == "" || password == "" {
-		http.Error(w, "Email and password are required", http.StatusBadRequest)
+		LogAuthentication("login", email, "validation_failed", map[string]interface{}{
+			"missing_fields": func() []string {
+				var missing []string
+				if email == "" {
+					missing = append(missing, "email")
+				}
+				if password == "" {
+					missing = append(missing, "password")
+				}
+				return missing
+			}(),
+		})
+		HTTPError(w, r, http.StatusBadRequest, "Email and password are required", nil)
 		return
 	}
 
 	// Authenticate account
 	account, err := h.store.AuthenticateAccount(email, password)
 	if err != nil {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		LogAuthentication("login", email, "authentication_failed", map[string]interface{}{
+			"error": err.Error(),
+		})
+		HTTPError(w, r, http.StatusUnauthorized, "Invalid credentials", err)
 		return
 	}
 
 	// Create session
 	session, err := h.store.CreateSession(account.ID, 24*time.Hour)
 	if err != nil {
-		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		LogAuthentication("login", email, "session_creation_failed", map[string]interface{}{
+			"account_id": account.ID,
+			"error":      err.Error(),
+		})
+		HTTPError(w, r, http.StatusInternalServerError, "Failed to create session", err)
 		return
 	}
+
+	LogAuthentication("login", email, "success", map[string]interface{}{
+		"account_id": account.ID,
+		"session_id": session.ID,
+	})
 
 	// Set session cookie
 	http.SetCookie(w, &http.Cookie{
