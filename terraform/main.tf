@@ -37,7 +37,7 @@ resource "digitalocean_vpc" "budget_vpc" {
   region   = var.region
   ip_range = "10.116.0.0/20"  # Private IP range
   
-  tags = ["deployment-id:${var.deployment_id}"]
+  # Note: VPC doesn't support tags, but name includes deployment_id for identification
 }
 
 # Managed PostgreSQL database with private VPC networking
