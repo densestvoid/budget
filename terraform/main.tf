@@ -88,18 +88,16 @@ resource "null_resource" "database_schema_setup" {
         -- Create budget schema
         CREATE SCHEMA IF NOT EXISTS budget;
         
-        -- Grant all privileges on budget schema to our user
+        -- Grant all privileges on budget schema ONLY to our user
         GRANT ALL PRIVILEGES ON SCHEMA budget TO "${digitalocean_database_user.budget_user.name}";
         
-        -- Grant usage on public schema (needed for goose version table)
-        GRANT ALL PRIVILEGES ON SCHEMA public TO "${digitalocean_database_user.budget_user.name}";
-        
-        -- Set default privileges for future tables
+        -- Set default privileges for future tables in budget schema
         ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON TABLES TO "${digitalocean_database_user.budget_user.name}";
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${digitalocean_database_user.budget_user.name}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON SEQUENCES TO "${digitalocean_database_user.budget_user.name}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON FUNCTIONS TO "${digitalocean_database_user.budget_user.name}";
         
-        -- Allow user to create tables
-        GRANT CREATE ON DATABASE "${digitalocean_database_db.budget_database.name}" TO "${digitalocean_database_user.budget_user.name}";
+        -- Make budget user the owner of budget schema
+        ALTER SCHEMA budget OWNER TO "${digitalocean_database_user.budget_user.name}";
 SQL
       
       if [ $? -eq 0 ]; then
@@ -180,7 +178,7 @@ resource "digitalocean_app" "budget_migrations" {
       # Environment variables for migration
       env {
         key   = "BUDGET_DATABASE_URL"
-        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require&search_path=budget"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
@@ -237,7 +235,7 @@ resource "digitalocean_app" "budget_app" {
       # Environment variables (with BUDGET_ prefix for viper)
       env {
         key   = "BUDGET_DATABASE_URL"
-        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require&search_path=budget"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
