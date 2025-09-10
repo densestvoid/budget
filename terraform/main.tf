@@ -31,24 +31,14 @@ data "digitalocean_project" "budget" {
   name = "budget-develop"
 }
 
-# Create VPC for private networking
-resource "digitalocean_vpc" "budget_vpc" {
-  name     = "budget-vpc-${substr(var.deployment_id, 0, 20)}"  # VPC names have shorter limits
-  region   = var.region
-  ip_range = "10.116.0.0/20"  # Private IP range
-  
-  tags = ["deployment-id:${var.deployment_id}"]
-}
-
-# Managed PostgreSQL database with private networking only
+# Managed PostgreSQL database with no public access (secured via firewall)
 resource "digitalocean_database_cluster" "budget_db" {
-  name                 = "budget-db-${var.deployment_id}"
-  engine               = "pg"
-  version              = "16"
-  size                 = "db-s-1vcpu-1gb"  # Cheapest managed DB option
-  region               = var.region
-  node_count           = 1
-  private_network_uuid = digitalocean_vpc.budget_vpc.id
+  name       = "budget-db-${var.deployment_id}"
+  engine     = "pg"
+  version    = "16"
+  size       = "db-s-1vcpu-1gb"  # Cheapest managed DB option
+  region     = var.region
+  node_count = 1
 
   tags = ["deployment-id:${var.deployment_id}"]
 }
@@ -67,12 +57,11 @@ resource "digitalocean_database_user" "budget_user" {
 
 # Create DigitalOcean App Platform application with dependencies
 resource "digitalocean_app" "budget_app" {
-  # Ensure database and VPC are created first
+  # Ensure database is created first
   depends_on = [
     digitalocean_database_cluster.budget_db,
     digitalocean_database_db.budget_database,
-    digitalocean_database_user.budget_user,
-    digitalocean_vpc.budget_vpc
+    digitalocean_database_user.budget_user
   ]
 
   spec {
@@ -95,7 +84,7 @@ resource "digitalocean_app" "budget_app" {
       # Environment variables (with BUDGET_ prefix for viper)
       env {
         key   = "BUDGET_DATABASE_URL"
-        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
+        value = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
         scope = "RUN_TIME"
         type  = "SECRET"
       }
@@ -152,15 +141,13 @@ resource "digitalocean_project_resources" "budget_resources" {
   project = data.digitalocean_project.budget.id
   resources = [
     digitalocean_app.budget_app.urn,
-    digitalocean_database_cluster.budget_db.urn,
-    digitalocean_vpc.budget_vpc.urn
+    digitalocean_database_cluster.budget_db.urn
   ]
   
   # Ensure resources are created before assignment
   depends_on = [
     digitalocean_app.budget_app,
     digitalocean_database_cluster.budget_db,
-    digitalocean_vpc.budget_vpc,
     digitalocean_database_firewall.budget_db_firewall
   ]
 }
