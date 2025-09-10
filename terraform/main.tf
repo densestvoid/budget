@@ -109,14 +109,16 @@ resource "digitalocean_app" "budget_migrations" {
   spec {
     name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
     region = var.region
+    
+    # Enable VPC networking for database access
+    vpc {
+      id = digitalocean_vpc.budget_vpc.id
+    }
 
     # Migration job - runs once and exits
     job {
       name = "migrate"
       kind = "PRE_DEPLOY"  # Runs before main service deployment
-      
-      # Enable VPC networking for database access
-      vpc_uuid = digitalocean_vpc.budget_vpc.id
       
       image {
         registry_type = "GHCR"
@@ -161,15 +163,17 @@ resource "digitalocean_app" "budget_app" {
   spec {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
     region = var.region
+    
+    # Enable VPC networking for database access
+    vpc {
+      id = digitalocean_vpc.budget_vpc.id
+    }
 
     # Main application service
     service {
       name               = "web"
       instance_count     = 1
       instance_size_slug = "basic-xxs"  # $5/month: 0.5 vCPU, 512MB RAM
-
-      # Enable VPC networking for database access
-      vpc_uuid = digitalocean_vpc.budget_vpc.id
 
       image {
         registry_type = "GHCR"
