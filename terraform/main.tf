@@ -237,16 +237,15 @@ resource "digitalocean_project_resources" "budget_resources" {
   resources = [
     digitalocean_app.budget_migrations.urn,
     digitalocean_app.budget_app.urn,
-    digitalocean_database_cluster.budget_db.urn,
-    digitalocean_vpc.budget_vpc.urn
+    digitalocean_database_cluster.budget_db.urn
+    # Note: VPC cannot be assigned to projects (not in supported resource types)
   ]
   
   # Ensure resources are created before assignment
   depends_on = [
     digitalocean_app.budget_migrations,
     digitalocean_app.budget_app,
-    digitalocean_database_cluster.budget_db,
-    digitalocean_vpc.budget_vpc
+    digitalocean_database_cluster.budget_db
   ]
 }
 
