@@ -31,14 +31,24 @@ data "digitalocean_project" "budget" {
   name = "budget-develop"
 }
 
-# Managed PostgreSQL database with deployment tagging
+# Create VPC for private networking
+resource "digitalocean_vpc" "budget_vpc" {
+  name     = "budget-vpc-${substr(var.deployment_id, 0, 20)}"  # VPC names have shorter limits
+  region   = var.region
+  ip_range = "10.116.0.0/20"  # Private IP range
+  
+  tags = ["deployment-id:${var.deployment_id}"]
+}
+
+# Managed PostgreSQL database with private networking only
 resource "digitalocean_database_cluster" "budget_db" {
-  name       = "budget-db-${var.deployment_id}"
-  engine     = "pg"
-  version    = "16"
-  size       = "db-s-1vcpu-1gb"  # Cheapest managed DB option
-  region     = var.region
-  node_count = 1
+  name                 = "budget-db-${var.deployment_id}"
+  engine               = "pg"
+  version              = "16"
+  size                 = "db-s-1vcpu-1gb"  # Cheapest managed DB option
+  region               = var.region
+  node_count           = 1
+  private_network_uuid = digitalocean_vpc.budget_vpc.id
 
   tags = ["deployment-id:${var.deployment_id}"]
 }
@@ -55,8 +65,16 @@ resource "digitalocean_database_user" "budget_user" {
   name       = "budget_app"
 }
 
-# Create DigitalOcean App Platform application
+# Create DigitalOcean App Platform application with dependencies
 resource "digitalocean_app" "budget_app" {
+  # Ensure database and VPC are created first
+  depends_on = [
+    digitalocean_database_cluster.budget_db,
+    digitalocean_database_db.budget_database,
+    digitalocean_database_user.budget_user,
+    digitalocean_vpc.budget_vpc
+  ]
+
   spec {
     name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
     region = var.region
@@ -116,18 +134,34 @@ resource "digitalocean_app" "budget_app" {
   }
 }
 
+# Configure database firewall to allow App Platform access
+resource "digitalocean_database_firewall" "budget_db_firewall" {
+  cluster_id = digitalocean_database_cluster.budget_db.id
+  
+  depends_on = [digitalocean_app.budget_app]
+
+  # Allow access from App Platform
+  rule {
+    type  = "app"
+    value = digitalocean_app.budget_app.id
+  }
+}
+
 # Assign resources to the existing project
 resource "digitalocean_project_resources" "budget_resources" {
   project = data.digitalocean_project.budget.id
   resources = [
     digitalocean_app.budget_app.urn,
-    digitalocean_database_cluster.budget_db.urn
+    digitalocean_database_cluster.budget_db.urn,
+    digitalocean_vpc.budget_vpc.urn
   ]
   
   # Ensure resources are created before assignment
   depends_on = [
     digitalocean_app.budget_app,
-    digitalocean_database_cluster.budget_db
+    digitalocean_database_cluster.budget_db,
+    digitalocean_vpc.budget_vpc,
+    digitalocean_database_firewall.budget_db_firewall
   ]
 }
 
