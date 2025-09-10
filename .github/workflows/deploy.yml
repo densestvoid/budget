@@ -16,9 +16,10 @@ on:
         type: string
 
 # Prevent concurrent deployments for the same PR (manual and automatic)
+# Don't cancel running workflows to avoid partial Terraform deployments
 concurrency:
   group: deploy-pr-${{ github.event.number || github.event.inputs.pr_number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}

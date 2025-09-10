@@ -25,9 +25,10 @@ on:
         type: string
 
 # Prevent multiple auto-terminate workflows for the same PR
+# Don't cancel running workflows to avoid partial cleanup
 concurrency:
   group: auto-terminate-pr-${{ github.event.inputs.pr_number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
