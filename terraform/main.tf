@@ -52,15 +52,8 @@ resource "digitalocean_database_cluster" "budget_db" {
 
   tags = ["deployment-id:${var.deployment_id}"]
   
-  # Prevent unnecessary updates to stable database
-  lifecycle {
-    ignore_changes = [
-      # Ignore auto-generated values that don't require updates
-      password,
-      created_at,
-      updated_at
-    ]
-  }
+  # Note: Database cluster is stable once created
+  # Password is auto-generated and managed by DigitalOcean
 }
 
 # Create database within the cluster
@@ -74,10 +67,8 @@ resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = "budget-app-${var.deployment_id}"
   
-  # Prevent password regeneration on redeployment
-  lifecycle {
-    ignore_changes = [password]
-  }
+  # Note: Database user password is auto-generated and stable
+  # DigitalOcean manages password lifecycle
 }
 
 # Create budget schema and grant privileges using null_resource
