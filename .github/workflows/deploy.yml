@@ -142,19 +142,40 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    - name: Level 1 - Check Go source changes
-      id: go_changes
+    - name: Check build requirements and caches
+      id: build_cache
       run: |
-        # Create hash of Go source files for build caching
+        echo "🔍 Analyzing build requirements..."
+        
+        # Create hash of Go source files
         GO_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" | \
           sort | xargs cat | sha256sum | cut -d' ' -f1)
-        
         echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
-        echo "go_hash=${GO_HASH}" >> $GITHUB_OUTPUT
         echo "Go source hash: ${GO_HASH}"
+        
+        # Create hash of all files that affect Docker image
+        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
+          sort | xargs cat | sha256sum | cut -d' ' -f1)
+        echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
+        echo "Docker context hash: ${DOCKER_HASH}"
+        
+        # Set image tag based on content hash
+        IMAGE_TAG="${{ env.DEPLOYMENT_ID }}-${DOCKER_HASH}"
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+        
+        # Check if Docker image already exists in GHCR
+        echo "🔍 Checking if Docker image exists in registry..."
+        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG} >/dev/null 2>&1; then
+          echo "✅ Docker image exists - skipping entire build pipeline"
+          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
+          echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG}"
+        else
+          echo "❌ Docker image not found - build pipeline required"
+          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
+        fi
     
-    - name: Level 1 - Restore Go build cache
-      id: go_cache
+    - name: Restore Go build cache
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
       uses: actions/cache@v4
       with:
         path: |
@@ -164,61 +185,22 @@ jobs:
         restore-keys: |
           go-build-
     
-    - name: Level 2 - Check Docker context changes  
-      id: docker_changes
-      run: |
-        # Create hash of all files that affect Docker image
-        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
-          sort | xargs cat | sha256sum | cut -d' ' -f1)
-        
-        echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
-        echo "docker_hash=${DOCKER_HASH}" >> $GITHUB_OUTPUT
-        echo "Docker context hash: ${DOCKER_HASH}"
-        
-        # Set image tag based on hash for cache detection
-        IMAGE_TAG="${{ env.DEPLOYMENT_ID }}-${DOCKER_HASH}"
-        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
-        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-    
-    - name: Level 2 - Check if Docker image exists
-      id: docker_image_check
-      run: |
-        echo "🔍 Checking if Docker image exists in GHCR..."
-        
-        # Check if image exists in GitHub Container Registry
-        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} >/dev/null 2>&1; then
-          echo "✅ Docker image cache hit - image exists"
-          echo "docker_cache_hit=true" >> $GITHUB_OUTPUT
-          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ Docker image cache miss - build required"
-          echo "docker_cache_hit=false" >> $GITHUB_OUTPUT
-          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Check Docker build cache
-      if: steps.docker_image_check.outputs.skip_docker_build == 'false'
-      id: docker_cache
+    - name: Restore Docker buildx cache
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      id: docker_buildx_cache
       uses: actions/cache@v4
       with:
         path: /tmp/.buildx-cache
         key: docker-buildx-${{ env.DOCKER_HASH }}
         restore-keys: |
-          docker-image-${{ env.DEPLOYMENT_ID }}-
-    
-    - name: Skip Docker build (cache hit)
-      if: steps.docker_image_check.outputs.skip_docker_build == 'true'
-      run: |
-        echo "🚀 Docker image cache hit - skipping build"
-        echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }}"
-        echo "✅ Build phase skipped due to cache"
+          docker-buildx-
     
     - name: Build and push Docker image
-      if: steps.docker_image_check.outputs.skip_docker_build == 'false'
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
       run: |
         echo "🐳 Building Docker image..."
         echo "Docker hash: ${{ env.DOCKER_HASH }}"
-        echo "Cache hit: ${{ steps.docker_cache.outputs.cache-hit }}"
+        echo "Buildx cache hit: ${{ steps.docker_buildx_cache.outputs.cache-hit }}"
         
         # Login to GitHub Container Registry
         echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -285,7 +267,7 @@ jobs:
           fi
         else
           # Existing deployment - use conditional logic based on image changes
-          if [ "${{ steps.docker_image_check.outputs.skip_docker_build }}" = "true" ]; then
+          if [ "${{ steps.build_cache.outputs.skip_docker_build }}" = "true" ]; then
             echo "📦 Same container image - checking if infrastructure-only updates needed..."
             
             # Check what would change with a plan
