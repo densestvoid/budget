@@ -168,6 +168,9 @@ jobs:
     - name: Destroy deployment
       if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true'
       id: destroy
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
       run: |
         DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         
