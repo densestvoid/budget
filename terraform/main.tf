@@ -71,7 +71,7 @@ resource "digitalocean_app" "budget_migrations" {
     # Migration job - runs once and exits
     job {
       name = "migrate"
-      kind = "DEPLOY"  # Runs during deployment, not pre-deploy
+      kind = "PRE_DEPLOY"  # Runs before main service deployment
       
       image {
         registry_type = "GHCR"
