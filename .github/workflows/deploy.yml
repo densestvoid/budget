@@ -269,44 +269,57 @@ jobs:
         
         echo "🚀 Deploying infrastructure..."
         
-        # Conditional deployment based on whether containers need updates
-        if [ "${{ steps.docker_image_check.outputs.skip_docker_build }}" = "true" ]; then
-          echo "📦 Same container image - checking if infrastructure-only updates needed..."
-          
-          # Check what would change with a plan
-          terraform plan -detailed-exitcode -out=tfplan
-          plan_exit_code=$?
-          
-          if [ $plan_exit_code -eq 0 ]; then
-            echo "✅ No changes needed - infrastructure is up to date"
+        # Check if deployment already exists in state
+        RESOURCE_COUNT=$(terraform state list | wc -l)
+        echo "📊 Found $RESOURCE_COUNT resources in state"
+        
+        if [ "$RESOURCE_COUNT" -eq 0 ]; then
+          echo "🆕 New deployment - creating all infrastructure..."
+          if terraform apply -auto-approve; then
+            echo "✅ New deployment completed successfully"
             echo "deploy_success=true" >> $GITHUB_OUTPUT
-            terraform_applied=false
-          elif [ $plan_exit_code -eq 2 ]; then
-            echo "🔧 Infrastructure changes detected - applying infrastructure-only updates..."
-            if terraform apply -auto-approve tfplan; then
-              echo "✅ Infrastructure updates applied successfully"
-              echo "deploy_success=true" >> $GITHUB_OUTPUT
-              terraform_applied=true
-            else
-              echo "❌ Infrastructure updates failed"
-              echo "deploy_success=false" >> $GITHUB_OUTPUT
-              exit 1
-            fi
           else
-            echo "❌ Terraform plan failed"
+            echo "❌ New deployment failed"
             echo "deploy_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
         else
-          echo "🆕 New container image - full deployment needed..."
-          if terraform apply -auto-approve; then
-            echo "✅ Full deployment completed successfully"
-            echo "deploy_success=true" >> $GITHUB_OUTPUT
-            terraform_applied=true
+          # Existing deployment - use conditional logic based on image changes
+          if [ "${{ steps.docker_image_check.outputs.skip_docker_build }}" = "true" ]; then
+            echo "📦 Same container image - checking if infrastructure-only updates needed..."
+            
+            # Check what would change with a plan
+            terraform plan -detailed-exitcode -out=tfplan
+            plan_exit_code=$?
+            
+            if [ $plan_exit_code -eq 0 ]; then
+              echo "✅ No changes needed - infrastructure is up to date"
+              echo "deploy_success=true" >> $GITHUB_OUTPUT
+            elif [ $plan_exit_code -eq 2 ]; then
+              echo "🔧 Infrastructure changes detected - applying updates..."
+              if terraform apply -auto-approve tfplan; then
+                echo "✅ Infrastructure updates applied successfully"
+                echo "deploy_success=true" >> $GITHUB_OUTPUT
+              else
+                echo "❌ Infrastructure updates failed"
+                echo "deploy_success=false" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            else
+              echo "❌ Terraform plan failed"
+              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           else
-            echo "❌ Full deployment failed"
-            echo "deploy_success=false" >> $GITHUB_OUTPUT
-            exit 1
+            echo "🆕 New container image - updating containers..."
+            if terraform apply -auto-approve; then
+              echo "✅ Container updates completed successfully"
+              echo "deploy_success=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Container updates failed"
+              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           fi
         fi
         
