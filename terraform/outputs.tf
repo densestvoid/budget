@@ -41,7 +41,7 @@ output "project_id" {
 # Cost information
 output "estimated_total_cost" {
   description = "Total estimated cost for 30-minute deployment"
-  value       = "$0.30"  # ($15 DB + $5 App + $5 Migration) / 60 * 0.5 hours = $0.208, rounded to $0.30 for safety
+  value       = "$0.02"  # ($15 DB + $5 App + $5 Migration) ÷ 730.56 hours/month × 0.5 hours = $0.017, rounded to $0.02
 }
 
 # Termination info
