@@ -5,6 +5,11 @@ on:
     types: [opened, synchronize, reopened]
     branches: ['**']
 
+# Prevent concurrent deployments for the same PR
+concurrency:
+  group: deploy-pr-${{ github.event.number }}
+  cancel-in-progress: true
+
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
