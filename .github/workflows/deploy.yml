@@ -15,7 +15,7 @@ on:
         required: false
         type: string
 
-# Prevent concurrent deployments for the same PR
+# Prevent concurrent deployments for the same PR (manual and automatic)
 concurrency:
   group: deploy-pr-${{ github.event.number || github.event.inputs.pr_number }}
   cancel-in-progress: true
