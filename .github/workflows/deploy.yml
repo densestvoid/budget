@@ -269,28 +269,60 @@ jobs:
         
         echo "🚀 Deploying infrastructure..."
         
-        if terraform apply -auto-approve; then
-          echo "✅ Infrastructure deployed successfully"
-          echo "deploy_success=true" >> $GITHUB_OUTPUT
+        # Conditional deployment based on whether containers need updates
+        if [ "${{ steps.docker_image_check.outputs.skip_docker_build }}" = "true" ]; then
+          echo "📦 Same container image - checking if infrastructure-only updates needed..."
           
-          # Get outputs
-          APP_URL=$(terraform output -raw app_url)
-          APP_ID=$(terraform output -raw app_id)
-          MIGRATION_APP_ID=$(terraform output -raw migration_app_id)
-          DB_HOST=$(terraform output -raw database_host)
-          TOTAL_COST=$(terraform output -raw estimated_total_cost)
+          # Check what would change with a plan
+          terraform plan -detailed-exitcode -out=tfplan
+          plan_exit_code=$?
           
-          echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
-          echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
-          echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
-          echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
-          echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
-          
+          if [ $plan_exit_code -eq 0 ]; then
+            echo "✅ No changes needed - infrastructure is up to date"
+            echo "deploy_success=true" >> $GITHUB_OUTPUT
+            terraform_applied=false
+          elif [ $plan_exit_code -eq 2 ]; then
+            echo "🔧 Infrastructure changes detected - applying infrastructure-only updates..."
+            if terraform apply -auto-approve tfplan; then
+              echo "✅ Infrastructure updates applied successfully"
+              echo "deploy_success=true" >> $GITHUB_OUTPUT
+              terraform_applied=true
+            else
+              echo "❌ Infrastructure updates failed"
+              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "❌ Terraform plan failed"
+            echo "deploy_success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
         else
-          echo "❌ Infrastructure deployment failed"
-          echo "deploy_success=false" >> $GITHUB_OUTPUT
-          exit 1
+          echo "🆕 New container image - full deployment needed..."
+          if terraform apply -auto-approve; then
+            echo "✅ Full deployment completed successfully"
+            echo "deploy_success=true" >> $GITHUB_OUTPUT
+            terraform_applied=true
+          else
+            echo "❌ Full deployment failed"
+            echo "deploy_success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
         fi
+        
+        # Always get outputs (they exist even if no changes applied)
+        echo "📊 Getting deployment outputs..."
+        APP_URL=$(terraform output -raw app_url)
+        APP_ID=$(terraform output -raw app_id)
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id)
+        DB_HOST=$(terraform output -raw database_host)
+        TOTAL_COST=$(terraform output -raw estimated_total_cost)
+        
+        echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+        echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
+        echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
+        echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
+        echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
     
     # Database readiness, migrations, and app deployment all handled by Terraform
     

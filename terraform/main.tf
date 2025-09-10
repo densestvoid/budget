@@ -51,6 +51,16 @@ resource "digitalocean_database_cluster" "budget_db" {
   private_network_uuid = digitalocean_vpc.budget_vpc.id
 
   tags = ["deployment-id:${var.deployment_id}"]
+  
+  # Prevent unnecessary updates to stable database
+  lifecycle {
+    ignore_changes = [
+      # Ignore auto-generated values that don't require updates
+      password,
+      created_at,
+      updated_at
+    ]
+  }
 }
 
 # Create database within the cluster
@@ -63,6 +73,11 @@ resource "digitalocean_database_db" "budget_database" {
 resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = "budget-app-${var.deployment_id}"
+  
+  # Prevent password regeneration on redeployment
+  lifecycle {
+    ignore_changes = [password]
+  }
 }
 
 # Create budget schema and grant privileges using null_resource
