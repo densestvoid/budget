@@ -55,29 +55,16 @@ resource "digitalocean_database_user" "budget_user" {
   name       = "budget_app"
 }
 
-# Stage 1: Initial database firewall - allow App Platform during deployment
-resource "digitalocean_database_firewall" "budget_db_firewall_initial" {
-  cluster_id = digitalocean_database_cluster.budget_db.id
-  
+# Note: No initial firewall rules = allow all connections during deployment
+# Database is open during app deployment, then restricted by final firewall
+
+# Create migration app that runs migrations and exits
+resource "digitalocean_app" "budget_migrations" {
+  # Ensure database is ready (no firewall restrictions during deployment)
   depends_on = [
     digitalocean_database_cluster.budget_db,
     digitalocean_database_db.budget_database,
     digitalocean_database_user.budget_user
-  ]
-
-  # Temporary broad rule to allow App Platform connections during deployment
-  # This will be replaced with specific app rules after apps are created
-  rule {
-    type  = "ip_addr"
-    value = "0.0.0.0/0"  # Temporary - will be restricted in stage 2
-  }
-}
-
-# Create migration app that runs migrations and exits
-resource "digitalocean_app" "budget_migrations" {
-  # Ensure database and initial firewall are ready
-  depends_on = [
-    digitalocean_database_firewall.budget_db_firewall_initial
   ]
 
   spec {
