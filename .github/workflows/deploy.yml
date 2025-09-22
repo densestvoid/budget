@@ -27,8 +27,27 @@ env:
 jobs:
   go-checks:
     name: Go Checks
-    uses: densestvoid/workflows/.github/workflows/go-checks@main
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Vet
+      run: go vet ./...
+    
+    - name: Build
+      run: go build -v ./...
+    
+    - name: Test
+      run: go test ./...
 
   deploy:
     name: Deploy to DigitalOcean
@@ -128,7 +147,7 @@ jobs:
           "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=queued,in_progress")
         
         # Find auto-terminate workflows for this app
-        existing_app_id="${{ steps.check_existing.outputs.existing_app_id }}"
+        # Note: This step was referencing a non-existent step, removing for now
         
         echo "$runs_response" | jq -r '.workflow_runs[] | select(.name == "Auto-Terminate Deployment") | .id' | \
         while read run_id; do

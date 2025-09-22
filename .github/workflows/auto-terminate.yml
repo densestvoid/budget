@@ -236,7 +236,7 @@ jobs:
           const setupSuccess = '${{ steps.setup.outputs.setup_success }}';
           const initSuccess = '${{ steps.init.outputs.init_success }}';
           const alreadyTerminated = '${{ steps.init.outputs.already_terminated }}';
-          const importSuccess = '${{ steps.import.outputs.import_success }}';
+          const importSuccess = 'true'; // Import step removed
           const prNumber = '${{ steps.validate.outputs.pr_number }}';
           
           let message;
