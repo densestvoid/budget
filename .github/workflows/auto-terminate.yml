@@ -178,7 +178,7 @@ jobs:
           exit 1
         fi
     
-    # No import needed - state file contains the deployment state automatically
+    # State file contains the deployment state automatically via DigitalOcean Spaces backend
     
     - name: Destroy deployment
       if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true' && steps.init.outputs.already_terminated == 'false'
@@ -236,7 +236,7 @@ jobs:
           const setupSuccess = '${{ steps.setup.outputs.setup_success }}';
           const initSuccess = '${{ steps.init.outputs.init_success }}';
           const alreadyTerminated = '${{ steps.init.outputs.already_terminated }}';
-          const importSuccess = 'true'; // Import step removed
+          // State managed automatically via DigitalOcean Spaces backend
           const prNumber = '${{ steps.validate.outputs.pr_number }}';
           
           let message;
