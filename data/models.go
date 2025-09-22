@@ -81,7 +81,7 @@ type Rule struct {
 }
 
 // AmountDecimal returns the amount as a decimal string (e.g., 1234 -> "12.34")
-func (t Transaction) AmountDecimal() string {
+func (t *Transaction) AmountDecimal() string {
 	return fmt.Sprintf("%.2f", float64(t.Amount)/100.0)
 }
 
@@ -419,7 +419,7 @@ func (s *Storage) UpdateTransactionPayeeCategory(accountID, transactionID int, p
 func (s *Storage) BulkInsertTransactions(accountID int, txs []Transaction) error {
 	for _, t := range txs {
 		// Apply rules to the transaction
-		modifiedTx, err := s.ApplyRulesToTransaction(accountID, t)
+		modifiedTx, err := s.ApplyRulesToTransaction(accountID, &t)
 		if err != nil {
 			return fmt.Errorf("failed to apply rules to transaction: %w", err)
 		}
@@ -784,7 +784,7 @@ func (s *Storage) ToggleRuleActive(accountID, ruleID int) error {
 }
 
 // ApplyRulesToTransaction applies all active rules to a transaction and returns the modified transaction
-func (s *Storage) ApplyRulesToTransaction(accountID int, tx Transaction) (*Transaction, error) {
+func (s *Storage) ApplyRulesToTransaction(accountID int, tx *Transaction) (*Transaction, error) {
 	rules, err := s.GetRulesByAccount(accountID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rules: %w", err)
@@ -821,7 +821,7 @@ func (s *Storage) ApplyRulesToTransaction(accountID int, tx Transaction) (*Trans
 		}
 	}
 
-	return &tx, nil
+	return tx, nil
 }
 
 // conditionMatches checks if a condition matches the given payee text
@@ -841,7 +841,7 @@ func (s *Storage) conditionMatches(condition RuleCondition, payeeText string) bo
 }
 
 // ApplyRuleToAllTransactions applies a single rule to all existing transactions for an account and returns the number updated
-func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule Rule) (int, error) {
+func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule *Rule) (int, error) {
 	txs, err := s.GetAllTransactionsByAccount(accountID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get transactions: %w", err)
