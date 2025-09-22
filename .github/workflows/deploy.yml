@@ -116,28 +116,6 @@ jobs:
           exit 1
         fi
     
-    - name: Cancel existing auto-terminate workflow
-      if: steps.terraform_init.outputs.is_redeployment == 'true'
-      run: |
-        echo "🛑 Canceling existing auto-terminate workflow for redeployment..."
-        
-        # Get running workflows for this repository
-        runs_response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=queued,in_progress")
-        
-        # Find auto-terminate workflows for this app
-        # Note: This step was referencing a non-existent step, removing for now
-        
-        echo "$runs_response" | jq -r '.workflow_runs[] | select(.name == "Auto-Terminate Deployment") | .id' | \
-        while read run_id; do
-          echo "Canceling workflow run: $run_id"
-          curl -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id/cancel"
-        done
-        
-        echo "✅ Existing auto-terminate workflows canceled"
-    
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
