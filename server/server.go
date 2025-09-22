@@ -1291,7 +1291,6 @@ func parseCSVFile(r *http.Request) ([][]string, error) {
 // validateCSVHeaders validates CSV headers and returns column indices
 func validateCSVHeaders(header []string) (map[string]int, error) {
 	required := map[string]bool{"date": false, "payee": false, "amount": false}
-	unrecognized := []string{}
 	colIdx := map[string]int{}
 
 	for i, col := range header {
@@ -1307,7 +1306,7 @@ func validateCSVHeaders(header []string) (map[string]int, error) {
 			required["amount"] = true
 			colIdx["amount"] = i
 		default:
-			unrecognized = append(unrecognized, col)
+			// Ignore unrecognized columns
 		}
 	}
 
