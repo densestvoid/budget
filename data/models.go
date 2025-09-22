@@ -417,9 +417,10 @@ func (s *Storage) UpdateTransactionPayeeCategory(accountID, transactionID int, p
 
 // BulkInsertTransactions inserts multiple transactions (for CSV upload)
 func (s *Storage) BulkInsertTransactions(accountID int, txs []Transaction) error {
-	for _, t := range txs {
+	for i := range txs {
+		t := &txs[i]
 		// Apply rules to the transaction
-		modifiedTx, err := s.ApplyRulesToTransaction(accountID, &t)
+		modifiedTx, err := s.ApplyRulesToTransaction(accountID, t)
 		if err != nil {
 			return fmt.Errorf("failed to apply rules to transaction: %w", err)
 		}
@@ -794,7 +795,8 @@ func (s *Storage) ApplyRulesToTransaction(accountID int, tx *Transaction) (*Tran
 	// Rules are already sorted by priority DESC from GetRulesByAccount
 
 	// Apply rules in order
-	for _, rule := range rules {
+	for i := range rules {
+		rule := &rules[i]
 		if !rule.Active {
 			continue
 		}
@@ -847,7 +849,8 @@ func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule *Rule) (int, er
 		return 0, fmt.Errorf("failed to get transactions: %w", err)
 	}
 	updated := 0
-	for _, tx := range txs {
+	for i := range txs {
+		tx := &txs[i]
 		// Check if all conditions match
 		allMatch := true
 		for _, cond := range rule.Conditions {

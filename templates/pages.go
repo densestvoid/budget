@@ -523,8 +523,9 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 					html.Class("list-group"),
 					g.Group(func() []g.Node {
 						var rows []g.Node
-						for _, t := range transactions {
-							rows = append(rows, TransactionCardWithModalSelectable(&t, categories, ""))
+						for i := range transactions {
+							t := &transactions[i]
+							rows = append(rows, TransactionCardWithModalSelectable(t, categories, ""))
 						}
 						return rows
 					}()),
@@ -868,8 +869,9 @@ func RenderTransactionListWithSelectableCards(w io.Writer, txs []data.Transactio
 		html.Class("list-group"),
 		g.Group(func() []g.Node {
 			var rows []g.Node
-			for _, t := range txs {
-				rows = append(rows, TransactionCardWithModalSelectable(&t, cats, ""))
+			for i := range txs {
+				t := &txs[i]
+				rows = append(rows, TransactionCardWithModalSelectable(t, cats, ""))
 			}
 			return rows
 		}()),
@@ -905,7 +907,7 @@ func CategoriesHeaderSection() g.Node {
 }
 
 // CategoriesDirectoryNavigation renders the breadcrumbs and category list
-func CategoriesDirectoryNavigation(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
+func CategoriesDirectoryNavigation(visibleCategories, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
 	return html.Div(
 		html.ID("categories-directory"),
 		html.Class("col-12 col-md-8 px-2 mx-auto"),
@@ -1078,7 +1080,7 @@ func AddCategoryModal(allCategories []data.Category, currentParentID *int) g.Nod
 	return addCategoryModal(allCategories, currentParentID)
 }
 
-func CategoriesDirectoryContent(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
+func CategoriesDirectoryContent(visibleCategories, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
 	var currentParentID *int
 	if currentParent != nil {
 		currentParentID = &currentParent.ID
@@ -1091,7 +1093,7 @@ func CategoriesDirectoryContent(visibleCategories []data.Category, allCategories
 	})
 }
 
-func CategoriesDirectoryPage(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
+func CategoriesDirectoryPage(visibleCategories, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
 	var currentParentID *int
 	if currentParent != nil {
 		currentParentID = &currentParent.ID
@@ -1167,8 +1169,9 @@ func RulesPage(rules []data.Rule, categories []data.Category) g.Node {
 				html.Class("list-group"),
 				g.Group(func() []g.Node {
 					var rows []g.Node
-					for _, rule := range rules {
-						rows = append(rows, RuleCard(&rule, categories))
+					for i := range rules {
+						rule := &rules[i]
+						rows = append(rows, RuleCard(rule, categories))
 					}
 					return rows
 				}()),
@@ -1717,8 +1720,9 @@ func RenderRulesList(w io.Writer, rules []data.Rule, categories []data.Category)
 		html.Class("list-group"),
 		g.Group(func() []g.Node {
 			var rows []g.Node
-			for _, rule := range rules {
-				rows = append(rows, RuleCard(&rule, categories))
+			for i := range rules {
+				rule := &rules[i]
+				rows = append(rows, RuleCard(rule, categories))
 			}
 			return rows
 		}()),
@@ -1726,7 +1730,7 @@ func RenderRulesList(w io.Writer, rules []data.Rule, categories []data.Category)
 }
 
 // CategoryBootstrapDropdown renders a hierarchical category dropdown using Bootstrap dropdowns
-func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID string, selectedID *int, currentNodeID *int, showCurrent bool, disableDescendantsOf *int) g.Node {
+func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID string, selectedID, currentNodeID *int, showCurrent bool, disableDescendantsOf *int) g.Node {
 	flat := flattenCategories(categories, nil, 0)
 	descendants := getDescendantsIfNeeded(categories, disableDescendantsOf)
 	selectedValue, selectedDisplayName := getSelectedCategoryInfo(flat, selectedID)
@@ -1750,12 +1754,12 @@ func getDescendantsIfNeeded(categories []data.Category, disableDescendantsOf *in
 }
 
 // getSelectedCategoryInfo gets the selected category value and display name
-func getSelectedCategoryInfo(flat []flattenedCategory, selectedID *int) (string, string) {
+func getSelectedCategoryInfo(flat []flattenedCategory, selectedID *int) (selectedValue, selectedDisplayName string) {
 	if selectedID == nil {
 		return "", "None (top-level)"
 	}
 
-	selectedValue := strconv.Itoa(*selectedID)
+	selectedValue = strconv.Itoa(*selectedID)
 	for _, item := range flat {
 		if item.Cat.ID == *selectedID {
 			return selectedValue, item.Cat.Name
@@ -1765,7 +1769,7 @@ func getSelectedCategoryInfo(flat []flattenedCategory, selectedID *int) (string,
 }
 
 // escapeForJavaScript escapes strings for JavaScript
-func escapeForJavaScript(selectedValue, selectedDisplayName string) (string, string) {
+func escapeForJavaScript(selectedValue, selectedDisplayName string) (escapedValue, escapedDisplay string) {
 	return strings.ReplaceAll(selectedValue, "'", "\\'"), strings.ReplaceAll(selectedDisplayName, "'", "\\'")
 }
 
@@ -1862,12 +1866,12 @@ func buildCategoryOption(item *flattenedCategory, descendants map[int]bool, curr
 }
 
 // buildIndentation builds indentation style and text
-func buildIndentation(level int) (string, string) {
+func buildIndentation(level int) (indentStyle, indentText string) {
 	if level == 0 {
 		return "", ""
 	}
-	indentStyle := fmt.Sprintf("padding-left: %dpx;", level*20)
-	indentText := strings.Repeat("  ", level) + "└─ "
+	indentStyle = fmt.Sprintf("padding-left: %dpx;", level*20)
+	indentText = strings.Repeat("  ", level) + "└─ "
 	return indentStyle, indentText
 }
 

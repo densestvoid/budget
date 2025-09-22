@@ -742,7 +742,7 @@ func (s *Server) handleRuleCreationResponse(w http.ResponseWriter, r *http.Reque
 }
 
 // parseTransactionPatchData parses form data for transaction patching
-func parseTransactionPatchData(r *http.Request) (payee string, categoryID *int, reviewed bool, hasCategoryID bool, err error) {
+func parseTransactionPatchData(r *http.Request) (payee string, categoryID *int, reviewed, hasCategoryID bool, err error) {
 	if err := r.ParseForm(); err != nil {
 		return "", nil, false, false, err
 	}
@@ -766,7 +766,7 @@ func parseTransactionPatchData(r *http.Request) (payee string, categoryID *int, 
 }
 
 // updateTransactionFields updates transaction fields in the database
-func (s *Server) updateTransactionFields(accountID, transactionID int, payee string, categoryID *int, reviewed bool, hasCategoryID bool) error {
+func (s *Server) updateTransactionFields(accountID, transactionID int, payee string, categoryID *int, reviewed, hasCategoryID bool) error {
 	if payee != "" {
 		if err := s.store.UpdateTransactionPayee(accountID, transactionID, payee); err != nil {
 			return fmt.Errorf("failed to update payee: %w", err)
@@ -869,9 +869,10 @@ func (s *Server) handleTransactionUpdateSuccess(w http.ResponseWriter, txs []dat
 
 // findTransactionByID finds a transaction by ID in the list
 func (s *Server) findTransactionByID(txs []data.Transaction, transactionID int) *data.Transaction {
-	for _, t := range txs {
+	for i := range txs {
+		t := &txs[i]
 		if t.ID == transactionID {
-			return &t
+			return t
 		}
 	}
 	return nil
@@ -879,7 +880,8 @@ func (s *Server) findTransactionByID(txs []data.Transaction, transactionID int) 
 
 // isTransactionVisible checks if a transaction is still visible in the list
 func (s *Server) isTransactionVisible(txs []data.Transaction, transactionID int) bool {
-	for _, t := range txs {
+	for i := range txs {
+		t := &txs[i]
 		if t.ID == transactionID {
 			return true
 		}
@@ -982,7 +984,8 @@ func (s *Server) editPayeeInlineHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var payee string
-	for _, t := range txns {
+	for i := range txns {
+		t := &txns[i]
 		if t.ID == transactionID {
 			payee = t.Payee
 			break
@@ -1015,7 +1018,8 @@ func (s *Server) editCategoryInlineHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var currentCatID *int
-	for _, t := range txns {
+	for i := range txns {
+		t := &txns[i]
 		if t.ID == transactionID {
 			currentCatID = t.CategoryID
 			break
@@ -1078,9 +1082,10 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var transaction *data.Transaction
-	for _, t := range txs {
+	for i := range txs {
+		t := &txs[i]
 		if t.ID == transactionID {
-			transaction = &t
+			transaction = t
 			break
 		}
 	}
@@ -1423,8 +1428,7 @@ func parseTransactionFromRecord(record []string, colIdx map[string]int) (*data.T
 }
 
 // processUploadedTransactions processes the uploaded transactions and returns results
-func (s *Server) processUploadedTransactions(accountID int, records [][]string, colIdx map[string]int) (int, int, error) {
-	var newCount, duplicateCount int
+func (s *Server) processUploadedTransactions(accountID int, records [][]string, colIdx map[string]int) (newCount, duplicateCount int, err error) {
 	var txs []data.Transaction
 
 	// Parse all transactions first
@@ -1451,19 +1455,21 @@ func (s *Server) processUploadedTransactions(accountID int, records [][]string, 
 
 	// Create a map of existing transactions for quick lookup
 	existing := make(map[string]struct{})
-	for _, t := range existingTxs {
+	for i := range existingTxs {
+		t := &existingTxs[i]
 		key := fmt.Sprintf("%s|%s|%d", t.Date.Format("2006-01-02"), strings.ToLower(strings.TrimSpace(t.OriginalPayee)), t.Amount)
 		existing[key] = struct{}{}
 	}
 
 	// Filter out duplicates and prepare for bulk insert
 	var deduped []data.Transaction
-	for _, tx := range txs {
+	for i := range txs {
+		tx := &txs[i]
 		key := fmt.Sprintf("%s|%s|%d", tx.Date.Format("2006-01-02"), strings.ToLower(strings.TrimSpace(tx.OriginalPayee)), tx.Amount)
 		if _, found := existing[key]; found {
 			duplicateCount++
 		} else {
-			deduped = append(deduped, tx)
+			deduped = append(deduped, *tx)
 			existing[key] = struct{}{} // Prevent duplicates within the same upload
 		}
 	}
@@ -1646,9 +1652,10 @@ func (s *Server) toggleRuleHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Find the specific rule that was toggled
 		var updatedRule *data.Rule
-		for _, rule := range rules {
+		for i := range rules {
+			rule := &rules[i]
 			if rule.ID == ruleID {
-				updatedRule = &rule
+				updatedRule = rule
 				break
 			}
 		}
@@ -1691,9 +1698,10 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rule *data.Rule
-	for _, r := range rules {
+	for i := range rules {
+		r := &rules[i]
 		if r.ID == ruleID {
-			rule = &r
+			rule = r
 			break
 		}
 	}

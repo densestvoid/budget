@@ -228,19 +228,21 @@ func (h *AuthHandler) OptionalAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Get session token from cookie
 		cookie, err := r.Cookie("session_token")
-		if err != nil {
+		switch {
+		case err != nil:
 			log.Printf("No session cookie found: %v", err)
-		} else if cookie.Value == "" {
+		case cookie.Value == "":
 			log.Printf("Session cookie is empty")
-		} else {
+		default:
 			log.Printf("Found session token: %s", cookie.Value[:10]+"...")
 			// Get account from session
 			account, err := h.store.GetAccountBySession(cookie.Value)
-			if err != nil {
+			switch {
+			case err != nil:
 				log.Printf("Error getting account from session: %v", err)
-			} else if account == nil {
+			case account == nil:
 				log.Printf("No account found for session token")
-			} else {
+			default:
 				log.Printf("Found authenticated account: %s (%s)", account.Name, account.Email)
 				// Add account to request context
 				ctx := r.Context()
