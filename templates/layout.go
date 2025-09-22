@@ -5,6 +5,98 @@ import (
 	"github.com/maragudk/gomponents/html"
 )
 
+// navigationSection creates the navigation menu items
+func navigationSection(isAuthenticated bool) g.Node {
+	return html.Ul(
+		html.Class("nav flex-column"),
+		html.Li(
+			html.Class("nav-item"),
+			html.A(
+				html.Class("nav-link"),
+				html.Href("/"),
+				g.Text("🏠 Home"),
+			),
+		),
+		html.Li(
+			html.Class("nav-item"),
+			html.A(
+				html.Class("nav-link"),
+				html.Href("/about"),
+				g.Text("ℹ️ About"),
+			),
+		),
+		g.Group(func() []g.Node {
+			if isAuthenticated {
+				return []g.Node{
+					html.Li(
+						html.Class("nav-item"),
+						html.A(
+							html.Class("nav-link"),
+							html.Href("/categories/"),
+							g.Text("📂 Categories"),
+						),
+					),
+					html.Li(
+						html.Class("nav-item"),
+						html.A(
+							html.Class("nav-link"),
+							html.Href("/transactions/"),
+							g.Text("💸 Transactions"),
+						),
+					),
+					html.Li(
+						html.Class("nav-item"),
+						html.A(
+							html.Class("nav-link"),
+							html.Href("/rules/"),
+							g.Text("🧩 Rules"),
+						),
+					),
+				}
+			}
+			return nil
+		}()),
+	)
+}
+
+// authenticationSection creates the authentication section
+func authenticationSection(isAuthenticated bool, formID string) g.Node {
+	return html.Div(
+		html.Class("border-top pt-3"),
+		html.H6(
+			html.Class("text-muted mb-3"),
+			g.Text("Account"),
+		),
+		g.Group(func() []g.Node {
+			if isAuthenticated {
+				return []g.Node{
+					g.El("form",
+						html.Action("/auth/logout"),
+						html.Method("POST"),
+						html.Class(""),
+						html.ID(formID),
+						html.Button(
+							html.Class("btn btn-outline-danger btn-sm w-100"),
+							html.Type("submit"),
+							g.Text("Logout"),
+						),
+					),
+				}
+			} else {
+				return []g.Node{
+					html.Button(
+						html.Class("btn btn-primary btn-sm w-100 mb-2"),
+						html.Type("button"),
+						html.DataAttr("bs-toggle", "modal"),
+						html.DataAttr("bs-target", "#authModal"),
+						g.Text("Login / Register"),
+					),
+				}
+			}
+		}()),
+	)
+}
+
 // BaseLayoutWithAuth creates the base layout with authentication-aware content
 func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g.Node {
 	return html.Doctype(
@@ -82,95 +174,11 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 											html.Class("text-muted mb-3"),
 											g.Text("Navigation"),
 										),
-										html.Ul(
-											html.Class("nav flex-column"),
-											html.Li(
-												html.Class("nav-item"),
-												html.A(
-													html.Class("nav-link"),
-													html.Href("/"),
-													g.Text("🏠 Home"),
-												),
-											),
-											html.Li(
-												html.Class("nav-item"),
-												html.A(
-													html.Class("nav-link"),
-													html.Href("/about"),
-													g.Text("ℹ️ About"),
-												),
-											),
-											g.Group(func() []g.Node {
-												if isAuthenticated {
-													return []g.Node{
-														html.Li(
-															html.Class("nav-item"),
-															html.A(
-																html.Class("nav-link"),
-																html.Href("/categories/"),
-																g.Text("📂 Categories"),
-															),
-														),
-														html.Li(
-															html.Class("nav-item"),
-															html.A(
-																html.Class("nav-link"),
-																html.Href("/transactions/"),
-																g.Text("💸 Transactions"),
-															),
-														),
-														html.Li(
-															html.Class("nav-item"),
-															html.A(
-																html.Class("nav-link"),
-																html.Href("/rules/"),
-																g.Text("🧩 Rules"),
-															),
-														),
-													}
-												}
-												return nil
-											}()),
-										),
+										navigationSection(isAuthenticated),
 									),
 
 									// Authentication section
-									html.Div(
-										html.Class("border-top pt-3"),
-										html.H6(
-											html.Class("text-muted mb-3"),
-											g.Text("Account"),
-										),
-
-										// Conditional rendering for sidebar
-										g.Group(func() []g.Node {
-											if isAuthenticated {
-												return []g.Node{
-													g.El("form",
-														html.Action("/auth/logout"),
-														html.Method("POST"),
-														html.Class(""),
-														html.ID("logout-form"),
-														html.Button(
-															html.Class("btn btn-outline-danger btn-sm w-100"),
-															html.Type("submit"),
-															g.Text("Logout"),
-														),
-													),
-												}
-											} else {
-												return []g.Node{
-													html.Button(
-														html.Class("btn btn-primary btn-sm w-100 mb-2"),
-														html.Type("button"),
-														html.DataAttr("bs-toggle", "modal"),
-														html.DataAttr("bs-target", "#authModal"),
-														g.Text("Login / Register"),
-													),
-												}
-											}
-										}()),
-									),
+									authenticationSection(isAuthenticated, "logout-form"),
 								),
 							),
 						),
@@ -222,95 +230,11 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 								html.Class("text-muted mb-3"),
 								g.Text("Navigation"),
 							),
-							html.Ul(
-								html.Class("nav flex-column"),
-								html.Li(
-									html.Class("nav-item"),
-									html.A(
-										html.Class("nav-link"),
-										html.Href("/"),
-										g.Text("🏠 Home"),
-									),
-								),
-								html.Li(
-									html.Class("nav-item"),
-									html.A(
-										html.Class("nav-link"),
-										html.Href("/about"),
-										g.Text("ℹ️ About"),
-									),
-								),
-								g.Group(func() []g.Node {
-									if isAuthenticated {
-										return []g.Node{
-											html.Li(
-												html.Class("nav-item"),
-												html.A(
-													html.Class("nav-link"),
-													html.Href("/categories/"),
-													g.Text("📂 Categories"),
-												),
-											),
-											html.Li(
-												html.Class("nav-item"),
-												html.A(
-													html.Class("nav-link"),
-													html.Href("/transactions/"),
-													g.Text("💸 Transactions"),
-												),
-											),
-											html.Li(
-												html.Class("nav-item"),
-												html.A(
-													html.Class("nav-link"),
-													html.Href("/rules/"),
-													g.Text("🧩 Rules"),
-												),
-											),
-										}
-									}
-									return nil
-								}()),
-							),
+							navigationSection(isAuthenticated),
 						),
 
 						// Authentication section
-						html.Div(
-							html.Class("border-top pt-3"),
-							html.H6(
-								html.Class("text-muted mb-3"),
-								g.Text("Account"),
-							),
-
-							// Conditional rendering for offcanvas
-							g.Group(func() []g.Node {
-								if isAuthenticated {
-									return []g.Node{
-										g.El("form",
-											html.Action("/auth/logout"),
-											html.Method("POST"),
-											html.Class(""),
-											html.ID("logout-form-mobile"),
-											html.Button(
-												html.Class("btn btn-outline-danger btn-sm w-100"),
-												html.Type("submit"),
-												g.Text("Logout"),
-											),
-										),
-									}
-								} else {
-									return []g.Node{
-										html.Button(
-											html.Class("btn btn-primary btn-sm w-100 mb-2"),
-											html.Type("button"),
-											html.DataAttr("bs-toggle", "modal"),
-											html.DataAttr("bs-target", "#authModal"),
-											g.Text("Login / Register"),
-										),
-									}
-								}
-							}()),
-						),
+						authenticationSection(isAuthenticated, "logout-form-mobile"),
 					),
 				),
 

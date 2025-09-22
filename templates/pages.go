@@ -16,6 +16,59 @@ const (
 	uncategorizedCategory = "Uncategorized"
 )
 
+// addCategoryModal creates the add category modal
+func addCategoryModal(categories []data.Category, currentParentID *int) g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("addCategoryModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("addCategoryModalLabel"), g.Text("Add Category")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					g.El("form",
+						html.Action("/categories/"),
+						html.Method("POST"),
+						g.Attr("hx-post", "/categories/"),
+						g.Attr("hx-target", "#categories-directory"),
+						g.Attr("hx-swap", "outerHTML"),
+						g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide(); }"),
+						html.Div(
+							html.Class("mb-3"),
+							html.Label(html.Class("form-label"), html.For("add-name"), g.Text("Name")),
+							html.Input(html.Type("text"), html.Name("name"), html.ID("add-name"), html.Class("form-control"), html.Required()),
+						),
+						html.Div(
+							html.Class("mb-3"),
+							html.Label(html.Class("form-label"), html.For("add-parent"), g.Text("Parent Category")),
+							CategoryBootstrapDropdown(categories, "parent_id", "add-parent", currentParentID, nil, false, nil),
+						),
+						html.Div(
+							html.Class("d-flex justify-content-end gap-2"),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
+						),
+					),
+				),
+			),
+		),
+	)
+}
+
 func HomePage() g.Node {
 	return g.Group([]g.Node{
 		html.Div(
@@ -412,55 +465,7 @@ func CategoriesPage(categories []data.Category) g.Node {
 					}()),
 				),
 				// Add Category Modal
-				html.Div(
-					html.Class("modal fade"),
-					html.ID("addCategoryModal"),
-					html.DataAttr("tabindex", "-1"),
-					html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
-					html.DataAttr("aria-hidden", "true"),
-					html.Div(
-						html.Class("modal-dialog"),
-						html.Div(
-							html.Class("modal-content"),
-							html.Div(
-								html.Class("modal-header"),
-								html.H5(html.Class("modal-title"), html.ID("addCategoryModalLabel"), g.Text("Add Category")),
-								html.Button(
-									html.Class("btn-close"),
-									html.Type("button"),
-									html.DataAttr("bs-dismiss", "modal"),
-									html.DataAttr("aria-label", "Close"),
-								),
-							),
-							html.Div(
-								html.Class("modal-body"),
-								g.El("form",
-									html.Action("/categories/"),
-									html.Method("POST"),
-									g.Attr("hx-post", "/categories/"),
-									g.Attr("hx-target", "#categories-directory"),
-									g.Attr("hx-swap", "outerHTML"),
-									g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide(); }"),
-									html.Div(
-										html.Class("mb-3"),
-										html.Label(html.Class("form-label"), html.For("add-name"), g.Text("Name")),
-										html.Input(html.Type("text"), html.Name("name"), html.ID("add-name"), html.Class("form-control"), html.Required()),
-									),
-									html.Div(
-										html.Class("mb-3"),
-										html.Label(html.Class("form-label"), html.For("add-parent"), g.Text("Parent Category")),
-										CategoryBootstrapDropdown(categories, "parent_id", "add-parent", nil, nil, false, nil),
-									),
-									html.Div(
-										html.Class("d-flex justify-content-end gap-2"),
-										html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
-										html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
-									),
-								),
-							),
-						),
-					),
-				),
+				addCategoryModal(categories, nil),
 			),
 		),
 	})
@@ -1073,55 +1078,7 @@ func CategoryCard(c data.Category, allCategories []data.Category) g.Node {
 
 // AddCategoryModal renders the modal for adding a new category
 func AddCategoryModal(allCategories []data.Category, currentParentID *int) g.Node {
-	return html.Div(
-		html.Class("modal fade"),
-		html.ID("addCategoryModal"),
-		html.DataAttr("tabindex", "-1"),
-		html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
-		html.DataAttr("aria-hidden", "true"),
-		html.Div(
-			html.Class("modal-dialog"),
-			html.Div(
-				html.Class("modal-content"),
-				html.Div(
-					html.Class("modal-header"),
-					html.H5(html.Class("modal-title"), html.ID("addCategoryModalLabel"), g.Text("Add Category")),
-					html.Button(
-						html.Class("btn-close"),
-						html.Type("button"),
-						html.DataAttr("bs-dismiss", "modal"),
-						html.DataAttr("aria-label", "Close"),
-					),
-				),
-				html.Div(
-					html.Class("modal-body"),
-					g.El("form",
-						html.Action("/categories/"),
-						html.Method("POST"),
-						g.Attr("hx-post", "/categories/"),
-						g.Attr("hx-target", "#categories-directory"),
-						g.Attr("hx-swap", "outerHTML"),
-						g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide(); }"),
-						html.Div(
-							html.Class("mb-3"),
-							html.Label(html.Class("form-label"), html.For("add-name"), g.Text("Name")),
-							html.Input(html.Type("text"), html.Name("name"), html.ID("add-name"), html.Class("form-control"), html.Required()),
-						),
-						html.Div(
-							html.Class("mb-3"),
-							html.Label(html.Class("form-label"), html.For("add-parent"), g.Text("Parent Category")),
-							CategoryBootstrapDropdown(allCategories, "parent_id", "add-parent", currentParentID, nil, false, nil),
-						),
-						html.Div(
-							html.Class("d-flex justify-content-end gap-2"),
-							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
-							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
-						),
-					),
-				),
-			),
-		),
-	)
+	return addCategoryModal(allCategories, currentParentID)
 }
 
 func CategoriesDirectoryContent(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
