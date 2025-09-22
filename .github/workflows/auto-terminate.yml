@@ -256,9 +256,6 @@ jobs:
             } else if (initSuccess !== 'true') {
               failedStep = 'Initialize Terraform';
               errorMsg = 'terraform init failed';
-            } else if (importSuccess !== 'true') {
-              failedStep = 'Import deployment resources';
-              errorMsg = 'Failed to import app or database into Terraform state';
             } else {
               failedStep = 'Destroy deployment';
               errorMsg = 'terraform destroy failed - some resources may still exist';
@@ -281,7 +278,7 @@ jobs:
         echo "**App ID:** ${{ steps.validate.outputs.app_id }}" >> $GITHUB_STEP_SUMMARY
         echo "**Health Status:** ${{ steps.health_check.outputs.health_status }}" >> $GITHUB_STEP_SUMMARY
         echo "**Should Terminate:** ${{ steps.health_check.outputs.should_terminate }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Termination Result:** ${{ steps.terminate.outputs.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Termination Result:** ${{ steps.destroy.outputs.destroy_success }}" >> $GITHUB_STEP_SUMMARY
         echo "**Completed At:** $(date -u)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "*Environment wait timer prevented runner time waste during 30-minute delay*" >> $GITHUB_STEP_SUMMARY

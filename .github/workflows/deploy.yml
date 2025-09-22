@@ -1,6 +1,6 @@
 name: Deploy Budget App to DigitalOcean
 
-"on":
+on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: ['**']
@@ -26,15 +26,7 @@ env:
 
 jobs:
   go-checks:
-    name: Go Checks
-    uses: densestvoid/workflows/.github/workflows/go-checks@main
-    with:
-      go-version: '1.24'
-      working-directory: '.'
-    secrets: inherit
-    permissions:
-      contents: read
-      actions: read
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 
   deploy:
     name: Deploy to DigitalOcean
