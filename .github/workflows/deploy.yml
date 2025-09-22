@@ -25,9 +25,15 @@ env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
 jobs:
+  go-checks:
+    name: Go Checks
+    uses: densestvoid/workflows/.github/workflows/go-checks@main
+    secrets: inherit
+
   deploy:
     name: Deploy to DigitalOcean
     runs-on: ubuntu-latest
+    needs: go-checks
     
     permissions:
       contents: read
