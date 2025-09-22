@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+// Context key types to avoid collisions
+type contextKey string
+
+const (
+	accountKey contextKey = "account"
+)
+
 // AuthHandler handles authentication-related requests
 type AuthHandler struct {
 	store *data.Storage
@@ -41,7 +48,11 @@ type AuthResponse struct {
 
 // RegisterPage handles the registration page display
 func (h *AuthHandler) RegisterPage(w http.ResponseWriter, r *http.Request) {
-	templates.BaseLayoutWithAuth("Register - Budget App", false, templates.RegisterPage()).Render(w)
+	if err := templates.BaseLayoutWithAuth("Register - Budget App", false, templates.RegisterPage()).Render(w); err != nil {
+		log.Printf("Error rendering register page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // Register handles user registration from form submission
@@ -152,7 +163,9 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session_token")
 	if err == nil && cookie.Value != "" {
 		// Delete session from database
-		h.store.DeleteSession(cookie.Value)
+		if err := h.store.DeleteSession(cookie.Value); err != nil {
+			log.Printf("Error deleting session: %v", err)
+		}
 	}
 
 	// Clear cookie
@@ -175,7 +188,11 @@ func (h *AuthHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value("account").(*data.Account)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(account)
+	if err := json.NewEncoder(w).Encode(account); err != nil {
+		log.Printf("Error encoding account to JSON: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // AuthMiddleware authenticates requests using session tokens
@@ -201,7 +218,7 @@ func (h *AuthHandler) AuthMiddleware(next http.Handler) http.Handler {
 
 		// Add account to request context
 		ctx := r.Context()
-		ctx = context.WithValue(ctx, "account", account)
+		ctx = context.WithValue(ctx, accountKey, account)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -227,7 +244,7 @@ func (h *AuthHandler) OptionalAuthMiddleware(next http.Handler) http.Handler {
 				log.Printf("Found authenticated account: %s (%s)", account.Name, account.Email)
 				// Add account to request context
 				ctx := r.Context()
-				ctx = context.WithValue(ctx, "account", account)
+				ctx = context.WithValue(ctx, accountKey, account)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -258,7 +275,7 @@ func (h *AuthHandler) AuthRequiredMiddleware(next http.Handler) http.Handler {
 
 		// Add account to request context
 		ctx := r.Context()
-		ctx = context.WithValue(ctx, "account", account)
+		ctx = context.WithValue(ctx, accountKey, account)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

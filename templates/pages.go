@@ -12,6 +12,10 @@ import (
 	"github.com/maragudk/gomponents/html"
 )
 
+const (
+	uncategorizedCategory = "Uncategorized"
+)
+
 func HomePage() g.Node {
 	return g.Group([]g.Node{
 		html.Div(
@@ -235,25 +239,6 @@ func RegisterPage() g.Node {
 			),
 		),
 	)
-}
-
-// Helper to build the breadcrumb path for a category
-func buildCategoryBreadcrumb(c data.Category, categories []data.Category) []string {
-	var path []string
-	current := &c
-	catMap := map[int]*data.Category{}
-	for i := range categories {
-		catMap[categories[i].ID] = &categories[i]
-	}
-	for current != nil {
-		path = append([]string{current.Name}, path...)
-		if current.ParentID != nil {
-			current = catMap[*current.ParentID]
-		} else {
-			current = nil
-		}
-	}
-	return path
 }
 
 // Update CSS for a vertical tree with minimal indentation
@@ -651,7 +636,7 @@ func TransactionCardWithModal(t data.Transaction, categories []data.Category, mo
 	// Find category name
 	var categoryName string
 	if t.CategoryID == nil {
-		categoryName = "Uncategorized"
+		categoryName = uncategorizedCategory
 	} else {
 		for _, c := range categories {
 			if c.ID == *t.CategoryID {
@@ -660,7 +645,7 @@ func TransactionCardWithModal(t data.Transaction, categories []data.Category, mo
 			}
 		}
 		if categoryName == "" {
-			categoryName = "Uncategorized"
+			categoryName = uncategorizedCategory
 		}
 	}
 	return html.Div(
@@ -803,7 +788,7 @@ func TransactionCardWithModalSelectable(t data.Transaction, categories []data.Ca
 	// Find category name
 	var categoryName string
 	if t.CategoryID == nil {
-		categoryName = "Uncategorized"
+		categoryName = uncategorizedCategory
 	} else {
 		for _, c := range categories {
 			if c.ID == *t.CategoryID {
@@ -812,7 +797,7 @@ func TransactionCardWithModalSelectable(t data.Transaction, categories []data.Ca
 			}
 		}
 		if categoryName == "" {
-			categoryName = "Uncategorized"
+			categoryName = uncategorizedCategory
 		}
 	}
 	return html.Div(
@@ -873,12 +858,6 @@ func TransactionCardWithModalSelectable(t data.Transaction, categories []data.Ca
 }
 
 // Helper function for max
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 // Add after TransactionCardWithModalSelectable
 func RenderTransactionListWithSelectableCards(w io.Writer, txs []data.Transaction, cats []data.Category) error {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -357,14 +358,25 @@ func (s *Storage) CreateTransaction(accountID int, date time.Time, originalPayee
 	return &t, nil
 }
 
-// GetTransactionsByAccount retrieves all unreviewed transactions for an account
-func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error) {
-	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
-		FROM transactions
-		WHERE account_id = $1 AND reviewed = FALSE
-		ORDER BY date DESC, id DESC
-	`
+// getTransactionsByAccountWithFilter retrieves transactions for an account with optional reviewed filter
+func (s *Storage) getTransactionsByAccountWithFilter(accountID int, reviewedOnly bool) ([]Transaction, error) {
+	var query string
+	if reviewedOnly {
+		query = `
+			SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+			FROM transactions
+			WHERE account_id = $1 AND reviewed = FALSE
+			ORDER BY date DESC, id DESC
+		`
+	} else {
+		query = `
+			SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+			FROM transactions
+			WHERE account_id = $1
+			ORDER BY date DESC, id DESC
+		`
+	}
+
 	rows, err := s.db.Query(query, accountID)
 	if err != nil {
 		return nil, err
@@ -382,29 +394,14 @@ func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error)
 	return txs, nil
 }
 
+// GetTransactionsByAccount retrieves all unreviewed transactions for an account
+func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error) {
+	return s.getTransactionsByAccountWithFilter(accountID, true)
+}
+
 // GetAllTransactionsByAccount retrieves all transactions (both reviewed and unreviewed) for an account
 func (s *Storage) GetAllTransactionsByAccount(accountID int) ([]Transaction, error) {
-	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
-		FROM transactions
-		WHERE account_id = $1
-		ORDER BY date DESC, id DESC
-	`
-	rows, err := s.db.Query(query, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var txs []Transaction
-	for rows.Next() {
-		var t Transaction
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			return nil, err
-		}
-		txs = append(txs, t)
-	}
-	return txs, nil
+	return s.getTransactionsByAccountWithFilter(accountID, false)
 }
 
 // UpdateTransactionPayeeCategory updates a transaction's payee and category
@@ -560,7 +557,11 @@ func (s *Storage) CreateRule(accountID int, name string, newPayee *string, categ
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
 
 	// Insert the rule
 	var rule Rule
@@ -670,7 +671,11 @@ func (s *Storage) UpdateRule(accountID, ruleID int, name string, newPayee *strin
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
 
 	// Update the rule
 	query := `
@@ -722,7 +727,11 @@ func (s *Storage) DeleteRule(accountID, ruleID int) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
 
 	// Delete conditions first (due to foreign key constraint)
 	_, err = tx.Exec("DELETE FROM rule_conditions WHERE rule_id = $1", ruleID)

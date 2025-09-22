@@ -123,34 +123,53 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
+// renderPageWithAuth is a helper function to render pages with authentication check
+func (s *Server) renderPageWithAuth(w http.ResponseWriter, r *http.Request, title string, pageFunc func() g.Node, handlerName string) {
 	var isAuthenticated bool
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
-		log.Printf("Home handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+		log.Printf("%s handler: User is authenticated - isAuthenticated=%t", handlerName, isAuthenticated)
 	} else {
-		log.Printf("Home handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
+		log.Printf("%s handler: User is not authenticated - isAuthenticated=%t", handlerName, isAuthenticated)
 	}
-	page := templates.HomePage()
-	if err := templates.BaseLayoutWithAuth("Home - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering home page: %v", err)
+	page := pageFunc()
+	if err := templates.BaseLayoutWithAuth(title, isAuthenticated, page).Render(w); err != nil {
+		log.Printf("Error rendering %s page: %v", handlerName, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 }
 
-func (s *Server) aboutHandler(w http.ResponseWriter, r *http.Request) {
-	var isAuthenticated bool
-	if account := r.Context().Value("account"); account != nil {
-		isAuthenticated = true
-		log.Printf("About handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+// renderRulesListResponse is a helper function to render rules list for HTMX responses
+func (s *Server) renderRulesListResponse(w http.ResponseWriter, r *http.Request, account *data.Account) {
+	if isHTMX(r) {
+		// Return updated rules list
+		rules, err := s.store.GetRulesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
+			return
+		}
+		categories, err := s.store.GetCategoriesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		if err := templates.RenderRulesList(w, rules, categories); err != nil {
+			log.Printf("Error rendering rules list: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
-		log.Printf("About handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
+		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
 	}
-	page := templates.AboutPage()
-	if err := templates.BaseLayoutWithAuth("About - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering about page: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}
+}
+
+func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
+	s.renderPageWithAuth(w, r, "Home - Budget App", templates.HomePage, "Home")
+}
+
+func (s *Server) aboutHandler(w http.ResponseWriter, r *http.Request) {
+	s.renderPageWithAuth(w, r, "About - Budget App", templates.AboutPage, "About")
 }
 
 // Helper to build the breadcrumb path for a category by ID
@@ -213,11 +232,19 @@ func (s *Server) categoriesPageHandler(w http.ResponseWriter, r *http.Request) {
 		// Return only the directory navigation content for HTMX requests
 		w.Header().Set("Content-Type", "text/html")
 		content := templates.CategoriesDirectoryNavigation(visibleCategories, categories, currentParent, breadcrumb)
-		_ = content.Render(w)
+		if err := content.Render(w); err != nil {
+			log.Printf("Error rendering categories navigation: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		// Return full page for regular requests
 		page := templates.CategoriesDirectoryPage(visibleCategories, categories, currentParent, breadcrumb)
-		_ = templates.BaseLayoutWithAuth("Categories - Budget App", true, page).Render(w)
+		if err := templates.BaseLayoutWithAuth("Categories - Budget App", true, page).Render(w); err != nil {
+			log.Printf("Error rendering categories page: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
@@ -299,43 +326,14 @@ func (s *Server) createCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		// Return the updated directory navigation content
 		w.Header().Set("Content-Type", "text/html")
 		content := templates.CategoriesDirectoryNavigation(visibleCategories, categories, currentParent, breadcrumb)
-		_ = content.Render(w)
+		if err := content.Render(w); err != nil {
+			log.Printf("Error rendering categories navigation: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
 	}
-}
-
-func (s *Server) updateCategoryHandler(w http.ResponseWriter, r *http.Request) {
-	account, ok := r.Context().Value("account").(*data.Account)
-	if !ok || account == nil {
-		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
-		return
-	}
-	idStr := chi.URLParam(r, "id")
-	categoryID, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid category ID", http.StatusBadRequest)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
-		return
-	}
-	name := r.FormValue("name")
-	parentIDStr := r.FormValue("parent_id")
-	var parentID *int
-	if parentIDStr != "" {
-		pid, err := strconv.Atoi(parentIDStr)
-		if err == nil {
-			parentID = &pid
-		}
-	}
-	err = s.store.UpdateCategory(account.ID, categoryID, name, parentID)
-	if err != nil {
-		http.Error(w, "Failed to update category", http.StatusInternalServerError)
-		return
-	}
-	http.Redirect(w, r, "/categories/", http.StatusSeeOther)
 }
 
 func (s *Server) deleteCategoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +358,9 @@ func (s *Server) deleteCategoryHandler(w http.ResponseWriter, r *http.Request) {
 	if isHTMX(r) {
 		// For delete, just return empty content to remove the card
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(""))
+		if _, err := w.Write([]byte("")); err != nil {
+			log.Printf("Error writing response: %v", err)
+		}
 	} else {
 		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
 	}
@@ -385,7 +385,11 @@ func (s *Server) transactionsPageHandler(w http.ResponseWriter, r *http.Request)
 	}
 	errMsg := r.URL.Query().Get("error")
 	page := templates.TransactionsPage(txs, cats, errMsg)
-	_ = templates.BaseLayoutWithAuth("Transactions - Budget App", true, page).Render(w)
+	if err := templates.BaseLayoutWithAuth("Transactions - Budget App", true, page).Render(w); err != nil {
+		log.Printf("Error rendering transactions page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) updateTransactionHandler(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +489,9 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 		if isHTMX(r) {
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`<div class="alert alert-danger" role="alert">` + errMsg + `</div>`))
+			if _, err := w.Write([]byte(`<div class="alert alert-danger" role="alert">` + errMsg + `</div>`)); err != nil {
+				log.Printf("Error writing error message: %v", err)
+			}
 			return
 		} else {
 			http.Error(w, errMsg, http.StatusBadRequest)
@@ -558,14 +564,11 @@ func parseAmountToCents(s string) (int, error) {
 	neg := false
 	if strings.HasPrefix(s, "-") {
 		neg = true
-		s = s[1:]
-	} else if strings.HasPrefix(s, "+") {
-		s = s[1:]
 	}
+	s = strings.TrimPrefix(s, "-")
+	s = strings.TrimPrefix(s, "+")
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "$") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "$")
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0, err
@@ -666,12 +669,20 @@ func (s *Server) patchTransactionHandler(w http.ResponseWriter, r *http.Request)
 		if updatedTx == nil {
 			// If transaction not found in list, it might have been reviewed and hidden
 			// In this case, just return the updated list
-			templates.RenderTransactionListWithSelectableCards(w, txs, cats)
+			if err := templates.RenderTransactionListWithSelectableCards(w, txs, cats); err != nil {
+				log.Printf("Error rendering transaction list: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
 			return
 		}
 		// Render the modal with the error message
 		w.WriteHeader(http.StatusBadRequest)
-		templates.TransactionCardWithModalSelectable(*updatedTx, cats, "Failed to update transaction: "+updateErr.Error()).Render(w)
+		if err := templates.TransactionCardWithModalSelectable(*updatedTx, cats, "Failed to update transaction: "+updateErr.Error()).Render(w); err != nil {
+			log.Printf("Error rendering transaction card: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 		return
 	}
 
@@ -693,10 +704,16 @@ func (s *Server) patchTransactionHandler(w http.ResponseWriter, r *http.Request)
 				break
 			}
 		}
-		templates.TransactionCardWithModalSelectable(*updatedTx, cats, "").Render(w)
+		if err := templates.TransactionCardWithModalSelectable(*updatedTx, cats, "").Render(w); err != nil {
+			log.Printf("Error rendering transaction card: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		// Transaction was marked as reviewed and is now hidden, return empty content to remove the card
-		w.Write([]byte(""))
+		if _, err := w.Write([]byte("")); err != nil {
+			log.Printf("Error writing response: %v", err)
+		}
 	}
 }
 
@@ -726,9 +743,11 @@ func (s *Server) editPayeeInlineHandler(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(`<form hx-patch="/transactions/` + idStr + `" hx-trigger="blur from:input, submit" hx-target="this" hx-swap="outerHTML" style="display:inline;">
+	if _, err := w.Write([]byte(`<form hx-patch="/transactions/` + idStr + `" hx-trigger="blur from:input, submit" hx-target="this" hx-swap="outerHTML" style="display:inline;">
 		<input type="text" name="payee" value="` + htmlEscape(payee) + `" class="form-control form-control-sm w-auto d-inline" autofocus onblur="this.form.requestSubmit()">
-	</form>`))
+</form>`)); err != nil {
+		log.Printf("Error writing form response: %v", err)
+	}
 }
 
 // GET /transactions/{id}/category/edit returns an inline select for category
@@ -777,7 +796,9 @@ func (s *Server) editCategoryInlineHandler(w http.ResponseWriter, r *http.Reques
 	}
 	sb.WriteString(`</select>`)
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(sb.String()))
+	if _, err := w.Write([]byte(sb.String())); err != nil {
+		log.Printf("Error writing response: %v", err)
+	}
 }
 
 // Helper to escape HTML
@@ -832,7 +853,7 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "text/html")
 
 	// Render the edit form
-	g.El("form",
+	form := g.El("form",
 		g.Attr("hx-patch", "/transactions/"+strconv.Itoa(transaction.ID)),
 		g.Attr("hx-target", "closest .mb-2"),
 		g.Attr("hx-swap", "outerHTML"),
@@ -879,7 +900,12 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
 			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 		),
-	).Render(w)
+	)
+	if err := form.Render(w); err != nil {
+		log.Printf("Error rendering transaction edit form: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // Handler to mark a transaction as reviewed
@@ -933,7 +959,11 @@ func (s *Server) markTransactionsReviewedHandler(w http.ResponseWriter, r *http.
 	}
 	w.Header().Set("Content-Type", "text/html")
 	// Render the transaction list with selectable cards
-	templates.RenderTransactionListWithSelectableCards(w, txs, cats)
+	if err := templates.RenderTransactionListWithSelectableCards(w, txs, cats); err != nil {
+		log.Printf("Error rendering transaction list: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -1009,7 +1039,9 @@ func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		if parentChanged {
 			// Parent changed, remove the card
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(""))
+			if _, err := w.Write([]byte("")); err != nil {
+				log.Printf("Error writing response: %v", err)
+			}
 		} else {
 			// Parent didn't change, update the card
 			// Get updated categories
@@ -1031,7 +1063,11 @@ func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
 			if updatedCategory != nil {
 				w.Header().Set("Content-Type", "text/html")
 				card := templates.CategoryCardOnly(*updatedCategory, categories)
-				_ = card.Render(w)
+				if err := card.Render(w); err != nil {
+					log.Printf("Error rendering category card: %v", err)
+					http.Error(w, "Internal server error", http.StatusInternalServerError)
+					return
+				}
 			} else {
 				http.Error(w, "Category not found", http.StatusNotFound)
 			}
@@ -1060,7 +1096,11 @@ func (s *Server) rulesPageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := templates.RulesPage(rules, categories)
-	_ = templates.BaseLayoutWithAuth("Rules - Budget App", true, page).Render(w)
+	if err := templates.BaseLayoutWithAuth("Rules - Budget App", true, page).Render(w); err != nil {
+		log.Printf("Error rendering rules page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) createRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1168,9 +1208,15 @@ func (s *Server) createRuleHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html")
 		if updatedCount > 0 {
-			w.Write([]byte(`<div id="rule-banner" class="alert alert-success position-fixed top-0 start-50 translate-middle-x mt-3" style="z-index:2000; min-width:300px; text-align:center;">Updated ` + strconv.Itoa(updatedCount) + ` transactions</div><script>setTimeout(function(){ var b=document.getElementById('rule-banner'); if(b){b.remove();}}, 3500);</script>`))
+			if _, err := w.Write([]byte(`<div id="rule-banner" class="alert alert-success position-fixed top-0 start-50 translate-middle-x mt-3" style="z-index:2000; min-width:300px; text-align:center;">Updated ` + strconv.Itoa(updatedCount) + ` transactions</div><script>setTimeout(function(){ var b=document.getElementById('rule-banner'); if(b){b.remove();}}, 3500);</script>`)); err != nil {
+				log.Printf("Error writing rule banner: %v", err)
+			}
 		}
-		templates.RenderRulesList(w, rules, categories)
+		if err := templates.RenderRulesList(w, rules, categories); err != nil {
+			log.Printf("Error rendering rules list: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
 	}
@@ -1262,23 +1308,7 @@ func (s *Server) updateRuleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isHTMX(r) {
-		// Return updated rules list
-		rules, err := s.store.GetRulesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
-			return
-		}
-		categories, err := s.store.GetCategoriesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		templates.RenderRulesList(w, rules, categories)
-	} else {
-		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
-	}
+	s.renderRulesListResponse(w, r, account)
 }
 
 func (s *Server) deleteRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1300,23 +1330,7 @@ func (s *Server) deleteRuleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isHTMX(r) {
-		// Return updated rules list
-		rules, err := s.store.GetRulesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
-			return
-		}
-		categories, err := s.store.GetCategoriesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		templates.RenderRulesList(w, rules, categories)
-	} else {
-		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
-	}
+	s.renderRulesListResponse(w, r, account)
 }
 
 func (s *Server) toggleRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1367,7 +1381,11 @@ func (s *Server) toggleRuleHandler(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html")
 		// Return only the updated rule card
-		templates.RuleCard(*updatedRule, categories).Render(w)
+		if err := templates.RuleCard(*updatedRule, categories).Render(w); err != nil {
+			log.Printf("Error rendering rule card: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
 	}
@@ -1416,7 +1434,7 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	// Render the edit form
-	g.El("form",
+	form := g.El("form",
 		g.Attr("hx-put", "/rules/"+strconv.Itoa(rule.ID)),
 		g.Attr("hx-target", "#rules-list"),
 		g.Attr("hx-swap", "outerHTML"),
@@ -1451,5 +1469,10 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 				container.insertBefore(clone, container.lastElementChild);
 			};
 		`)),
-	).Render(w)
+	)
+	if err := form.Render(w); err != nil {
+		log.Printf("Error rendering rule edit form: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
