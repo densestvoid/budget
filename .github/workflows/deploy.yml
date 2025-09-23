@@ -390,8 +390,19 @@ jobs:
             '_Architecture: Database → Migration Container → Application Container_'
           ].join('\n');
 
+          // Handle both PR events and manual dispatch
+          let issueNumber;
+          if (context.issue && context.issue.number) {
+            issueNumber = context.issue.number;
+          } else if (context.event.inputs && context.event.inputs.pr_number) {
+            issueNumber = parseInt(context.event.inputs.pr_number);
+          } else {
+            console.log('No PR number available for commenting');
+            return;
+          }
+
           await github.rest.issues.createComment({
-            issue_number: context.issue.number,
+            issue_number: issueNumber,
             owner: context.repo.owner,
             repo: context.repo.repo,
             body: message
