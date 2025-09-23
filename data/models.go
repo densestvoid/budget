@@ -358,10 +358,10 @@ func (s *Storage) CreateTransaction(accountID int, date time.Time, originalPayee
 	return &t, nil
 }
 
-// getTransactionsByAccountWithFilter retrieves transactions for an account with optional reviewed filter
-func (s *Storage) getTransactionsByAccountWithFilter(accountID int, reviewedOnly bool) ([]Transaction, error) {
+// getTransactionsByAccountWithFilter retrieves transactions for an account with optional unreviewed filter
+func (s *Storage) getTransactionsByAccountWithFilter(accountID int, unreviewedOnly bool) ([]Transaction, error) {
 	var query string
-	if reviewedOnly {
+	if unreviewedOnly {
 		query = `
 			SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
 			FROM transactions
