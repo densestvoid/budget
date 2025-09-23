@@ -34,8 +34,9 @@ locals {
   
   # Create shorter versions for different resource types
   short_id = substr(local.sanitized_id, 0, 20)  # For database names (40 char limit, but keep shorter)
-  vpc_id = substr(local.sanitized_id, 0, 22)    # For VPC names (32 char limit, but need space for "budget-vpc-" prefix)
+  vpc_id = substr(local.sanitized_id, 0, 21)    # For VPC names (32 char limit, but need space for "budget-vpc-" prefix)
   app_id = substr(local.sanitized_id, 0, 32)    # For app names (32 char limit)
+  migration_app_id = substr(local.sanitized_id, 0, 21)  # For migration app names (32 char limit, but need space for "-migrations" suffix)
 }
 
 # Reference existing DigitalOcean project
@@ -176,7 +177,7 @@ resource "digitalocean_app" "budget_migrations" {
   # If image tag is same (cache hit), no redeployment needed
 
   spec {
-    name   = "${local.app_id}-migrations"
+    name   = "${local.migration_app_id}-migrations"
     region = var.region
     
     # Enable VPC networking for database access
