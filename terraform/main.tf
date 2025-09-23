@@ -26,6 +26,18 @@ provider "digitalocean" {
   token = var.do_token
 }
 
+# Local values for sanitized naming
+locals {
+  # Sanitize deployment_id for DigitalOcean naming constraints
+  # Rules: alphanumeric, underscores, dashes only; max 40 chars for DB names, 64 for usernames
+  sanitized_id = replace(replace(replace(var.deployment_id, "/[^a-zA-Z0-9_-]/", "-"), "/^-+|-+$/", ""), "/-+/", "-")
+  
+  # Create shorter versions for different resource types
+  short_id = substr(local.sanitized_id, 0, 20)  # For database names (40 char limit, but keep shorter)
+  vpc_id = substr(local.sanitized_id, 0, 22)    # For VPC names (32 char limit, but need space for "budget-vpc-" prefix)
+  app_id = substr(local.sanitized_id, 0, 32)    # For app names (32 char limit)
+}
+
 # Reference existing DigitalOcean project
 data "digitalocean_project" "budget" {
   name = "budget-develop"
@@ -33,7 +45,7 @@ data "digitalocean_project" "budget" {
 
 # Create VPC for private networking
 resource "digitalocean_vpc" "budget_vpc" {
-  name     = substr("budget-vpc-${var.deployment_id}", 0, 32)  # VPC name limit
+  name     = "budget-vpc-${local.vpc_id}"
   region   = var.region
   ip_range = "172.16.0.0/16"  # Private IP range (avoiding conflicts)
   
@@ -42,7 +54,7 @@ resource "digitalocean_vpc" "budget_vpc" {
 
 # Managed PostgreSQL database with private VPC networking
 resource "digitalocean_database_cluster" "budget_db" {
-  name                 = "budget-db-${var.deployment_id}"
+  name                 = "budget-db-${local.short_id}"
   engine               = "pg"
   version              = "16"
   size                 = "db-s-1vcpu-1gb"  # Cheapest managed DB option
@@ -59,13 +71,13 @@ resource "digitalocean_database_cluster" "budget_db" {
 # Create database within the cluster
 resource "digitalocean_database_db" "budget_database" {
   cluster_id = digitalocean_database_cluster.budget_db.id
-  name       = "budget-${var.deployment_id}"
+  name       = "budget-${local.short_id}"
 }
 
 # Create database user
 resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
-  name       = "budget-app-${var.deployment_id}"
+  name       = "budget-app-${local.short_id}"
   
   # Note: Database user password is auto-generated and stable
   # DigitalOcean manages password lifecycle
@@ -164,7 +176,7 @@ resource "digitalocean_app" "budget_migrations" {
   # If image tag is same (cache hit), no redeployment needed
 
   spec {
-    name   = substr("${var.deployment_id}-migrations", 0, 32)  # Trim to 32 chars max
+    name   = "${local.app_id}-migrations"
     region = var.region
     
     # Enable VPC networking for database access
@@ -223,7 +235,7 @@ resource "digitalocean_app" "budget_app" {
   # If image tag is same (cache hit), no redeployment needed
 
   spec {
-    name   = substr(var.deployment_id, 0, 32)  # Trim to 32 chars max
+    name   = local.app_id
     region = var.region
     
     # Enable VPC networking for database access
