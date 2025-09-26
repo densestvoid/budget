@@ -1,0 +1,486 @@
+name: Deploy Budget App to DigitalOcean
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to deploy'
+        required: true
+        type: string
+      branch_name:
+        description: 'Branch name to deploy (leave empty to auto-detect from PR)'
+        required: false
+        type: string
+
+# Prevent concurrent deployments for the same PR (manual and automatic)
+# Don't cancel running workflows to avoid partial Terraform deployments
+concurrency:
+  group: deploy-pr-${{ github.event.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+env:
+  DO_TOKEN: ${{ secrets.DO_TOKEN }}
+
+jobs:
+  go-checks:
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+
+  deploy:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    needs: go-checks
+    
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      actions: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Generate deployment ID
+      id: deployment_id
+      run: |
+        # Handle both PR events and manual dispatch
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          PR_NUMBER="${{ github.event.number }}"
+          BRANCH_NAME="${{ github.head_ref }}"
+        else
+          # Manual workflow_dispatch
+          PR_NUMBER="${{ github.event.inputs.pr_number }}"
+          BRANCH_NAME="${{ github.event.inputs.branch_name }}"
+          
+          # If no branch name provided, get it from PR API
+          if [ -z "$BRANCH_NAME" ]; then
+            BRANCH_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" | \
+              jq -r '.head.ref')
+          fi
+        fi
+        
+        # Sanitize branch name: replace invalid characters with hyphens
+        SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9.-]/-/g')
+        DEPLOYMENT_ID="pr-${PR_NUMBER}-${SANITIZED_BRANCH}"
+        
+        echo "Event type: ${{ github.event_name }}"
+        echo "PR number: ${PR_NUMBER}"
+        echo "Original branch: ${BRANCH_NAME}"
+        echo "Sanitized branch: ${SANITIZED_BRANCH}"
+        echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV
+        echo "deployment_id=${DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
+        echo "Deployment ID: ${DEPLOYMENT_ID}"
+    
+    # Using existing 'budget' project via Terraform data source
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7
+    
+    - name: Initialize Terraform with DigitalOcean Spaces backend
+      id: terraform_init
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+      run: |
+        cd terraform
+        
+        echo "🔧 Initializing Terraform with DigitalOcean Spaces backend..."
+        echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
+        
+        # Initialize with deployment-specific state file
+        if terraform init -backend-config="key=deployments/${{ env.DEPLOYMENT_ID }}.tfstate"; then
+          echo "✅ Terraform initialized successfully"
+          echo "init_success=true" >> $GITHUB_OUTPUT
+          
+          # Check if this is a new or existing deployment
+          if terraform state list | grep -q "digitalocean_app.budget_app"; then
+            echo "♻️ Found existing deployment state"
+            echo "is_redeployment=true" >> $GITHUB_OUTPUT
+            
+            # Show current state
+            echo "📋 Current resources in state:"
+            terraform state list
+          else
+            echo "🆕 New deployment (empty state)"
+            echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "❌ Terraform initialization failed"
+          echo "init_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Check build requirements and caches
+      id: build_cache
+      run: |
+        echo "🔍 Analyzing build requirements..."
+        
+        # Create hash of Go source files
+        GO_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" | \
+          sort | xargs cat | sha256sum | cut -d' ' -f1)
+        echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
+        echo "Go source hash: ${GO_HASH}"
+        
+        # Create hash of all files that affect Docker image
+        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
+          sort | xargs cat | sha256sum | cut -d' ' -f1)
+        echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
+        echo "Docker context hash: ${DOCKER_HASH}"
+        
+        # Set image tag based on content hash
+        IMAGE_TAG="${{ env.DEPLOYMENT_ID }}-${DOCKER_HASH}"
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+        
+        # Check if Docker image already exists in GHCR
+        echo "🔍 Checking if Docker image exists in registry..."
+        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG} >/dev/null 2>&1; then
+          echo "✅ Docker image exists - skipping entire build pipeline"
+          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
+          echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG}"
+        else
+          echo "❌ Docker image not found - build pipeline required"
+          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Restore Go build cache
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: go-build-${{ env.GO_HASH }}
+        restore-keys: |
+          go-build-
+    
+    - name: Restore Docker buildx cache
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      id: docker_buildx_cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: docker-buildx-${{ env.DOCKER_HASH }}
+        restore-keys: |
+          docker-buildx-
+    
+    - name: Build and push Docker image
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      run: |
+        echo "🐳 Building Docker image..."
+        echo "Docker hash: ${{ env.DOCKER_HASH }}"
+        echo "Buildx cache hit: ${{ steps.docker_buildx_cache.outputs.cache-hit }}"
+        
+        # Login to GitHub Container Registry
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Build with cache using hash-based tag
+        docker buildx build \
+          --file Dockerfile.prod \
+          --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} \
+          --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.DEPLOYMENT_ID }} \
+          --cache-from type=local,src=/tmp/.buildx-cache \
+          --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+          --push \
+          .
+        
+        # Move cache
+        rm -rf /tmp/.buildx-cache
+        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+        
+        echo "✅ Docker image built and pushed"
+        echo "Build completed with tag: ${{ env.IMAGE_TAG }}"
+    
+    - name: Prepare Terraform configuration
+      run: |
+        cd terraform
+        cat > terraform.tfvars << EOF
+        do_token = "${{ env.DO_TOKEN }}"
+        spaces_access_key = "${{ secrets.DO_SPACES_ACCESS_KEY }}"
+        spaces_secret_key = "${{ secrets.DO_SPACES_SECRET_KEY }}"
+        region = "nyc1"
+        deployment_id = "${{ env.DEPLOYMENT_ID }}"
+        github_repo = "${{ github.repository }}"
+        docker_image_tag = "${{ env.IMAGE_TAG }}"
+        github_token = "${{ secrets.GITHUB_TOKEN }}"
+        auto_terminate_minutes = 30
+        EOF
+        
+        echo "✅ Terraform configuration prepared"
+    
+    # Terraform workspace automatically handles existing vs new deployments
+    
+    - name: Deploy infrastructure
+      id: deploy_infra
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+      run: |
+        cd terraform
+        
+        echo "🚀 Deploying infrastructure..."
+        
+        # Check if deployment already exists in state
+        RESOURCE_COUNT=$(terraform state list | wc -l)
+        echo "📊 Found $RESOURCE_COUNT resources in state"
+        
+        if [ "$RESOURCE_COUNT" -eq 0 ]; then
+          echo "🆕 New deployment - creating all infrastructure..."
+          if terraform apply -auto-approve; then
+            echo "✅ New deployment completed successfully"
+            echo "deploy_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ New deployment failed"
+            echo "deploy_success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        else
+          # Existing deployment - use conditional logic based on image changes
+          if [ "${{ steps.build_cache.outputs.skip_docker_build }}" = "true" ]; then
+            echo "📦 Same container image - checking if infrastructure-only updates needed..."
+            
+            # Check what would change with a plan
+            terraform plan -detailed-exitcode -out=tfplan
+            plan_exit_code=$?
+            
+            echo "📋 Terraform plan exit code: $plan_exit_code"
+            echo "📋 Plan details:"
+            terraform show tfplan || echo "No plan file to show"
+            
+            # Check if plan file exists and has content
+            if [ -f tfplan ] && [ -s tfplan ]; then
+              echo "📋 Plan file exists and has content - changes detected"
+              echo "🔧 Infrastructure changes detected - applying updates..."
+              if terraform apply -auto-approve tfplan; then
+                echo "✅ Infrastructure updates applied successfully"
+                echo "deploy_success=true" >> $GITHUB_OUTPUT
+                echo "changes_applied=true" >> $GITHUB_OUTPUT
+              else
+                echo "❌ Infrastructure updates failed"
+                echo "deploy_success=false" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            elif [ $plan_exit_code -eq 0 ]; then
+              echo "✅ No changes needed - infrastructure is up to date"
+              echo "deploy_success=true" >> $GITHUB_OUTPUT
+              echo "changes_applied=false" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Terraform plan failed with exit code $plan_exit_code"
+              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "🆕 New container image - updating containers..."
+            if terraform apply -auto-approve; then
+              echo "✅ Container updates completed successfully"
+              echo "deploy_success=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Container updates failed"
+              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+        fi
+        
+        # Always try to get outputs - they should exist if deployment was successful
+        echo "📊 Getting deployment outputs..."
+        
+        # Try to get outputs, but don't fail if they don't exist
+        APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
+        APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
+        DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
+        TOTAL_COST=$(terraform output -raw estimated_total_cost 2>/dev/null || echo "")
+        
+        if [ -n "$APP_URL" ]; then
+          echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+          echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
+          echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
+          echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
+          echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
+          echo "✅ Successfully retrieved deployment outputs"
+        else
+          echo "⚠️ No outputs found - this may indicate an incomplete deployment"
+          echo "📋 Available outputs:"
+          terraform output || echo "No outputs available"
+        fi
+    
+    # Database readiness, migrations, and app deployment all handled by Terraform
+    
+    - name: Verify deployment health
+      run: |
+        echo "🏥 Performing final health check..."
+        
+        # Simple health check to verify deployment is accessible
+        timeout 60 bash -c '
+          while ! curl -f --connect-timeout 10 ${{ env.APP_URL }}/health 2>/dev/null; do
+            echo "Waiting for application to be ready..."
+            sleep 10
+          done
+        '
+        
+        echo "✅ Application is ready and healthy"
+    
+    - name: Calculate termination time
+      id: termination_time
+      run: |
+        # Calculate when the deployment will terminate
+        TERMINATION_TIME=$(date -u -d '+30 minutes' '+%Y-%m-%d %H:%M UTC')
+        echo "TERMINATION_TIME=${TERMINATION_TIME}" >> $GITHUB_ENV
+        echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
+        echo "Termination scheduled for: ${TERMINATION_TIME}"
+    
+    - name: Schedule auto-termination
+      if: success()
+      run: |
+        echo "🕐 Scheduling auto-termination..."
+        
+        response=$(curl -w "%{http_code}" -s -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-terminate.yml/dispatches" \
+          -d "{
+            \"ref\": \"${{ github.head_ref }}\",
+            \"inputs\": {
+              \"app_id\": \"${{ env.APP_ID }}\",
+              \"migration_app_id\": \"${{ env.MIGRATION_APP_ID }}\",
+              \"app_url\": \"${{ env.APP_URL }}\",
+              \"pr_number\": \"${{ github.event.number }}\",
+              \"deployment_id\": \"${{ env.DEPLOYMENT_ID }}\"
+            }
+          }")
+        
+        http_code="${response: -3}"
+        
+        if [ "$http_code" = "204" ]; then
+          echo "✅ Auto-termination scheduled successfully"
+        else
+          echo "⚠️ Failed to schedule auto-termination (HTTP: $http_code)"
+          echo "Manual cleanup: terraform destroy -auto-approve"
+        fi
+    
+    - name: Comment on PR with success
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const message = [
+            '## ✅ Deployment Successful',
+            '',
+            '🌐 **URL:** ${{ env.APP_URL }}',
+            '🆔 **App ID:** ${{ env.APP_ID }}',
+            '🔧 **Migration ID:** ${{ env.MIGRATION_APP_ID }}',
+            '📦 **Deployment:** ${{ env.DEPLOYMENT_ID }}',
+            '💰 **Cost:** ${{ env.TOTAL_COST }}',
+            '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}',
+            '',
+            '_Architecture: Database → Migration Container → Application Container_'
+          ].join('\n');
+
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
+    
+    - name: Cleanup on failure
+      if: failure()
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+      run: |
+        echo "🧹 Cleaning up partial deployment due to failure..."
+        
+        cd terraform
+        
+        # Only cleanup if we have terraform config and state exists
+        if [ -f terraform.tfvars ]; then
+          echo "📋 Checking for partially created resources..."
+          
+          # Check if we have any state (either local or need to re-init)
+          if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
+            echo "🔧 Re-initializing to check remote state..."
+            terraform init -backend-config="key=deployments/${{ env.DEPLOYMENT_ID }}.tfstate" || true
+          fi
+          
+          # Show what resources exist before cleanup
+          echo "📋 Resources to clean up:"
+          terraform state list || echo "No resources found in state"
+          
+          # Only destroy if we have resources in state
+          if terraform state list | grep -q .; then
+            echo "🗑️ Destroying partially created resources..."
+            terraform destroy -auto-approve || echo "⚠️ Cleanup may be incomplete - manual cleanup may be required"
+            echo "✅ Partial deployment cleaned up"
+          else
+            echo "ℹ️ No resources found in state - nothing to clean up"
+          fi
+        else
+          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
+        fi
+    
+    - name: Comment on PR with failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const workflow = 'Deploy Budget App';
+          let failedStep = 'Unknown';
+          let errorMessage = 'Unknown error occurred';
+          
+          // Determine which step failed based on step outputs
+          const stepResults = {
+            init_success: '${{ steps.terraform_init.outputs.init_success }}',
+            deploy_success: '${{ steps.deploy_infra.outputs.deploy_success }}'
+          };
+          
+          console.log('Step results:', stepResults);
+          
+          if (stepResults.init_success === 'false') {
+            failedStep = 'Initialize Terraform with DigitalOcean Spaces backend';
+            errorMessage = 'Terraform initialization failed. Check DO_SPACES_ACCESS_KEY and DO_SPACES_SECRET_KEY secrets.';
+          } else if (stepResults.deploy_success === 'false') {
+            failedStep = 'Deploy infrastructure (Database → Migration → Application)';
+            errorMessage = 'Terraform deployment failed. This could be:\\n' +
+                          '• Database cluster creation failure\\n' +
+                          '• Migration container failure (check migration logs in DigitalOcean App Platform)\\n' +
+                          '• Application container deployment failure\\n' +
+                          '• Database firewall configuration failure\\n' +
+                          'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
+          } else {
+            failedStep = 'Post-deployment verification';
+            errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
+          }
+          
+          const message = [
+            '## ❌ Deployment Failed',
+            '',
+            `**Workflow:** ${workflow}`,
+            `**Step:** ${failedStep}`,
+            '**Error:**',
+            '```',
+            errorMessage,
+            '```',
+            '**Cleanup:** Partial deployment cleaned up automatically'
+          ].join('\n');
+
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
