@@ -12,6 +12,69 @@ import (
 	"github.com/maragudk/gomponents/html"
 )
 
+const (
+	uncategorizedCategory = "Uncategorized"
+)
+
+// flattenedCategory represents a category with its hierarchy level
+type flattenedCategory struct {
+	Cat   data.Category
+	Level int
+}
+
+// addCategoryModal creates the add category modal
+func addCategoryModal(categories []data.Category, currentParentID *int) g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("addCategoryModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("addCategoryModalLabel"), g.Text("Add Category")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					g.El("form",
+						html.Action("/categories/"),
+						html.Method("POST"),
+						g.Attr("hx-post", "/categories/"),
+						g.Attr("hx-target", "#categories-directory"),
+						g.Attr("hx-swap", "outerHTML"),
+						g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide(); }"),
+						html.Div(
+							html.Class("mb-3"),
+							html.Label(html.Class("form-label"), html.For("add-name"), g.Text("Name")),
+							html.Input(html.Type("text"), html.Name("name"), html.ID("add-name"), html.Class("form-control"), html.Required()),
+						),
+						html.Div(
+							html.Class("mb-3"),
+							html.Label(html.Class("form-label"), html.For("add-parent"), g.Text("Parent Category")),
+							CategoryBootstrapDropdown(categories, "parent_id", "add-parent", currentParentID, nil, false, nil),
+						),
+						html.Div(
+							html.Class("d-flex justify-content-end gap-2"),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
+						),
+					),
+				),
+			),
+		),
+	)
+}
+
 func HomePage() g.Node {
 	return g.Group([]g.Node{
 		html.Div(
@@ -237,25 +300,6 @@ func RegisterPage() g.Node {
 	)
 }
 
-// Helper to build the breadcrumb path for a category
-func buildCategoryBreadcrumb(c data.Category, categories []data.Category) []string {
-	var path []string
-	current := &c
-	catMap := map[int]*data.Category{}
-	for i := range categories {
-		catMap[categories[i].ID] = &categories[i]
-	}
-	for current != nil {
-		path = append([]string{current.Name}, path...)
-		if current.ParentID != nil {
-			current = catMap[*current.ParentID]
-		} else {
-			current = nil
-		}
-	}
-	return path
-}
-
 // Update CSS for a vertical tree with minimal indentation
 var treeCSS = g.El("style", g.Raw(`
 .categories-tree-list {
@@ -285,14 +329,8 @@ var treeCSS = g.El("style", g.Raw(`
 `))
 
 // flattenCategories returns a flat list of categories in parent-child order with their level, sorting children by name
-func flattenCategories(categories []data.Category, parentID *int, level int) []struct {
-	Cat   data.Category
-	Level int
-} {
-	var result []struct {
-		Cat   data.Category
-		Level int
-	}
+func flattenCategories(categories []data.Category, parentID *int, level int) []flattenedCategory {
+	var result []flattenedCategory
 	// Collect children
 	var children []data.Category
 	for _, cat := range categories {
@@ -305,10 +343,7 @@ func flattenCategories(categories []data.Category, parentID *int, level int) []s
 		return children[i].Name < children[j].Name
 	})
 	for _, cat := range children {
-		result = append(result, struct {
-			Cat   data.Category
-			Level int
-		}{cat, level})
+		result = append(result, flattenedCategory{cat, level})
 		result = append(result, flattenCategories(categories, &cat.ID, level+1)...)
 	}
 	return result
@@ -427,55 +462,7 @@ func CategoriesPage(categories []data.Category) g.Node {
 					}()),
 				),
 				// Add Category Modal
-				html.Div(
-					html.Class("modal fade"),
-					html.ID("addCategoryModal"),
-					html.DataAttr("tabindex", "-1"),
-					html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
-					html.DataAttr("aria-hidden", "true"),
-					html.Div(
-						html.Class("modal-dialog"),
-						html.Div(
-							html.Class("modal-content"),
-							html.Div(
-								html.Class("modal-header"),
-								html.H5(html.Class("modal-title"), html.ID("addCategoryModalLabel"), g.Text("Add Category")),
-								html.Button(
-									html.Class("btn-close"),
-									html.Type("button"),
-									html.DataAttr("bs-dismiss", "modal"),
-									html.DataAttr("aria-label", "Close"),
-								),
-							),
-							html.Div(
-								html.Class("modal-body"),
-								g.El("form",
-									html.Action("/categories/"),
-									html.Method("POST"),
-									g.Attr("hx-post", "/categories/"),
-									g.Attr("hx-target", "#categories-directory"),
-									g.Attr("hx-swap", "outerHTML"),
-									g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide(); }"),
-									html.Div(
-										html.Class("mb-3"),
-										html.Label(html.Class("form-label"), html.For("add-name"), g.Text("Name")),
-										html.Input(html.Type("text"), html.Name("name"), html.ID("add-name"), html.Class("form-control"), html.Required()),
-									),
-									html.Div(
-										html.Class("mb-3"),
-										html.Label(html.Class("form-label"), html.For("add-parent"), g.Text("Parent Category")),
-										CategoryBootstrapDropdown(categories, "parent_id", "add-parent", nil, nil, false, nil),
-									),
-									html.Div(
-										html.Class("d-flex justify-content-end gap-2"),
-										html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
-										html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
-									),
-								),
-							),
-						),
-					),
-				),
+				addCategoryModal(categories, nil),
 			),
 		),
 	})
@@ -536,7 +523,8 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 					html.Class("list-group"),
 					g.Group(func() []g.Node {
 						var rows []g.Node
-						for _, t := range transactions {
+						for i := range transactions {
+							t := &transactions[i]
 							rows = append(rows, TransactionCardWithModalSelectable(t, categories, ""))
 						}
 						return rows
@@ -645,13 +633,13 @@ document.addEventListener('htmx:afterRequest', function() {
 }
 
 // TransactionCardWithModal renders a single transaction card and its modal for editing
-func TransactionCardWithModal(t data.Transaction, categories []data.Category, modalErrMsg string) g.Node {
+func TransactionCardWithModal(t *data.Transaction, categories []data.Category, modalErrMsg string) g.Node {
 	modalID := "editTransactionModal-" + strconv.Itoa(t.ID)
 	cardID := "transaction-card-" + strconv.Itoa(t.ID)
 	// Find category name
 	var categoryName string
 	if t.CategoryID == nil {
-		categoryName = "Uncategorized"
+		categoryName = uncategorizedCategory
 	} else {
 		for _, c := range categories {
 			if c.ID == *t.CategoryID {
@@ -660,7 +648,7 @@ func TransactionCardWithModal(t data.Transaction, categories []data.Category, mo
 			}
 		}
 		if categoryName == "" {
-			categoryName = "Uncategorized"
+			categoryName = uncategorizedCategory
 		}
 	}
 	return html.Div(
@@ -798,12 +786,12 @@ func TransactionCardWithModal(t data.Transaction, categories []data.Category, mo
 }
 
 // TransactionCardWithModalSelectable renders a single transaction card and its modal for editing
-func TransactionCardWithModalSelectable(t data.Transaction, categories []data.Category, modalErrMsg string) g.Node {
+func TransactionCardWithModalSelectable(t *data.Transaction, categories []data.Category, modalErrMsg string) g.Node {
 	cardID := "transaction-card-" + strconv.Itoa(t.ID)
 	// Find category name
 	var categoryName string
 	if t.CategoryID == nil {
-		categoryName = "Uncategorized"
+		categoryName = uncategorizedCategory
 	} else {
 		for _, c := range categories {
 			if c.ID == *t.CategoryID {
@@ -812,7 +800,7 @@ func TransactionCardWithModalSelectable(t data.Transaction, categories []data.Ca
 			}
 		}
 		if categoryName == "" {
-			categoryName = "Uncategorized"
+			categoryName = uncategorizedCategory
 		}
 	}
 	return html.Div(
@@ -873,12 +861,6 @@ func TransactionCardWithModalSelectable(t data.Transaction, categories []data.Ca
 }
 
 // Helper function for max
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 // Add after TransactionCardWithModalSelectable
 func RenderTransactionListWithSelectableCards(w io.Writer, txs []data.Transaction, cats []data.Category) error {
@@ -887,7 +869,8 @@ func RenderTransactionListWithSelectableCards(w io.Writer, txs []data.Transactio
 		html.Class("list-group"),
 		g.Group(func() []g.Node {
 			var rows []g.Node
-			for _, t := range txs {
+			for i := range txs {
+				t := &txs[i]
 				rows = append(rows, TransactionCardWithModalSelectable(t, cats, ""))
 			}
 			return rows
@@ -924,7 +907,7 @@ func CategoriesHeaderSection() g.Node {
 }
 
 // CategoriesDirectoryNavigation renders the breadcrumbs and category list
-func CategoriesDirectoryNavigation(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
+func CategoriesDirectoryNavigation(visibleCategories, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
 	return html.Div(
 		html.ID("categories-directory"),
 		html.Class("col-12 col-md-8 px-2 mx-auto"),
@@ -988,7 +971,7 @@ func CategoriesDirectoryNavigation(visibleCategories []data.Category, allCategor
 				for _, c := range visibleCategories {
 					cards = append(cards, html.Div(
 						html.Class("col"),
-						CategoryCard(c, allCategories),
+						CategoryCard(&c, allCategories),
 					))
 				}
 				return cards
@@ -998,7 +981,7 @@ func CategoriesDirectoryNavigation(visibleCategories []data.Category, allCategor
 }
 
 // CategoryCardOnly renders just the category card without the modal
-func CategoryCardOnly(c data.Category, allCategories []data.Category) g.Node {
+func CategoryCardOnly(c *data.Category, allCategories []data.Category) g.Node {
 	return html.Div(
 		html.ID("category-card-"+strconv.Itoa(c.ID)),
 		html.Class("card"),
@@ -1036,7 +1019,7 @@ func CategoryCardOnly(c data.Category, allCategories []data.Category) g.Node {
 }
 
 // CategoryCard renders a single category card
-func CategoryCard(c data.Category, allCategories []data.Category) g.Node {
+func CategoryCard(c *data.Category, allCategories []data.Category) g.Node {
 	return g.Group([]g.Node{
 		CategoryCardOnly(c, allCategories),
 		// Edit Category Modal
@@ -1094,58 +1077,10 @@ func CategoryCard(c data.Category, allCategories []data.Category) g.Node {
 
 // AddCategoryModal renders the modal for adding a new category
 func AddCategoryModal(allCategories []data.Category, currentParentID *int) g.Node {
-	return html.Div(
-		html.Class("modal fade"),
-		html.ID("addCategoryModal"),
-		html.DataAttr("tabindex", "-1"),
-		html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
-		html.DataAttr("aria-hidden", "true"),
-		html.Div(
-			html.Class("modal-dialog"),
-			html.Div(
-				html.Class("modal-content"),
-				html.Div(
-					html.Class("modal-header"),
-					html.H5(html.Class("modal-title"), html.ID("addCategoryModalLabel"), g.Text("Add Category")),
-					html.Button(
-						html.Class("btn-close"),
-						html.Type("button"),
-						html.DataAttr("bs-dismiss", "modal"),
-						html.DataAttr("aria-label", "Close"),
-					),
-				),
-				html.Div(
-					html.Class("modal-body"),
-					g.El("form",
-						html.Action("/categories/"),
-						html.Method("POST"),
-						g.Attr("hx-post", "/categories/"),
-						g.Attr("hx-target", "#categories-directory"),
-						g.Attr("hx-swap", "outerHTML"),
-						g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide(); }"),
-						html.Div(
-							html.Class("mb-3"),
-							html.Label(html.Class("form-label"), html.For("add-name"), g.Text("Name")),
-							html.Input(html.Type("text"), html.Name("name"), html.ID("add-name"), html.Class("form-control"), html.Required()),
-						),
-						html.Div(
-							html.Class("mb-3"),
-							html.Label(html.Class("form-label"), html.For("add-parent"), g.Text("Parent Category")),
-							CategoryBootstrapDropdown(allCategories, "parent_id", "add-parent", currentParentID, nil, false, nil),
-						),
-						html.Div(
-							html.Class("d-flex justify-content-end gap-2"),
-							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
-							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
-						),
-					),
-				),
-			),
-		),
-	)
+	return addCategoryModal(allCategories, currentParentID)
 }
 
-func CategoriesDirectoryContent(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
+func CategoriesDirectoryContent(visibleCategories, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
 	var currentParentID *int
 	if currentParent != nil {
 		currentParentID = &currentParent.ID
@@ -1158,7 +1093,7 @@ func CategoriesDirectoryContent(visibleCategories []data.Category, allCategories
 	})
 }
 
-func CategoriesDirectoryPage(visibleCategories []data.Category, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
+func CategoriesDirectoryPage(visibleCategories, allCategories []data.Category, currentParent *data.Category, breadcrumb []data.Category) g.Node {
 	var currentParentID *int
 	if currentParent != nil {
 		currentParentID = &currentParent.ID
@@ -1234,7 +1169,8 @@ func RulesPage(rules []data.Rule, categories []data.Category) g.Node {
 				html.Class("list-group"),
 				g.Group(func() []g.Node {
 					var rows []g.Node
-					for _, rule := range rules {
+					for i := range rules {
+						rule := &rules[i]
 						rows = append(rows, RuleCard(rule, categories))
 					}
 					return rows
@@ -1312,7 +1248,7 @@ func RulesPage(rules []data.Rule, categories []data.Category) g.Node {
 }
 
 // RuleCard renders a single rule card
-func RuleCard(rule data.Rule, categories []data.Category) g.Node {
+func RuleCard(rule *data.Rule, categories []data.Category) g.Node {
 	return html.Div(
 		html.Class("card mb-3"),
 		g.Attr("data-rule-id", strconv.Itoa(rule.ID)),
@@ -1784,7 +1720,8 @@ func RenderRulesList(w io.Writer, rules []data.Rule, categories []data.Category)
 		html.Class("list-group"),
 		g.Group(func() []g.Node {
 			var rows []g.Node
-			for _, rule := range rules {
+			for i := range rules {
+				rule := &rules[i]
 				rows = append(rows, RuleCard(rule, categories))
 			}
 			return rows
@@ -1793,149 +1730,199 @@ func RenderRulesList(w io.Writer, rules []data.Rule, categories []data.Category)
 }
 
 // CategoryBootstrapDropdown renders a hierarchical category dropdown using Bootstrap dropdowns
-func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID string, selectedID *int, currentNodeID *int, showCurrent bool, disableDescendantsOf *int) g.Node {
+func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID string, selectedID, currentNodeID *int, showCurrent bool, disableDescendantsOf *int) g.Node {
 	flat := flattenCategories(categories, nil, 0)
-	var descendants map[int]bool
-	if disableDescendantsOf != nil {
-		descendants = getDescendants(categories, *disableDescendantsOf)
-	}
-
-	// Find the selected category name without indentation for display
-	var selectedDisplayName string
-	var selectedValue string
-	if selectedID != nil {
-		selectedValue = strconv.Itoa(*selectedID)
-		for _, item := range flat {
-			if item.Cat.ID == *selectedID {
-				selectedDisplayName = item.Cat.Name
-				break
-			}
-		}
-	} else {
-		selectedValue = ""
-		selectedDisplayName = "None (top-level)"
-	}
-
-	// Escape strings for JavaScript
-	escapedSelectedValue := strings.ReplaceAll(selectedValue, "'", "\\'")
-	escapedSelectedDisplay := strings.ReplaceAll(selectedDisplayName, "'", "\\'")
+	descendants := getDescendantsIfNeeded(categories, disableDescendantsOf)
+	selectedValue, selectedDisplayName := getSelectedCategoryInfo(flat, selectedID)
+	escapedSelectedValue, escapedSelectedDisplay := escapeForJavaScript(selectedValue, selectedDisplayName)
 
 	return html.Div(
 		html.Class("dropdown"),
-		g.Attr("x-data", fmt.Sprintf(`{
-			selectedValue: '%s',
-			selectedDisplay: '%s',
-			selectCategory(value, display) {
-				this.selectedValue = value;
-				this.selectedDisplay = display;
-			},
-			init() {
-				// Watch for form reset events and sync Alpine state
-				this.$watch('selectedValue', (value) => {
-					const hiddenInput = this.$el.querySelector('input[name="%s"]');
-					if (hiddenInput) {
-						hiddenInput.value = value;
-					}
-				});
-			}
-		}`, escapedSelectedValue, escapedSelectedDisplay, selectName)),
-		// Dropdown button
-		html.Button(
-			html.Class("btn border dropdown-toggle w-100 d-flex justify-content-between align-items-center"),
-			html.Type("button"),
-			html.ID(selectID),
-			html.DataAttr("bs-toggle", "dropdown"),
-			html.DataAttr("bs-auto-close", "true"),
-			g.Attr("x-text", "selectedDisplay"),
-		),
-		// Dropdown menu
-		html.Ul(
-			html.Class("dropdown-menu w-100"),
-			g.Attr("style", "max-height: 300px; overflow-y: auto;"),
-			// None option
-			html.Li(
-				html.A(
-					html.Class("dropdown-item"),
-					html.Href("#"),
-					g.Attr("x-on:click", "selectCategory('', 'None (top-level)'); $event.preventDefault()"),
-					g.Text("None (top-level)"),
-				),
-			),
-			// Divider
-			html.Li(html.Hr(html.Class("dropdown-divider"))),
-			// Category options
-			g.Group(func() []g.Node {
-				var items []g.Node
-				for _, item := range flat {
-					cat := item.Cat
+		g.Attr("x-data", buildAlpineJSData(escapedSelectedValue, escapedSelectedDisplay, selectName)),
+		buildDropdownButton(selectID),
+		buildDropdownMenu(flat, descendants, currentNodeID, showCurrent),
+		buildHiddenInput(selectName),
+	)
+}
 
-					// Create proper indentation
-					var indentStyle string
-					var indentText string
-					if item.Level > 0 {
-						// Use inline styles for reliable indentation
-						indentStyle = fmt.Sprintf("padding-left: %dpx;", item.Level*20)
-						// Add visual tree indicators
-						indentText = strings.Repeat("  ", item.Level) + "└─ "
-					}
+// getDescendantsIfNeeded gets descendants map if needed
+func getDescendantsIfNeeded(categories []data.Category, disableDescendantsOf *int) map[int]bool {
+	if disableDescendantsOf == nil {
+		return nil
+	}
+	return getDescendants(categories, *disableDescendantsOf)
+}
 
-					// Check if this category should be disabled
-					isDisabled := false
-					if showCurrent && currentNodeID != nil && cat.ID == *currentNodeID {
-						isDisabled = true
-					}
-					if descendants != nil && descendants[cat.ID] {
-						isDisabled = true
-					}
+// getSelectedCategoryInfo gets the selected category value and display name
+func getSelectedCategoryInfo(flat []flattenedCategory, selectedID *int) (selectedValue, selectedDisplayName string) {
+	if selectedID == nil {
+		return "", "None (top-level)"
+	}
 
-					itemClass := "dropdown-item"
-					if isDisabled {
-						itemClass += " disabled"
-					}
+	selectedValue = strconv.Itoa(*selectedID)
+	for _, item := range flat {
+		if item.Cat.ID == *selectedID {
+			return selectedValue, item.Cat.Name
+		}
+	}
+	return selectedValue, ""
+}
 
-					// Add visual styling for different levels
-					if item.Level == 0 {
-						itemClass += " fw-semibold" // Top-level categories are bold
-					} else {
-						itemClass += " text-muted" // Sub-categories are muted
-					}
+// escapeForJavaScript escapes strings for JavaScript
+func escapeForJavaScript(selectedValue, selectedDisplayName string) (escapedValue, escapedDisplay string) {
+	return strings.ReplaceAll(selectedValue, "'", "\\'"), strings.ReplaceAll(selectedDisplayName, "'", "\\'")
+}
 
-					// Create the click handler for this category
-					clickHandler := ""
-					if !isDisabled {
-						// Escape the category name for JavaScript
-						escapedName := strings.ReplaceAll(cat.Name, "'", "\\'")
-						clickHandler = fmt.Sprintf("selectCategory('%d', '%s'); $event.preventDefault()", cat.ID, escapedName)
-					}
-
-					items = append(items, html.Li(
-						html.A(
-							html.Class(itemClass),
-							g.Attr("style", indentStyle),
-							html.Href("#"),
-							func() g.Node {
-								if clickHandler != "" {
-									return g.Attr("x-on:click", clickHandler)
-								}
-								return nil
-							}(),
-							g.Text(indentText+func() string {
-								if showCurrent && currentNodeID != nil && cat.ID == *currentNodeID {
-									return cat.Name + " ★"
-								}
-								return cat.Name
-							}()),
-						),
-					))
+// buildAlpineJSData builds the Alpine.js data attribute
+func buildAlpineJSData(escapedSelectedValue, escapedSelectedDisplay, selectName string) string {
+	return fmt.Sprintf(`{
+		selectedValue: '%s',
+		selectedDisplay: '%s',
+		selectCategory(value, display) {
+			this.selectedValue = value;
+			this.selectedDisplay = display;
+		},
+		init() {
+			// Watch for form reset events and sync Alpine state
+			this.$watch('selectedValue', (value) => {
+				const hiddenInput = this.$el.querySelector('input[name="%s"]');
+				if (hiddenInput) {
+					hiddenInput.value = value;
 				}
-				return items
-			}()),
+			});
+		}
+	}`, escapedSelectedValue, escapedSelectedDisplay, selectName)
+}
+
+// buildDropdownButton builds the dropdown button
+func buildDropdownButton(selectID string) g.Node {
+	return html.Button(
+		html.Class("btn border dropdown-toggle w-100 d-flex justify-content-between align-items-center"),
+		html.Type("button"),
+		html.ID(selectID),
+		html.DataAttr("bs-toggle", "dropdown"),
+		html.DataAttr("bs-auto-close", "true"),
+		g.Attr("x-text", "selectedDisplay"),
+	)
+}
+
+// buildDropdownMenu builds the dropdown menu
+func buildDropdownMenu(flat []flattenedCategory, descendants map[int]bool, currentNodeID *int, showCurrent bool) g.Node {
+	return html.Ul(
+		html.Class("dropdown-menu w-100"),
+		g.Attr("style", "max-height: 300px; overflow-y: auto;"),
+		buildNoneOption(),
+		html.Li(html.Hr(html.Class("dropdown-divider"))),
+		buildCategoryOptions(flat, descendants, currentNodeID, showCurrent),
+	)
+}
+
+// buildNoneOption builds the "None" option
+func buildNoneOption() g.Node {
+	return html.Li(
+		html.A(
+			html.Class("dropdown-item"),
+			html.Href("#"),
+			g.Attr("x-on:click", "selectCategory('', 'None (top-level)'); $event.preventDefault()"),
+			g.Text("None (top-level)"),
 		),
-		// Hidden input to store the selected value
-		html.Input(
-			html.Type("hidden"),
-			html.Name(selectName),
-			g.Attr("x-model", "selectedValue"),
+	)
+}
+
+// buildCategoryOptions builds the category options
+func buildCategoryOptions(flat []flattenedCategory, descendants map[int]bool, currentNodeID *int, showCurrent bool) g.Node {
+	return g.Group(func() []g.Node {
+		var items []g.Node
+		for _, item := range flat {
+			items = append(items, buildCategoryOption(&item, descendants, currentNodeID, showCurrent))
+		}
+		return items
+	}())
+}
+
+// buildCategoryOption builds a single category option
+func buildCategoryOption(item *flattenedCategory, descendants map[int]bool, currentNodeID *int, showCurrent bool) g.Node {
+	cat := item.Cat
+	indentStyle, indentText := buildIndentation(item.Level)
+	isDisabled := isCategoryDisabled(&cat, descendants, currentNodeID, showCurrent)
+	itemClass := buildItemClass(item.Level, isDisabled)
+	clickHandler := buildClickHandler(&cat, isDisabled)
+	displayText := buildDisplayText(&cat, currentNodeID, showCurrent, indentText)
+
+	return html.Li(
+		html.A(
+			html.Class(itemClass),
+			g.Attr("style", indentStyle),
+			html.Href("#"),
+			func() g.Node {
+				if clickHandler != "" {
+					return g.Attr("x-on:click", clickHandler)
+				}
+				return nil
+			}(),
+			g.Text(displayText),
 		),
+	)
+}
+
+// buildIndentation builds indentation style and text
+func buildIndentation(level int) (indentStyle, indentText string) {
+	if level == 0 {
+		return "", ""
+	}
+	indentStyle = fmt.Sprintf("padding-left: %dpx;", level*20)
+	indentText = strings.Repeat("  ", level) + "└─ "
+	return indentStyle, indentText
+}
+
+// isCategoryDisabled checks if a category should be disabled
+func isCategoryDisabled(cat *data.Category, descendants map[int]bool, currentNodeID *int, showCurrent bool) bool {
+	if showCurrent && currentNodeID != nil && cat.ID == *currentNodeID {
+		return true
+	}
+	if descendants != nil && descendants[cat.ID] {
+		return true
+	}
+	return false
+}
+
+// buildItemClass builds the CSS class for a category item
+func buildItemClass(level int, isDisabled bool) string {
+	itemClass := "dropdown-item"
+	if isDisabled {
+		itemClass += " disabled"
+	}
+	if level == 0 {
+		itemClass += " fw-semibold" // Top-level categories are bold
+	} else {
+		itemClass += " text-muted" // Sub-categories are muted
+	}
+	return itemClass
+}
+
+// buildClickHandler builds the click handler for a category
+func buildClickHandler(cat *data.Category, isDisabled bool) string {
+	if isDisabled {
+		return ""
+	}
+	escapedName := strings.ReplaceAll(cat.Name, "'", "\\'")
+	return fmt.Sprintf("selectCategory('%d', '%s'); $event.preventDefault()", cat.ID, escapedName)
+}
+
+// buildDisplayText builds the display text for a category
+func buildDisplayText(cat *data.Category, currentNodeID *int, showCurrent bool, indentText string) string {
+	baseText := cat.Name
+	if showCurrent && currentNodeID != nil && cat.ID == *currentNodeID {
+		baseText += " ★"
+	}
+	return indentText + baseText
+}
+
+// buildHiddenInput builds the hidden input for the selected value
+func buildHiddenInput(selectName string) g.Node {
+	return html.Input(
+		html.Type("hidden"),
+		html.Name(selectName),
+		g.Attr("x-model", "selectedValue"),
 	)
 }

@@ -26,9 +26,7 @@ env:
 
 jobs:
   go-checks:
-    name: Go Checks
-    uses: densestvoid/workflows/.github/workflows/go-checks@main
-    secrets: inherit
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 
   deploy:
     name: Deploy to DigitalOcean
@@ -117,28 +115,6 @@ jobs:
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
-    
-    - name: Cancel existing auto-terminate workflow
-      if: steps.terraform_init.outputs.is_redeployment == 'true'
-      run: |
-        echo "🛑 Canceling existing auto-terminate workflow for redeployment..."
-        
-        # Get running workflows for this repository
-        runs_response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=queued,in_progress")
-        
-        # Find auto-terminate workflows for this app
-        existing_app_id="${{ steps.check_existing.outputs.existing_app_id }}"
-        
-        echo "$runs_response" | jq -r '.workflow_runs[] | select(.name == "Auto-Terminate Deployment") | .id' | \
-        while read run_id; do
-          echo "Canceling workflow run: $run_id"
-          curl -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id/cancel"
-        done
-        
-        echo "✅ Existing auto-terminate workflows canceled"
     
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -280,21 +256,29 @@ jobs:
             terraform plan -detailed-exitcode -out=tfplan
             plan_exit_code=$?
             
-            if [ $plan_exit_code -eq 0 ]; then
-              echo "✅ No changes needed - infrastructure is up to date"
-              echo "deploy_success=true" >> $GITHUB_OUTPUT
-            elif [ $plan_exit_code -eq 2 ]; then
+            echo "📋 Terraform plan exit code: $plan_exit_code"
+            echo "📋 Plan details:"
+            terraform show tfplan || echo "No plan file to show"
+            
+            # Check if plan file exists and has content
+            if [ -f tfplan ] && [ -s tfplan ]; then
+              echo "📋 Plan file exists and has content - changes detected"
               echo "🔧 Infrastructure changes detected - applying updates..."
               if terraform apply -auto-approve tfplan; then
                 echo "✅ Infrastructure updates applied successfully"
                 echo "deploy_success=true" >> $GITHUB_OUTPUT
+                echo "changes_applied=true" >> $GITHUB_OUTPUT
               else
                 echo "❌ Infrastructure updates failed"
                 echo "deploy_success=false" >> $GITHUB_OUTPUT
                 exit 1
               fi
+            elif [ $plan_exit_code -eq 0 ]; then
+              echo "✅ No changes needed - infrastructure is up to date"
+              echo "deploy_success=true" >> $GITHUB_OUTPUT
+              echo "changes_applied=false" >> $GITHUB_OUTPUT
             else
-              echo "❌ Terraform plan failed"
+              echo "❌ Terraform plan failed with exit code $plan_exit_code"
               echo "deploy_success=false" >> $GITHUB_OUTPUT
               exit 1
             fi
@@ -311,19 +295,28 @@ jobs:
           fi
         fi
         
-        # Always get outputs (they exist even if no changes applied)
+        # Always try to get outputs - they should exist if deployment was successful
         echo "📊 Getting deployment outputs..."
-        APP_URL=$(terraform output -raw app_url)
-        APP_ID=$(terraform output -raw app_id)
-        MIGRATION_APP_ID=$(terraform output -raw migration_app_id)
-        DB_HOST=$(terraform output -raw database_host)
-        TOTAL_COST=$(terraform output -raw estimated_total_cost)
         
-        echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
-        echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
-        echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
-        echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
-        echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
+        # Try to get outputs, but don't fail if they don't exist
+        APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
+        APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
+        DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
+        TOTAL_COST=$(terraform output -raw estimated_total_cost 2>/dev/null || echo "")
+        
+        if [ -n "$APP_URL" ]; then
+          echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+          echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
+          echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
+          echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
+          echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
+          echo "✅ Successfully retrieved deployment outputs"
+        else
+          echo "⚠️ No outputs found - this may indicate an incomplete deployment"
+          echo "📋 Available outputs:"
+          terraform output || echo "No outputs available"
+        fi
     
     # Database readiness, migrations, and app deployment all handled by Terraform
     

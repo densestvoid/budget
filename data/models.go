@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -80,7 +81,7 @@ type Rule struct {
 }
 
 // AmountDecimal returns the amount as a decimal string (e.g., 1234 -> "12.34")
-func (t Transaction) AmountDecimal() string {
+func (t *Transaction) AmountDecimal() string {
 	return fmt.Sprintf("%.2f", float64(t.Amount)/100.0)
 }
 
@@ -357,14 +358,25 @@ func (s *Storage) CreateTransaction(accountID int, date time.Time, originalPayee
 	return &t, nil
 }
 
-// GetTransactionsByAccount retrieves all unreviewed transactions for an account
-func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error) {
-	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
-		FROM transactions
-		WHERE account_id = $1 AND reviewed = FALSE
-		ORDER BY date DESC, id DESC
-	`
+// getTransactionsByAccountWithFilter retrieves transactions for an account with optional unreviewed filter
+func (s *Storage) getTransactionsByAccountWithFilter(accountID int, unreviewedOnly bool) ([]Transaction, error) {
+	var query string
+	if unreviewedOnly {
+		query = `
+			SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+			FROM transactions
+			WHERE account_id = $1 AND reviewed = FALSE
+			ORDER BY date DESC, id DESC
+		`
+	} else {
+		query = `
+			SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+			FROM transactions
+			WHERE account_id = $1
+			ORDER BY date DESC, id DESC
+		`
+	}
+
 	rows, err := s.db.Query(query, accountID)
 	if err != nil {
 		return nil, err
@@ -382,29 +394,14 @@ func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error)
 	return txs, nil
 }
 
+// GetTransactionsByAccount retrieves all unreviewed transactions for an account
+func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error) {
+	return s.getTransactionsByAccountWithFilter(accountID, true)
+}
+
 // GetAllTransactionsByAccount retrieves all transactions (both reviewed and unreviewed) for an account
 func (s *Storage) GetAllTransactionsByAccount(accountID int) ([]Transaction, error) {
-	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
-		FROM transactions
-		WHERE account_id = $1
-		ORDER BY date DESC, id DESC
-	`
-	rows, err := s.db.Query(query, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var txs []Transaction
-	for rows.Next() {
-		var t Transaction
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			return nil, err
-		}
-		txs = append(txs, t)
-	}
-	return txs, nil
+	return s.getTransactionsByAccountWithFilter(accountID, false)
 }
 
 // UpdateTransactionPayeeCategory updates a transaction's payee and category
@@ -420,7 +417,8 @@ func (s *Storage) UpdateTransactionPayeeCategory(accountID, transactionID int, p
 
 // BulkInsertTransactions inserts multiple transactions (for CSV upload)
 func (s *Storage) BulkInsertTransactions(accountID int, txs []Transaction) error {
-	for _, t := range txs {
+	for i := range txs {
+		t := &txs[i]
 		// Apply rules to the transaction
 		modifiedTx, err := s.ApplyRulesToTransaction(accountID, t)
 		if err != nil {
@@ -560,7 +558,11 @@ func (s *Storage) CreateRule(accountID int, name string, newPayee *string, categ
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
 
 	// Insert the rule
 	var rule Rule
@@ -670,7 +672,11 @@ func (s *Storage) UpdateRule(accountID, ruleID int, name string, newPayee *strin
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
 
 	// Update the rule
 	query := `
@@ -722,7 +728,11 @@ func (s *Storage) DeleteRule(accountID, ruleID int) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
 
 	// Delete conditions first (due to foreign key constraint)
 	_, err = tx.Exec("DELETE FROM rule_conditions WHERE rule_id = $1", ruleID)
@@ -775,7 +785,7 @@ func (s *Storage) ToggleRuleActive(accountID, ruleID int) error {
 }
 
 // ApplyRulesToTransaction applies all active rules to a transaction and returns the modified transaction
-func (s *Storage) ApplyRulesToTransaction(accountID int, tx Transaction) (*Transaction, error) {
+func (s *Storage) ApplyRulesToTransaction(accountID int, tx *Transaction) (*Transaction, error) {
 	rules, err := s.GetRulesByAccount(accountID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rules: %w", err)
@@ -785,7 +795,8 @@ func (s *Storage) ApplyRulesToTransaction(accountID int, tx Transaction) (*Trans
 	// Rules are already sorted by priority DESC from GetRulesByAccount
 
 	// Apply rules in order
-	for _, rule := range rules {
+	for i := range rules {
+		rule := &rules[i]
 		if !rule.Active {
 			continue
 		}
@@ -812,7 +823,7 @@ func (s *Storage) ApplyRulesToTransaction(accountID int, tx Transaction) (*Trans
 		}
 	}
 
-	return &tx, nil
+	return tx, nil
 }
 
 // conditionMatches checks if a condition matches the given payee text
@@ -832,13 +843,14 @@ func (s *Storage) conditionMatches(condition RuleCondition, payeeText string) bo
 }
 
 // ApplyRuleToAllTransactions applies a single rule to all existing transactions for an account and returns the number updated
-func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule Rule) (int, error) {
+func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule *Rule) (int, error) {
 	txs, err := s.GetAllTransactionsByAccount(accountID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get transactions: %w", err)
 	}
 	updated := 0
-	for _, tx := range txs {
+	for i := range txs {
+		tx := &txs[i]
 		// Check if all conditions match
 		allMatch := true
 		for _, cond := range rule.Conditions {

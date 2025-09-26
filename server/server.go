@@ -123,34 +123,130 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
+// renderPageWithAuth is a helper function to render pages with authentication check
+func (s *Server) renderPageWithAuth(w http.ResponseWriter, r *http.Request, title string, pageFunc func() g.Node, handlerName string) {
 	var isAuthenticated bool
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
-		log.Printf("Home handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+		log.Printf("%s handler: User is authenticated - isAuthenticated=%t", handlerName, isAuthenticated)
 	} else {
-		log.Printf("Home handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
+		log.Printf("%s handler: User is not authenticated - isAuthenticated=%t", handlerName, isAuthenticated)
 	}
-	page := templates.HomePage()
-	if err := templates.BaseLayoutWithAuth("Home - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering home page: %v", err)
+	page := pageFunc()
+	if err := templates.BaseLayoutWithAuth(title, isAuthenticated, page).Render(w); err != nil {
+		log.Printf("Error rendering %s page: %v", handlerName, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 }
 
-func (s *Server) aboutHandler(w http.ResponseWriter, r *http.Request) {
-	var isAuthenticated bool
-	if account := r.Context().Value("account"); account != nil {
-		isAuthenticated = true
-		log.Printf("About handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+// renderRulesListResponse is a helper function to render rules list for HTMX responses
+func (s *Server) renderRulesListResponse(w http.ResponseWriter, r *http.Request, account *data.Account) {
+	if isHTMX(r) {
+		// Return updated rules list
+		rules, err := s.store.GetRulesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
+			return
+		}
+		categories, err := s.store.GetCategoriesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		if err := templates.RenderRulesList(w, rules, categories); err != nil {
+			log.Printf("Error rendering rules list: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
-		log.Printf("About handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
+		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
 	}
-	page := templates.AboutPage()
-	if err := templates.BaseLayoutWithAuth("About - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering about page: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+}
+
+// parseCategoryFormData parses form data for category operations
+func parseCategoryFormData(r *http.Request) (name string, parentID *int, err error) {
+	if err := r.ParseForm(); err != nil {
+		return "", nil, err
 	}
+	name = r.FormValue("name")
+	parentIDStr := r.FormValue("parent_id")
+	if parentIDStr != "" {
+		pid, err := strconv.Atoi(parentIDStr)
+		if err == nil {
+			parentID = &pid
+		}
+	}
+	return name, parentID, nil
+}
+
+// validateCategoryParent validates that a parent category exists and doesn't create cycles
+func validateCategoryParent(categories []data.Category, categoryID int, parentID *int) error {
+	if parentID == nil {
+		return nil // No parent is valid
+	}
+
+	// Check if parent exists
+	var parentExists bool
+	for _, cat := range categories {
+		if cat.ID == *parentID {
+			parentExists = true
+			break
+		}
+	}
+	if !parentExists {
+		return fmt.Errorf("parent category not found")
+	}
+
+	// Check for circular reference
+	if *parentID == categoryID {
+		return fmt.Errorf("category cannot be its own parent")
+	}
+
+	// Check if parent is a descendant of this category
+	descendants := getDescendants(categories, categoryID)
+	if descendants[*parentID] {
+		return fmt.Errorf("cannot set parent to a descendant category")
+	}
+
+	return nil
+}
+
+// getDescendants returns a set of all descendant category IDs (including the category itself)
+func getDescendants(categories []data.Category, categoryID int) map[int]bool {
+	descendants := make(map[int]bool)
+	descendants[categoryID] = true
+
+	// Build a map for quick lookups
+	catMap := make(map[int]*data.Category)
+	for i := range categories {
+		catMap[categories[i].ID] = &categories[i]
+	}
+
+	// Use a queue to traverse all descendants
+	queue := []int{categoryID}
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+
+		// Find all children of the current category
+		for _, cat := range categories {
+			if cat.ParentID != nil && *cat.ParentID == currentID {
+				descendants[cat.ID] = true
+				queue = append(queue, cat.ID)
+			}
+		}
+	}
+
+	return descendants
+}
+
+func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
+	s.renderPageWithAuth(w, r, "Home - Budget App", templates.HomePage, "Home")
+}
+
+func (s *Server) aboutHandler(w http.ResponseWriter, r *http.Request) {
+	s.renderPageWithAuth(w, r, "About - Budget App", templates.AboutPage, "About")
 }
 
 // Helper to build the breadcrumb path for a category by ID
@@ -175,19 +271,35 @@ func (s *Server) categoriesPageHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
 		return
 	}
+
+	// Get parent_id from query param
+	parentID := s.parseParentIDFromQuery(r)
+
+	// Get categories and render
 	categories, err := s.store.GetCategoriesByAccount(account.ID)
 	if err != nil {
 		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
 		return
 	}
-	// Get parent_id from query param
-	var parentID *int
-	if pidStr := r.URL.Query().Get("parent_id"); pidStr != "" {
-		pid, err := strconv.Atoi(pidStr)
-		if err == nil {
-			parentID = &pid
-		}
+
+	s.renderCategoriesPage(w, r, categories, parentID)
+}
+
+// parseParentIDFromQuery parses parent_id from query parameters
+func (s *Server) parseParentIDFromQuery(r *http.Request) *int {
+	pidStr := r.URL.Query().Get("parent_id")
+	if pidStr == "" {
+		return nil
 	}
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return nil
+	}
+	return &pid
+}
+
+// renderCategoriesPage renders the categories page
+func (s *Server) renderCategoriesPage(w http.ResponseWriter, r *http.Request, categories []data.Category, parentID *int) {
 	// Find current parent category (if any)
 	var currentParent *data.Category
 	if parentID != nil {
@@ -198,6 +310,7 @@ func (s *Server) categoriesPageHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
 	// Filter categories to only those whose ParentID == parentID
 	var visibleCategories []data.Category
 	for _, c := range categories {
@@ -205,6 +318,7 @@ func (s *Server) categoriesPageHandler(w http.ResponseWriter, r *http.Request) {
 			visibleCategories = append(visibleCategories, c)
 		}
 	}
+
 	// Build breadcrumb path
 	breadcrumb := buildCategoryBreadcrumbByID(categories, parentID)
 
@@ -213,11 +327,19 @@ func (s *Server) categoriesPageHandler(w http.ResponseWriter, r *http.Request) {
 		// Return only the directory navigation content for HTMX requests
 		w.Header().Set("Content-Type", "text/html")
 		content := templates.CategoriesDirectoryNavigation(visibleCategories, categories, currentParent, breadcrumb)
-		_ = content.Render(w)
+		if err := content.Render(w); err != nil {
+			log.Printf("Error rendering categories navigation: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		// Return full page for regular requests
 		page := templates.CategoriesDirectoryPage(visibleCategories, categories, currentParent, breadcrumb)
-		_ = templates.BaseLayoutWithAuth("Categories - Budget App", true, page).Render(w)
+		if err := templates.BaseLayoutWithAuth("Categories - Budget App", true, page).Render(w); err != nil {
+			log.Printf("Error rendering categories page: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
@@ -227,115 +349,118 @@ func (s *Server) createCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+
+	// Parse form data using existing helper
+	name, parentID, err := parseCategoryFormData(r)
+	if err != nil {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	name := r.FormValue("name")
-	parentIDStr := r.FormValue("parent_id")
-	var parentID *int
-	if parentIDStr != "" {
-		pid, err := strconv.Atoi(parentIDStr)
-		if err == nil {
-			parentID = &pid
-		}
+
+	// Validate parent relationship
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
 	}
 
-	_, err := s.store.CreateCategory(account.ID, name, parentID)
+	if err := validateCategoryParent(categories, 0, parentID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, err = s.store.CreateCategory(account.ID, name, parentID)
 	if err != nil {
 		http.Error(w, "Failed to create category", http.StatusInternalServerError)
 		return
 	}
 
-	// Check if this is an HTMX request
-	if isHTMX(r) {
-		// Get the current parent_id from the form or referer to refresh the correct page
-		var currentParentID *int
-		if parentID != nil {
-			currentParentID = parentID
-		} else {
-			// If no parent specified, check referer for current directory
-			referer := r.Header.Get("Referer")
-			if referer != "" {
-				if u, err := url.Parse(referer); err == nil {
-					if pidStr := u.Query().Get("parent_id"); pidStr != "" {
-						if pid, err := strconv.Atoi(pidStr); err == nil {
-							currentParentID = &pid
-						}
-					}
-				}
-			}
-		}
-
-		// Get updated categories
-		categories, err := s.store.GetCategoriesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-			return
-		}
-
-		// Find current parent category (if any)
-		var currentParent *data.Category
-		if currentParentID != nil {
-			for _, c := range categories {
-				if c.ID == *currentParentID {
-					currentParent = &c
-					break
-				}
-			}
-		}
-
-		// Filter categories to only those whose ParentID == currentParentID
-		var visibleCategories []data.Category
-		for _, c := range categories {
-			if (c.ParentID == nil && currentParentID == nil) || (c.ParentID != nil && currentParentID != nil && *c.ParentID == *currentParentID) {
-				visibleCategories = append(visibleCategories, c)
-			}
-		}
-
-		// Build breadcrumb path
-		breadcrumb := buildCategoryBreadcrumbByID(categories, currentParentID)
-
-		// Return the updated directory navigation content
-		w.Header().Set("Content-Type", "text/html")
-		content := templates.CategoriesDirectoryNavigation(visibleCategories, categories, currentParent, breadcrumb)
-		_ = content.Render(w)
-	} else {
-		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
-	}
+	s.handleCategoryCreationResponse(w, r, account.ID, parentID)
 }
 
-func (s *Server) updateCategoryHandler(w http.ResponseWriter, r *http.Request) {
-	account, ok := r.Context().Value("account").(*data.Account)
-	if !ok || account == nil {
-		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+// handleCategoryCreationResponse handles the response after creating a category
+func (s *Server) handleCategoryCreationResponse(w http.ResponseWriter, r *http.Request, accountID int, parentID *int) {
+	if !isHTMX(r) {
+		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
 		return
 	}
-	idStr := chi.URLParam(r, "id")
-	categoryID, err := strconv.Atoi(idStr)
+
+	// Get current parent ID from form or referer
+	currentParentID := s.getCurrentParentID(r, parentID)
+
+	// Get updated categories
+	categories, err := s.store.GetCategoriesByAccount(accountID)
 	if err != nil {
-		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
-		return
+
+	// Render the updated directory navigation
+	s.renderCategoryDirectoryNavigation(w, categories, currentParentID)
+}
+
+// getCurrentParentID gets the current parent ID from form or referer
+func (s *Server) getCurrentParentID(r *http.Request, parentID *int) *int {
+	if parentID != nil {
+		return parentID
 	}
-	name := r.FormValue("name")
-	parentIDStr := r.FormValue("parent_id")
-	var parentID *int
-	if parentIDStr != "" {
-		pid, err := strconv.Atoi(parentIDStr)
-		if err == nil {
-			parentID = &pid
+
+	// If no parent specified, check referer for current directory
+	referer := r.Header.Get("Referer")
+	if referer == "" {
+		return nil
+	}
+
+	u, err := url.Parse(referer)
+	if err != nil {
+		return nil
+	}
+
+	pidStr := u.Query().Get("parent_id")
+	if pidStr == "" {
+		return nil
+	}
+
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return nil
+	}
+
+	return &pid
+}
+
+// renderCategoryDirectoryNavigation renders the category directory navigation
+func (s *Server) renderCategoryDirectoryNavigation(w http.ResponseWriter, categories []data.Category, currentParentID *int) {
+	// Find current parent category (if any)
+	var currentParent *data.Category
+	if currentParentID != nil {
+		for _, c := range categories {
+			if c.ID == *currentParentID {
+				currentParent = &c
+				break
+			}
 		}
 	}
-	err = s.store.UpdateCategory(account.ID, categoryID, name, parentID)
-	if err != nil {
-		http.Error(w, "Failed to update category", http.StatusInternalServerError)
+
+	// Filter categories to only those whose ParentID == currentParentID
+	var visibleCategories []data.Category
+	for _, c := range categories {
+		if (c.ParentID == nil && currentParentID == nil) || (c.ParentID != nil && currentParentID != nil && *c.ParentID == *currentParentID) {
+			visibleCategories = append(visibleCategories, c)
+		}
+	}
+
+	// Build breadcrumb path
+	breadcrumb := buildCategoryBreadcrumbByID(categories, currentParentID)
+
+	// Return the updated directory navigation content
+	w.Header().Set("Content-Type", "text/html")
+	content := templates.CategoriesDirectoryNavigation(visibleCategories, categories, currentParent, breadcrumb)
+	if err := content.Render(w); err != nil {
+		log.Printf("Error rendering categories navigation: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/categories/", http.StatusSeeOther)
 }
 
 func (s *Server) deleteCategoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +485,9 @@ func (s *Server) deleteCategoryHandler(w http.ResponseWriter, r *http.Request) {
 	if isHTMX(r) {
 		// For delete, just return empty content to remove the card
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(""))
+		if _, err := w.Write([]byte("")); err != nil {
+			log.Printf("Error writing response: %v", err)
+		}
 	} else {
 		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
 	}
@@ -385,7 +512,11 @@ func (s *Server) transactionsPageHandler(w http.ResponseWriter, r *http.Request)
 	}
 	errMsg := r.URL.Query().Get("error")
 	page := templates.TransactionsPage(txs, cats, errMsg)
-	_ = templates.BaseLayoutWithAuth("Transactions - Budget App", true, page).Render(w)
+	if err := templates.BaseLayoutWithAuth("Transactions - Budget App", true, page).Render(w); err != nil {
+		log.Printf("Error rendering transactions page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) updateTransactionHandler(w http.ResponseWriter, r *http.Request) {
@@ -431,124 +562,331 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
 		return
 	}
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		http.Error(w, "Failed to parse form", http.StatusBadRequest)
-		return
-	}
-	file, _, err := r.FormFile("csv")
+
+	// Parse CSV file
+	records, err := parseCSVFile(r)
 	if err != nil {
-		http.Error(w, "Failed to get uploaded file", http.StatusBadRequest)
+		s.handleCSVError(w, r, err.Error())
 		return
 	}
-	defer file.Close()
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+
+	// Validate headers
+	colIdx, err := validateCSVHeaders(records[0])
 	if err != nil {
-		http.Error(w, "Failed to read CSV", http.StatusBadRequest)
+		s.handleCSVError(w, r, err.Error())
 		return
 	}
-	if len(records) == 0 {
-		http.Error(w, "CSV file is empty", http.StatusBadRequest)
+
+	// Process transactions
+	newCount, duplicateCount, err := s.processUploadedTransactions(account.ID, records, colIdx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	header := records[0]
-	required := map[string]bool{"date": false, "payee": false, "amount": false}
-	unrecognized := []string{}
-	colIdx := map[string]int{}
-	for i, col := range header {
-		colNorm := strings.ToLower(strings.TrimSpace(col))
-		switch colNorm {
-		case "date", "payee", "amount":
-			required[colNorm] = true
-			colIdx[colNorm] = i
-		default:
-			unrecognized = append(unrecognized, col)
+
+	// Redirect with success message
+	http.Redirect(w, r, fmt.Sprintf("/transactions/?uploaded=%d&duplicates=%d", newCount, duplicateCount), http.StatusSeeOther)
+}
+
+// handleCSVError handles CSV parsing errors with appropriate response format
+func (s *Server) handleCSVError(w http.ResponseWriter, r *http.Request, errMsg string) {
+	if isHTMX(r) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadRequest)
+		if _, err := w.Write([]byte(`<div class="alert alert-danger" role="alert">` + errMsg + `</div>`)); err != nil {
+			log.Printf("Error writing error message: %v", err)
+		}
+	} else {
+		http.Error(w, errMsg, http.StatusBadRequest)
+	}
+}
+
+// parseRuleFormData parses form data for rule creation
+func parseRuleFormData(r *http.Request) (name, newPayee, categoryIDStr, priorityStr string, err error) {
+	if err := r.ParseForm(); err != nil {
+		return "", "", "", "", err
+	}
+	return r.FormValue("name"), r.FormValue("new_payee"), r.FormValue("category_id"), r.FormValue("priority"), nil
+}
+
+// validateRuleCategory validates that a category belongs to the account
+func (s *Server) validateRuleCategory(accountID int, categoryIDStr string) (*int, error) {
+	if categoryIDStr == "" {
+		return nil, nil
+	}
+
+	categoryID, err := strconv.Atoi(categoryIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid category ID")
+	}
+
+	categories, err := s.store.GetCategoriesByAccount(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load categories")
+	}
+
+	for _, cat := range categories {
+		if cat.ID == categoryID {
+			return &categoryID, nil
 		}
 	}
-	missing := []string{}
-	for k, v := range required {
-		if !v {
-			missing = append(missing, k)
+
+	return nil, fmt.Errorf("category not found")
+}
+
+// parseRulePriority parses and validates rule priority
+func parseRulePriority(priorityStr string) (int, error) {
+	if priorityStr == "" {
+		return 0, nil
+	}
+
+	priority, err := strconv.Atoi(priorityStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid priority")
+	}
+
+	if priority < 0 || priority > 100 {
+		return 0, fmt.Errorf("priority must be between 0 and 100")
+	}
+
+	return priority, nil
+}
+
+// createRuleFromFormData creates a rule from form data
+func (s *Server) createRuleFromFormData(accountID int, name, newPayee, categoryIDStr, priorityStr string) (*data.Rule, error) {
+	var newPayeePtr *string
+	if newPayee != "" {
+		newPayeePtr = &newPayee
+	}
+
+	categoryID, err := s.validateRuleCategory(accountID, categoryIDStr)
+	if err != nil {
+		return nil, err
+	}
+
+	priority, err := parseRulePriority(priorityStr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &data.Rule{
+		AccountID:  accountID,
+		Name:       name,
+		NewPayee:   newPayeePtr,
+		CategoryID: categoryID,
+		Priority:   priority,
+	}, nil
+}
+
+// parseRuleConditions parses rule conditions from form data
+func parseRuleConditions(r *http.Request) []data.RuleCondition {
+	var conditions []data.RuleCondition
+	conditionCount := 0
+
+	for {
+		operator := r.FormValue(fmt.Sprintf("conditions[%d][operator]", conditionCount))
+		value := r.FormValue(fmt.Sprintf("conditions[%d][value]", conditionCount))
+		if operator == "" || value == "" {
+			break
+		}
+		conditions = append(conditions, data.RuleCondition{
+			Field:    "payee", // Conditions are always applied to payee
+			Operator: operator,
+			Value:    value,
+		})
+		conditionCount++
+	}
+
+	return conditions
+}
+
+// handleRuleCreationResponse handles the response after creating a rule
+func (s *Server) handleRuleCreationResponse(w http.ResponseWriter, r *http.Request, accountID int, createdRule *data.Rule, runImmediately bool) {
+	updatedCount := 0
+	if runImmediately && createdRule != nil {
+		count, err := s.store.ApplyRuleToAllTransactions(accountID, createdRule)
+		if err == nil {
+			updatedCount = count
 		}
 	}
-	if len(missing) > 0 || len(unrecognized) > 0 {
-		errMsg := "CSV error: "
-		if len(missing) > 0 {
-			errMsg += "Missing columns: " + strings.Join(missing, ", ")
-		}
-		if len(unrecognized) > 0 {
-			if len(missing) > 0 {
-				errMsg += ". "
-			}
-			errMsg += "Unrecognized columns: " + strings.Join(unrecognized, ", ")
-		}
-		if isHTMX(r) {
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`<div class="alert alert-danger" role="alert">` + errMsg + `</div>`))
-			return
-		} else {
-			http.Error(w, errMsg, http.StatusBadRequest)
-			return
+
+	if !isHTMX(r) {
+		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
+		return
+	}
+
+	// Return updated rules list with banner if needed
+	rules, err := s.store.GetRulesByAccount(accountID)
+	if err != nil {
+		http.Error(w, "Failed to load rules", http.StatusInternalServerError)
+		return
+	}
+	categories, err := s.store.GetCategoriesByAccount(accountID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	if updatedCount > 0 {
+		banner := fmt.Sprintf(`<div id="rule-banner" class="alert alert-success position-fixed top-0 start-50 translate-middle-x mt-3" style="z-index:2000; min-width:300px; text-align:center;">Updated %d transactions</div><script>setTimeout(function(){ var b=document.getElementById('rule-banner'); if(b){b.remove();}}, 3500);</script>`, updatedCount)
+		if _, err := w.Write([]byte(banner)); err != nil {
+			log.Printf("Error writing rule banner: %v", err)
 		}
 	}
-	var txs []data.Transaction
-	for i, rec := range records[1:] {
-		if len(rec) < len(header) {
-			http.Error(w, "Row "+strconv.Itoa(i+2)+" is missing columns", http.StatusBadRequest)
+	if err := templates.RenderRulesList(w, rules, categories); err != nil {
+		log.Printf("Error rendering rules list: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// parseTransactionPatchData parses form data for transaction patching
+func parseTransactionPatchData(r *http.Request) (payee string, categoryID *int, reviewed, hasCategoryID bool, err error) {
+	if err := r.ParseForm(); err != nil {
+		return "", nil, false, false, err
+	}
+
+	payee = r.FormValue("payee")
+	categoryIDStr := r.FormValue("category_id")
+	hasCategoryID = r.Form.Has("category_id")
+
+	if categoryIDStr != "" {
+		cid, err := strconv.Atoi(categoryIDStr)
+		if err == nil {
+			categoryID = &cid
+		}
+	} else if hasCategoryID {
+		categoryID = nil // explicitly set to null if empty string is sent
+	}
+
+	reviewed = r.FormValue("reviewed") == "on"
+
+	return payee, categoryID, reviewed, hasCategoryID, nil
+}
+
+// updateTransactionFields updates transaction fields in the database
+func (s *Server) updateTransactionFields(accountID, transactionID int, payee string, categoryID *int, reviewed, hasCategoryID bool) error {
+	if payee != "" {
+		if err := s.store.UpdateTransactionPayee(accountID, transactionID, payee); err != nil {
+			return fmt.Errorf("failed to update payee: %w", err)
+		}
+	}
+
+	if categoryID != nil || hasCategoryID {
+		if err := s.store.UpdateTransactionCategory(accountID, transactionID, categoryID); err != nil {
+			return fmt.Errorf("failed to update category: %w", err)
+		}
+	}
+
+	if reviewed {
+		if err := s.store.MarkTransactionReviewed(accountID, transactionID); err != nil {
+			return fmt.Errorf("failed to mark as reviewed: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// handleTransactionPatchResponse handles the response after patching a transaction
+func (s *Server) handleTransactionPatchResponse(w http.ResponseWriter, r *http.Request, accountID, transactionID int, updateErr error) {
+	if !isHTMX(r) {
+		http.Redirect(w, r, "/transactions/", http.StatusSeeOther)
+		return
+	}
+
+	// Fetch updated transaction list and categories for rendering
+	txs, cats, err := s.getTransactionsAndCategories(accountID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	if updateErr != nil {
+		s.handleTransactionUpdateError(w, txs, cats, transactionID, updateErr)
+		return
+	}
+
+	s.handleTransactionUpdateSuccess(w, txs, cats, transactionID)
+}
+
+// getTransactionsAndCategories fetches transactions and categories for an account
+func (s *Server) getTransactionsAndCategories(accountID int) ([]data.Transaction, []data.Category, error) {
+	txs, err := s.store.GetTransactionsByAccount(accountID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load transactions")
+	}
+	cats, err := s.store.GetCategoriesByAccount(accountID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load categories")
+	}
+	return txs, cats, nil
+}
+
+// handleTransactionUpdateError handles the response when transaction update fails
+func (s *Server) handleTransactionUpdateError(w http.ResponseWriter, txs []data.Transaction, cats []data.Category, transactionID int, updateErr error) {
+	updatedTx := s.findTransactionByID(txs, transactionID)
+	if updatedTx == nil {
+		// If transaction not found in list, it might have been reviewed and hidden
+		// In this case, just return the updated list
+		if err := templates.RenderTransactionListWithSelectableCards(w, txs, cats); err != nil {
+			log.Printf("Error rendering transaction list: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		dateStr := rec[colIdx["date"]]
-		payee := rec[colIdx["payee"]]
-		amountStr := rec[colIdx["amount"]]
-		date, err := time.Parse("2006-01-02", dateStr)
-		if err != nil {
-			// Try mm/dd/yyyy
-			date, err = time.Parse("01/02/2006", dateStr)
-			if err != nil {
-				http.Error(w, "Invalid date in row "+strconv.Itoa(i+2)+": "+dateStr, http.StatusBadRequest)
+		return
+	}
+	// Render the modal with the error message
+	w.WriteHeader(http.StatusBadRequest)
+	if err := templates.TransactionCardWithModalSelectable(updatedTx, cats, "Failed to update transaction: "+updateErr.Error()).Render(w); err != nil {
+		log.Printf("Error rendering transaction card: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleTransactionUpdateSuccess handles the response when transaction update succeeds
+func (s *Server) handleTransactionUpdateSuccess(w http.ResponseWriter, txs []data.Transaction, cats []data.Category, transactionID int) {
+	transactionStillVisible := s.isTransactionVisible(txs, transactionID)
+	if transactionStillVisible {
+		// Transaction is still visible, return just the updated card
+		updatedTx := s.findTransactionByID(txs, transactionID)
+		if updatedTx != nil {
+			if err := templates.TransactionCardWithModalSelectable(updatedTx, cats, "").Render(w); err != nil {
+				log.Printf("Error rendering transaction card: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
 		}
-		amountCents, err := parseAmountToCents(amountStr)
-		if err != nil {
-			http.Error(w, "Invalid amount in row "+strconv.Itoa(i+2)+": "+amountStr, http.StatusBadRequest)
-			return
-		}
-		txs = append(txs, data.Transaction{
-			AccountID:     account.ID,
-			Date:          date,
-			OriginalPayee: payee,
-			Payee:         payee,
-			Amount:        amountCents,
-		})
-	}
-	// Deduplicate: fetch all existing transactions for this account (including reviewed ones)
-	existingTxs, err := s.store.GetAllTransactionsByAccount(account.ID)
-	if err != nil {
-		http.Error(w, "Failed to check for duplicates", http.StatusInternalServerError)
-		return
-	}
-	txKey := func(date time.Time, originalPayee string, amount int) string {
-		return date.Format("2006-01-02") + "|" + strings.ToLower(strings.TrimSpace(originalPayee)) + "|" + strconv.Itoa(amount)
-	}
-	existing := make(map[string]struct{})
-	for _, t := range existingTxs {
-		existing[txKey(t.Date, t.OriginalPayee, t.Amount)] = struct{}{}
-	}
-	var deduped []data.Transaction
-	for _, t := range txs {
-		key := txKey(t.Date, t.OriginalPayee, t.Amount)
-		if _, found := existing[key]; !found {
-			deduped = append(deduped, t)
-			existing[key] = struct{}{} // prevent duplicates within the same upload
+	} else {
+		// Transaction was marked as reviewed and is now hidden, return empty content to remove the card
+		if _, err := w.Write([]byte("")); err != nil {
+			log.Printf("Error writing response: %v", err)
 		}
 	}
-	if err := s.store.BulkInsertTransactions(account.ID, deduped); err != nil {
-		http.Error(w, "Failed to import transactions", http.StatusInternalServerError)
-		return
+}
+
+// findTransactionByID finds a transaction by ID in the list
+func (s *Server) findTransactionByID(txs []data.Transaction, transactionID int) *data.Transaction {
+	for i := range txs {
+		t := &txs[i]
+		if t.ID == transactionID {
+			return t
+		}
 	}
-	http.Redirect(w, r, "/transactions/", http.StatusSeeOther)
+	return nil
+}
+
+// isTransactionVisible checks if a transaction is still visible in the list
+func (s *Server) isTransactionVisible(txs []data.Transaction, transactionID int) bool {
+	for i := range txs {
+		t := &txs[i]
+		if t.ID == transactionID {
+			return true
+		}
+	}
+	return false
 }
 
 // parseAmountToCents parses a decimal string to int cents
@@ -558,14 +896,11 @@ func parseAmountToCents(s string) (int, error) {
 	neg := false
 	if strings.HasPrefix(s, "-") {
 		neg = true
-		s = s[1:]
-	} else if strings.HasPrefix(s, "+") {
-		s = s[1:]
 	}
+	s = strings.TrimPrefix(s, "-")
+	s = strings.TrimPrefix(s, "+")
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "$") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "$")
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0, err
@@ -603,101 +938,31 @@ func (s *Server) patchTransactionHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	idStr := chi.URLParam(r, "id")
-	transactionID, err := strconv.Atoi(idStr)
+
+	transactionID, err := s.parseTransactionID(r)
 	if err != nil {
 		http.Error(w, "Invalid transaction ID", http.StatusBadRequest)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+
+	// Parse form data
+	payee, categoryID, reviewed, hasCategoryID, err := parseTransactionPatchData(r)
+	if err != nil {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	payee := r.FormValue("payee")
-	categoryIDStr := r.FormValue("category_id")
-	var categoryID *int
-	if categoryIDStr != "" {
-		cid, err := strconv.Atoi(categoryIDStr)
-		if err == nil {
-			categoryID = &cid
-		}
-	} else if r.Form.Has("category_id") {
-		categoryID = nil // explicitly set to null if empty string is sent
-	}
 
-	reviewed := r.FormValue("reviewed") == "on"
+	// Update transaction fields
+	updateErr := s.updateTransactionFields(account.ID, transactionID, payee, categoryID, reviewed, hasCategoryID)
 
-	// Try to update the transaction
-	var updateErr error
-	if payee != "" {
-		updateErr = s.store.UpdateTransactionPayee(account.ID, transactionID, payee)
-	}
-	if r.Form.Has("category_id") {
-		if updateErr == nil { // Only try if previous update succeeded
-			updateErr = s.store.UpdateTransactionCategory(account.ID, transactionID, categoryID)
-		}
-	}
-	if updateErr == nil {
-		updateErr = s.store.UpdateTransactionReviewed(account.ID, transactionID, reviewed)
-	}
+	// Handle response
+	s.handleTransactionPatchResponse(w, r, account.ID, transactionID, updateErr)
+}
 
-	// Fetch updated transaction list and categories for rendering
-	txs, err := s.store.GetTransactionsByAccount(account.ID)
-	if err != nil {
-		http.Error(w, "Failed to load transactions", http.StatusInternalServerError)
-		return
-	}
-	cats, err := s.store.GetCategoriesByAccount(account.ID)
-	if err != nil {
-		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html")
-	if updateErr != nil {
-		// Find the specific transaction for error display
-		var updatedTx *data.Transaction
-		for _, t := range txs {
-			if t.ID == transactionID {
-				updatedTx = &t
-				break
-			}
-		}
-		if updatedTx == nil {
-			// If transaction not found in list, it might have been reviewed and hidden
-			// In this case, just return the updated list
-			templates.RenderTransactionListWithSelectableCards(w, txs, cats)
-			return
-		}
-		// Render the modal with the error message
-		w.WriteHeader(http.StatusBadRequest)
-		templates.TransactionCardWithModalSelectable(*updatedTx, cats, "Failed to update transaction: "+updateErr.Error()).Render(w)
-		return
-	}
-
-	// Check if the transaction was marked as reviewed and should be hidden
-	var transactionStillVisible bool
-	for _, t := range txs {
-		if t.ID == transactionID {
-			transactionStillVisible = true
-			break
-		}
-	}
-
-	if transactionStillVisible {
-		// Transaction is still visible, return just the updated card
-		var updatedTx *data.Transaction
-		for _, t := range txs {
-			if t.ID == transactionID {
-				updatedTx = &t
-				break
-			}
-		}
-		templates.TransactionCardWithModalSelectable(*updatedTx, cats, "").Render(w)
-	} else {
-		// Transaction was marked as reviewed and is now hidden, return empty content to remove the card
-		w.Write([]byte(""))
-	}
+// parseTransactionID extracts and parses the transaction ID from the request
+func (s *Server) parseTransactionID(r *http.Request) (int, error) {
+	idStr := chi.URLParam(r, "id")
+	return strconv.Atoi(idStr)
 }
 
 // GET /transactions/{id}/payee/edit returns an inline text input for payee
@@ -719,16 +984,19 @@ func (s *Server) editPayeeInlineHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var payee string
-	for _, t := range txns {
+	for i := range txns {
+		t := &txns[i]
 		if t.ID == transactionID {
 			payee = t.Payee
 			break
 		}
 	}
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(`<form hx-patch="/transactions/` + idStr + `" hx-trigger="blur from:input, submit" hx-target="this" hx-swap="outerHTML" style="display:inline;">
+	if _, err := w.Write([]byte(`<form hx-patch="/transactions/` + idStr + `" hx-trigger="blur from:input, submit" hx-target="this" hx-swap="outerHTML" style="display:inline;">
 		<input type="text" name="payee" value="` + htmlEscape(payee) + `" class="form-control form-control-sm w-auto d-inline" autofocus onblur="this.form.requestSubmit()">
-	</form>`))
+</form>`)); err != nil {
+		log.Printf("Error writing form response: %v", err)
+	}
 }
 
 // GET /transactions/{id}/category/edit returns an inline select for category
@@ -750,7 +1018,8 @@ func (s *Server) editCategoryInlineHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var currentCatID *int
-	for _, t := range txns {
+	for i := range txns {
+		t := &txns[i]
 		if t.ID == transactionID {
 			currentCatID = t.CategoryID
 			break
@@ -777,7 +1046,9 @@ func (s *Server) editCategoryInlineHandler(w http.ResponseWriter, r *http.Reques
 	}
 	sb.WriteString(`</select>`)
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(sb.String()))
+	if _, err := w.Write([]byte(sb.String())); err != nil {
+		log.Printf("Error writing response: %v", err)
+	}
 }
 
 // Helper to escape HTML
@@ -811,9 +1082,10 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var transaction *data.Transaction
-	for _, t := range txs {
+	for i := range txs {
+		t := &txs[i]
 		if t.ID == transactionID {
-			transaction = &t
+			transaction = t
 			break
 		}
 	}
@@ -832,7 +1104,7 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "text/html")
 
 	// Render the edit form
-	g.El("form",
+	form := g.El("form",
 		g.Attr("hx-patch", "/transactions/"+strconv.Itoa(transaction.ID)),
 		g.Attr("hx-target", "closest .mb-2"),
 		g.Attr("hx-swap", "outerHTML"),
@@ -879,7 +1151,12 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
 			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 		),
-	).Render(w)
+	)
+	if err := form.Render(w); err != nil {
+		log.Printf("Error rendering transaction edit form: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // Handler to mark a transaction as reviewed
@@ -933,7 +1210,11 @@ func (s *Server) markTransactionsReviewedHandler(w http.ResponseWriter, r *http.
 	}
 	w.Header().Set("Content-Type", "text/html")
 	// Render the transaction list with selectable cards
-	templates.RenderTransactionListWithSelectableCards(w, txs, cats)
+	if err := templates.RenderTransactionListWithSelectableCards(w, txs, cats); err != nil {
+		log.Printf("Error rendering transaction list: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -942,24 +1223,17 @@ func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	idStr := chi.URLParam(r, "id")
-	categoryID, err := strconv.Atoi(idStr)
+
+	categoryID, err := s.parseCategoryID(r)
 	if err != nil {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+
+	name, parentID, err := parseCategoryFormData(r)
+	if err != nil {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
-	}
-	name := r.FormValue("name")
-	parentIDStr := r.FormValue("parent_id")
-	var parentID *int
-	if parentIDStr != "" {
-		pid, err := strconv.Atoi(parentIDStr)
-		if err == nil {
-			parentID = &pid
-		}
 	}
 
 	// Get the category before updating to check if parent changed
@@ -969,28 +1243,12 @@ func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var oldParentID *int
-	for _, c := range categories {
-		if c.ID == categoryID {
-			oldParentID = c.ParentID
-			break
-		}
-	}
+	oldParentID := s.getCategoryParentID(categories, categoryID)
 
-	// Validate that parentID doesn't create a cyclic reference
-	if parentID != nil {
-		// Build a map for quick lookups
-		catMap := make(map[int]*data.Category)
-		for i := range categories {
-			catMap[categories[i].ID] = &categories[i]
-		}
-
-		// Check if the new parent is a descendant of the category being edited (would create cyclic reference)
-		descendants := s.store.GetDescendants(catMap, categoryID)
-		if descendants[*parentID] {
-			http.Error(w, "Cannot create cyclic reference", http.StatusBadRequest)
-			return
-		}
+	// Validate parent relationship
+	if err := validateCategoryParent(categories, categoryID, parentID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	err = s.store.UpdateCategory(account.ID, categoryID, name, parentID)
@@ -999,46 +1257,232 @@ func (s *Server) editCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this is an HTMX request
-	if isHTMX(r) {
-		// Check if parent changed - if so, remove the card, otherwise update it
-		parentChanged := (oldParentID == nil && parentID != nil) ||
-			(oldParentID != nil && parentID == nil) ||
-			(oldParentID != nil && parentID != nil && *oldParentID != *parentID)
+	s.handleCategoryUpdateResponse(w, r, account.ID, categoryID, oldParentID, parentID)
+}
 
-		if parentChanged {
-			// Parent changed, remove the card
-			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(""))
-		} else {
-			// Parent didn't change, update the card
-			// Get updated categories
-			categories, err := s.store.GetCategoriesByAccount(account.ID)
-			if err != nil {
-				http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-				return
-			}
+// parseCategoryID extracts and parses the category ID from the request
+func (s *Server) parseCategoryID(r *http.Request) (int, error) {
+	idStr := chi.URLParam(r, "id")
+	return strconv.Atoi(idStr)
+}
 
-			// Find the updated category
-			var updatedCategory *data.Category
-			for _, c := range categories {
-				if c.ID == categoryID {
-					updatedCategory = &c
-					break
-				}
-			}
+// getCategoryParentID finds the parent ID of a category
+func (s *Server) getCategoryParentID(categories []data.Category, categoryID int) *int {
+	for _, c := range categories {
+		if c.ID == categoryID {
+			return c.ParentID
+		}
+	}
+	return nil
+}
 
-			if updatedCategory != nil {
-				w.Header().Set("Content-Type", "text/html")
-				card := templates.CategoryCardOnly(*updatedCategory, categories)
-				_ = card.Render(w)
-			} else {
-				http.Error(w, "Category not found", http.StatusNotFound)
+// handleCategoryUpdateResponse handles the response after updating a category
+func (s *Server) handleCategoryUpdateResponse(w http.ResponseWriter, r *http.Request, accountID, categoryID int, oldParentID, parentID *int) {
+	if !isHTMX(r) {
+		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
+		return
+	}
+
+	parentChanged := s.hasParentChanged(oldParentID, parentID)
+	if parentChanged {
+		// Parent changed, remove the card
+		w.Header().Set("Content-Type", "text/html")
+		if _, err := w.Write([]byte("")); err != nil {
+			log.Printf("Error writing response: %v", err)
+		}
+		return
+	}
+
+	// Parent didn't change, update the card
+	s.renderUpdatedCategoryCard(w, accountID, categoryID)
+}
+
+// hasParentChanged checks if the parent category has changed
+func (s *Server) hasParentChanged(oldParentID, parentID *int) bool {
+	return (oldParentID == nil && parentID != nil) ||
+		(oldParentID != nil && parentID == nil) ||
+		(oldParentID != nil && parentID != nil && *oldParentID != *parentID)
+}
+
+// renderUpdatedCategoryCard renders the updated category card
+func (s *Server) renderUpdatedCategoryCard(w http.ResponseWriter, accountID, categoryID int) {
+	categories, err := s.store.GetCategoriesByAccount(accountID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+
+	updatedCategory := s.findCategoryByID(categories, categoryID)
+	if updatedCategory == nil {
+		http.Error(w, "Category not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	card := templates.CategoryCardOnly(updatedCategory, categories)
+	if err := card.Render(w); err != nil {
+		log.Printf("Error rendering category card: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// findCategoryByID finds a category by its ID
+func (s *Server) findCategoryByID(categories []data.Category, categoryID int) *data.Category {
+	for _, c := range categories {
+		if c.ID == categoryID {
+			return &c
+		}
+	}
+	return nil
+}
+
+// parseCSVFile parses the uploaded CSV file and returns records
+func parseCSVFile(r *http.Request) ([][]string, error) {
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	file, _, err := r.FormFile("csv")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get uploaded file: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CSV: %w", err)
+	}
+
+	if len(records) == 0 {
+		return nil, fmt.Errorf("CSV file is empty")
+	}
+
+	return records, nil
+}
+
+// validateCSVHeaders validates CSV headers and returns column indices
+func validateCSVHeaders(header []string) (map[string]int, error) {
+	required := map[string]bool{"date": false, "payee": false, "amount": false}
+	colIdx := map[string]int{}
+
+	for i, col := range header {
+		col = strings.ToLower(strings.TrimSpace(col))
+		switch col {
+		case "date":
+			required["date"] = true
+			colIdx["date"] = i
+		case "payee", "description", "memo":
+			required["payee"] = true
+			colIdx["payee"] = i
+		case "amount", "debit", "credit":
+			required["amount"] = true
+			colIdx["amount"] = i
+		default:
+			// Ignore unrecognized columns
+		}
+	}
+
+	for field, found := range required {
+		if !found {
+			return nil, fmt.Errorf("missing required column: %s", field)
+		}
+	}
+
+	return colIdx, nil
+}
+
+// parseTransactionFromRecord parses a transaction from a CSV record
+func parseTransactionFromRecord(record []string, colIdx map[string]int) (*data.Transaction, error) {
+	dateStr := strings.TrimSpace(record[colIdx["date"]])
+	payee := strings.TrimSpace(record[colIdx["payee"]])
+	amountStr := strings.TrimSpace(record[colIdx["amount"]])
+
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		// Try other common date formats
+		formats := []string{"01/02/2006", "1/2/2006", "01-02-2006", "1-2-2006"}
+		for _, format := range formats {
+			if date, err = time.Parse(format, dateStr); err == nil {
+				break
 			}
 		}
-	} else {
-		http.Redirect(w, r, "/categories/", http.StatusSeeOther)
+		if err != nil {
+			return nil, fmt.Errorf("invalid date format: %s", dateStr)
+		}
 	}
+
+	amount, err := parseAmountToCents(amountStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid amount format: %s", amountStr)
+	}
+
+	return &data.Transaction{
+		Date:          date,
+		OriginalPayee: payee,
+		Payee:         payee,
+		Amount:        amount,
+		Reviewed:      false,
+	}, nil
+}
+
+// processUploadedTransactions processes the uploaded transactions and returns results
+func (s *Server) processUploadedTransactions(accountID int, records [][]string, colIdx map[string]int) (newCount, duplicateCount int, err error) {
+	var txs []data.Transaction
+
+	// Parse all transactions first
+	for i := 1; i < len(records); i++ { // Skip header
+		record := records[i]
+		if len(record) <= colIdx["amount"] {
+			continue // Skip incomplete rows
+		}
+
+		tx, err := parseTransactionFromRecord(record, colIdx)
+		if err != nil {
+			continue // Skip invalid rows
+		}
+
+		tx.AccountID = accountID
+		txs = append(txs, *tx)
+	}
+
+	// Get existing transactions for duplicate checking
+	existingTxs, err := s.store.GetAllTransactionsByAccount(accountID)
+	if err != nil {
+		return newCount, duplicateCount, fmt.Errorf("failed to check for duplicates: %w", err)
+	}
+
+	// Create a map of existing transactions for quick lookup
+	existing := make(map[string]struct{})
+	for i := range existingTxs {
+		t := &existingTxs[i]
+		key := fmt.Sprintf("%s|%s|%d", t.Date.Format("2006-01-02"), strings.ToLower(strings.TrimSpace(t.OriginalPayee)), t.Amount)
+		existing[key] = struct{}{}
+	}
+
+	// Filter out duplicates and prepare for bulk insert
+	var deduped []data.Transaction
+	for i := range txs {
+		tx := &txs[i]
+		key := fmt.Sprintf("%s|%s|%d", tx.Date.Format("2006-01-02"), strings.ToLower(strings.TrimSpace(tx.OriginalPayee)), tx.Amount)
+		if _, found := existing[key]; found {
+			duplicateCount++
+		} else {
+			deduped = append(deduped, *tx)
+			existing[key] = struct{}{} // Prevent duplicates within the same upload
+		}
+	}
+
+	// Bulk insert new transactions
+	if len(deduped) > 0 {
+		if err := s.store.BulkInsertTransactions(accountID, deduped); err != nil {
+			return newCount, duplicateCount, fmt.Errorf("failed to import transactions: %w", err)
+		}
+		newCount = len(deduped)
+	}
+
+	return newCount, duplicateCount, nil
 }
 
 // Rule management handlers
@@ -1060,7 +1504,11 @@ func (s *Server) rulesPageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := templates.RulesPage(rules, categories)
-	_ = templates.BaseLayoutWithAuth("Rules - Budget App", true, page).Render(w)
+	if err := templates.BaseLayoutWithAuth("Rules - Budget App", true, page).Render(w); err != nil {
+		log.Printf("Error rendering rules page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) createRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1069,111 +1517,36 @@ func (s *Server) createRuleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+
+	// Parse form data
+	name, newPayee, categoryIDStr, priorityStr, err := parseRuleFormData(r)
+	if err != nil {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
 
-	name := r.FormValue("name")
-	newPayee := r.FormValue("new_payee")
-	categoryIDStr := r.FormValue("category_id")
-	priorityStr := r.FormValue("priority")
-
-	var newPayeePtr *string
-	if newPayee != "" {
-		newPayeePtr = &newPayee
+	// Create rule from form data
+	rule, err := s.createRuleFromFormData(account.ID, name, newPayee, categoryIDStr, priorityStr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	var categoryID *int
-	if categoryIDStr != "" {
-		cid, err := strconv.Atoi(categoryIDStr)
-		if err == nil {
-			// Validate that the category belongs to the current account
-			categories, err := s.store.GetCategoriesByAccount(account.ID)
-			if err != nil {
-				http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-				return
-			}
+	// Parse conditions
+	conditions := parseRuleConditions(r)
 
-			// Check if the category ID exists for this account
-			categoryExists := false
-			for _, cat := range categories {
-				if cat.ID == cid {
-					categoryExists = true
-					break
-				}
-			}
-
-			if categoryExists {
-				categoryID = &cid
-			} else {
-				// Category doesn't belong to this account, ignore it
-				categoryID = nil
-			}
-		}
-	}
-
-	priority := 0
-	if priorityStr != "" {
-		if p, err := strconv.Atoi(priorityStr); err == nil {
-			priority = p
-		}
-	}
-
-	// Parse conditions from form
-	var conditions []data.RuleCondition
-	conditionCount := 0
-	for {
-		operator := r.FormValue(fmt.Sprintf("conditions[%d][operator]", conditionCount))
-		value := r.FormValue(fmt.Sprintf("conditions[%d][value]", conditionCount))
-		if operator == "" || value == "" {
-			break
-		}
-		conditions = append(conditions, data.RuleCondition{
-			Field:    "payee", // Conditions are always applied to payee
-			Operator: operator,
-			Value:    value,
-		})
-		conditionCount++
-	}
-
-	createdRule, err := s.store.CreateRule(account.ID, name, newPayeePtr, categoryID, priority, conditions)
+	// Create the rule in the database
+	createdRule, err := s.store.CreateRule(account.ID, rule.Name, rule.NewPayee, rule.CategoryID, rule.Priority, conditions)
 	if err != nil {
 		http.Error(w, "Failed to create rule", http.StatusInternalServerError)
 		return
 	}
 
 	// Check if run_immediately was requested
-	updatedCount := 0
-	if r.FormValue("run_immediately") == "on" || r.FormValue("run_immediately") == "true" {
-		if createdRule != nil {
-			count, err := s.store.ApplyRuleToAllTransactions(account.ID, *createdRule)
-			if err == nil {
-				updatedCount = count
-			}
-		}
-	}
+	runImmediately := r.FormValue("run_immediately") == "on" || r.FormValue("run_immediately") == "true"
 
-	if isHTMX(r) {
-		// Return updated rules list with banner if needed
-		rules, err := s.store.GetRulesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
-			return
-		}
-		categories, err := s.store.GetCategoriesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		if updatedCount > 0 {
-			w.Write([]byte(`<div id="rule-banner" class="alert alert-success position-fixed top-0 start-50 translate-middle-x mt-3" style="z-index:2000; min-width:300px; text-align:center;">Updated ` + strconv.Itoa(updatedCount) + ` transactions</div><script>setTimeout(function(){ var b=document.getElementById('rule-banner'); if(b){b.remove();}}, 3500);</script>`))
-		}
-		templates.RenderRulesList(w, rules, categories)
-	} else {
-		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
-	}
+	// Handle response
+	s.handleRuleCreationResponse(w, r, account.ID, createdRule, runImmediately)
 }
 
 func (s *Server) updateRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1182,103 +1555,45 @@ func (s *Server) updateRuleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	idStr := chi.URLParam(r, "id")
-	ruleID, err := strconv.Atoi(idStr)
+
+	// Parse rule ID
+	ruleID, err := s.parseRuleID(r)
 	if err != nil {
 		http.Error(w, "Invalid rule ID", http.StatusBadRequest)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+
+	// Parse form data
+	name, newPayee, categoryIDStr, priorityStr, err := parseRuleFormData(r)
+	if err != nil {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
 
-	name := r.FormValue("name")
-	newPayee := r.FormValue("new_payee")
-	categoryIDStr := r.FormValue("category_id")
-	priorityStr := r.FormValue("priority")
-
-	var newPayeePtr *string
-	if newPayee != "" {
-		newPayeePtr = &newPayee
+	// Create rule from form data
+	rule, err := s.createRuleFromFormData(account.ID, name, newPayee, categoryIDStr, priorityStr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	var categoryID *int
-	if categoryIDStr != "" {
-		cid, err := strconv.Atoi(categoryIDStr)
-		if err == nil {
-			// Validate that the category belongs to the current account
-			categories, err := s.store.GetCategoriesByAccount(account.ID)
-			if err != nil {
-				http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-				return
-			}
+	// Parse conditions
+	conditions := parseRuleConditions(r)
 
-			// Check if the category ID exists for this account
-			categoryExists := false
-			for _, cat := range categories {
-				if cat.ID == cid {
-					categoryExists = true
-					break
-				}
-			}
-
-			if categoryExists {
-				categoryID = &cid
-			} else {
-				// Category doesn't belong to this account, ignore it
-				categoryID = nil
-			}
-		}
-	}
-
-	priority := 0
-	if priorityStr != "" {
-		if p, err := strconv.Atoi(priorityStr); err == nil {
-			priority = p
-		}
-	}
-
-	// Parse conditions from form
-	var conditions []data.RuleCondition
-	conditionCount := 0
-	for {
-		operator := r.FormValue(fmt.Sprintf("conditions[%d][operator]", conditionCount))
-		value := r.FormValue(fmt.Sprintf("conditions[%d][value]", conditionCount))
-		if operator == "" || value == "" {
-			break
-		}
-		conditions = append(conditions, data.RuleCondition{
-			Field:    "payee", // Conditions are always applied to payee
-			Operator: operator,
-			Value:    value,
-		})
-		conditionCount++
-	}
-
-	err = s.store.UpdateRule(account.ID, ruleID, name, newPayeePtr, categoryID, priority, conditions)
+	// Update the rule
+	err = s.store.UpdateRule(account.ID, ruleID, rule.Name, rule.NewPayee, rule.CategoryID, rule.Priority, conditions)
 	if err != nil {
 		http.Error(w, "Failed to update rule", http.StatusInternalServerError)
 		return
 	}
 
-	if isHTMX(r) {
-		// Return updated rules list
-		rules, err := s.store.GetRulesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
-			return
-		}
-		categories, err := s.store.GetCategoriesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		templates.RenderRulesList(w, rules, categories)
-	} else {
-		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
-	}
+	s.renderRulesListResponse(w, r, account)
+}
+
+// parseRuleID parses rule ID from URL parameters
+func (s *Server) parseRuleID(r *http.Request) (int, error) {
+	idStr := chi.URLParam(r, "id")
+	return strconv.Atoi(idStr)
 }
 
 func (s *Server) deleteRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1300,23 +1615,7 @@ func (s *Server) deleteRuleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isHTMX(r) {
-		// Return updated rules list
-		rules, err := s.store.GetRulesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
-			return
-		}
-		categories, err := s.store.GetCategoriesByAccount(account.ID)
-		if err != nil {
-			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		templates.RenderRulesList(w, rules, categories)
-	} else {
-		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
-	}
+	s.renderRulesListResponse(w, r, account)
 }
 
 func (s *Server) toggleRuleHandler(w http.ResponseWriter, r *http.Request) {
@@ -1353,9 +1652,10 @@ func (s *Server) toggleRuleHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Find the specific rule that was toggled
 		var updatedRule *data.Rule
-		for _, rule := range rules {
+		for i := range rules {
+			rule := &rules[i]
 			if rule.ID == ruleID {
-				updatedRule = &rule
+				updatedRule = rule
 				break
 			}
 		}
@@ -1367,7 +1667,11 @@ func (s *Server) toggleRuleHandler(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html")
 		// Return only the updated rule card
-		templates.RuleCard(*updatedRule, categories).Render(w)
+		if err := templates.RuleCard(updatedRule, categories).Render(w); err != nil {
+			log.Printf("Error rendering rule card: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	} else {
 		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
 	}
@@ -1394,9 +1698,10 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rule *data.Rule
-	for _, r := range rules {
+	for i := range rules {
+		r := &rules[i]
 		if r.ID == ruleID {
-			rule = &r
+			rule = r
 			break
 		}
 	}
@@ -1416,7 +1721,7 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	// Render the edit form
-	g.El("form",
+	form := g.El("form",
 		g.Attr("hx-put", "/rules/"+strconv.Itoa(rule.ID)),
 		g.Attr("hx-target", "#rules-list"),
 		g.Attr("hx-swap", "outerHTML"),
@@ -1451,5 +1756,10 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 				container.insertBefore(clone, container.lastElementChild);
 			};
 		`)),
-	).Render(w)
+	)
+	if err := form.Render(w); err != nil {
+		log.Printf("Error rendering rule edit form: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
