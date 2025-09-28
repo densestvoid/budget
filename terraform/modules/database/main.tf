@@ -1,6 +1,15 @@
 # Database module for both PR and Production deployments
 # This module creates a managed PostgreSQL database cluster
 
+terraform {
+  required_providers {
+    digitalocean = {
+      source  = "digitalocean/digitalocean"
+      version = "~> 2.0"
+    }
+  }
+}
+
 # Managed PostgreSQL database with private VPC networking
 resource "digitalocean_database_cluster" "budget_db" {
   name                 = var.database_name

@@ -1,6 +1,15 @@
 # App module for both PR and Production deployments
 # This module creates DigitalOcean App Platform applications
 
+terraform {
+  required_providers {
+    digitalocean = {
+      source  = "digitalocean/digitalocean"
+      version = "~> 2.0"
+    }
+  }
+}
+
 # Create migration app that runs migrations and exits
 resource "digitalocean_app" "budget_migrations" {
   # Ensure database is ready, health-checked, and schema configured
