@@ -30,11 +30,11 @@ locals {
   # Sanitize deployment_id for DigitalOcean naming constraints
   sanitized_id = replace(replace(replace(var.deployment_id, "/[^a-zA-Z0-9_-]/", "-"), "/^-+|-+$/", ""), "/-+/", "-")
   
-  # Create shorter versions for different resource types
-  short_id = substr(local.sanitized_id, 0, 20)
-  vpc_id = substr(local.sanitized_id, 0, 21)
-  app_id = substr(local.sanitized_id, 0, 32)
-  migration_app_id = substr(local.sanitized_id, 0, 21)
+  # Create shorter versions for different resource types, ensuring no trailing hyphens
+  short_id = replace(substr(local.sanitized_id, 0, 20), "/-$/", "")
+  vpc_id = replace(substr(local.sanitized_id, 0, 21), "/-$/", "")
+  app_id = replace(substr(local.sanitized_id, 0, 32), "/-$/", "")
+  migration_app_id = replace(substr(local.sanitized_id, 0, 21), "/-$/", "")
   
   # PR-specific naming
   vpc_name = "budget-vpc-${local.vpc_id}"
