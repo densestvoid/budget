@@ -218,8 +218,6 @@ jobs:
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
         docker_image_tag = "${{ env.IMAGE_TAG }}"
-        github_token = "${{ secrets.GITHUB_TOKEN }}"
-        auto_terminate_minutes = 30
         EOF
         
         echo "✅ Terraform configuration prepared"
