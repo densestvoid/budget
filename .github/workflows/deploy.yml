@@ -179,6 +179,7 @@ jobs:
         # Build and push with buildx
         docker buildx build \
           --platform linux/amd64 \
+          --file Dockerfile.prod \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.DEPLOYMENT_ID }} \
           --cache-from type=local,src=/tmp/.buildx-cache \

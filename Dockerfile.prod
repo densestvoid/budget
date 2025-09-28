@@ -1,60 +1,33 @@
-# Multi-stage build for production
-FROM golang:1.24-alpine AS builder
+# Build stage
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Install git and ca-certificates for dependencies
-RUN apk add --no-cache git ca-certificates
-
-# Copy go mod files first for better caching
+# Copy go mod files
 COPY go.mod go.sum ./
 
-# Download dependencies (cached if go.mod/go.sum unchanged)
+# Download dependencies
 RUN go mod download
 
-# Copy only necessary source files for build
-COPY main.go ./
-COPY cmd/ cmd/
-COPY server/ server/
-COPY app/ app/
-COPY data/ data/
-COPY templates/ templates/
-COPY scripts/ scripts/
-COPY config.yaml ./
+# Copy source code
+COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o budget main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o budget .
 
-# Final stage
+# Production stage
 FROM alpine:latest
 
-# Install ca-certificates and curl for health checks
-RUN apk --no-cache add ca-certificates tzdata curl
+# Install ca-certificates for HTTPS requests
+RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 
 # Copy the binary from builder stage
 COPY --from=builder /app/budget .
 
-# Copy configuration files
-COPY --from=builder /app/config.yaml .
-COPY --from=builder /app/templates ./templates/
-
-# Copy startup script
-COPY --from=builder /app/scripts/start-with-retry.sh .
-RUN chmod +x start-with-retry.sh
-
-# Create non-root user and set permissions
-RUN adduser -D -s /bin/sh budget && \
-    chown -R budget:budget /app
-USER budget
-
 # Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
-
-# Run the application with retry logic
-CMD ["./start-with-retry.sh"]
+# Run the application
+CMD ["./budget"]
