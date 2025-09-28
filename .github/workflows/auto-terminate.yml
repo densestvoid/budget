@@ -208,16 +208,8 @@ jobs:
           echo "🧹 All resources cleaned up"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
           
-          # Remove state file from AWS S3 bucket
-          echo "🗑️ Removing state file from AWS S3..."
-          STATE_FILE_KEY="environments/pr/$DEPLOYMENT_ID.tfstate"
-          
-          # Use AWS CLI to remove state file
-          if aws s3 rm "s3://densestvoid-terraform/$STATE_FILE_KEY"; then
-            echo "✅ State file removed from AWS S3"
-          else
-            echo "⚠️ Failed to remove state file (may not exist)"
-          fi
+          # State file cleanup is not necessary - Terraform will overwrite on next deployment
+          echo "ℹ️ State file will be overwritten on next deployment"
         else
           echo "❌ Terraform destroy failed"
           echo "destroy_success=false" >> $GITHUB_OUTPUT
