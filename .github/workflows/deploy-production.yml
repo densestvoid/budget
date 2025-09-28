@@ -76,7 +76,7 @@ jobs:
         echo "Go source hash: ${GO_HASH}"
         
         # Create hash of all files that affect Docker image
-        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
+        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
           sort | xargs cat | sha256sum | cut -d' ' -f1)
         echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
         echo "Docker context hash: ${DOCKER_HASH}"
@@ -129,7 +129,6 @@ jobs:
         
         # Build with cache using hash-based tag
         docker buildx build \
-          --file Dockerfile.prod \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} \
           --tag ghcr.io/${{ github.repository }}/budget-app:production \
           --cache-from type=local,src=/tmp/.buildx-cache \
