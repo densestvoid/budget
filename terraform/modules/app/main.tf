@@ -37,7 +37,7 @@ resource "digitalocean_app" "budget_migrations" {
       image {
         registry_type = "GHCR"
         registry      = "ghcr.io"
-        repository    = var.github_repo
+        repository    = "${var.github_repo}/budget-app"
         tag           = var.docker_image_tag
       }
 
@@ -95,7 +95,7 @@ resource "digitalocean_app" "budget_app" {
       image {
         registry_type = "GHCR"
         registry      = "ghcr.io"
-        repository    = var.github_repo
+        repository    = "${var.github_repo}/budget-app"
         tag           = var.docker_image_tag
       }
 
