@@ -129,17 +129,23 @@ jobs:
         echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
         echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
         
-        # Generate image tag with production flag to force rebuild
-        IMAGE_TAG="pr-${{ github.event.number }}-${{ github.sha }}-prod"
+        # Generate image tag
+        IMAGE_TAG="pr-${{ github.event.number }}-${{ github.sha }}"
         echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
         
         echo "📦 Image tag: ${IMAGE_TAG}"
         echo "🔑 Go cache key: ${GO_HASH}"
         echo "🔑 Docker cache key: ${DOCKER_HASH}"
         
-        # Force rebuild with production Dockerfile
-        echo "🔄 Forcing rebuild with production Dockerfile"
-        echo "skip_docker_build=false" >> $GITHUB_OUTPUT
+        # Check if Docker image already exists
+        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG} >/dev/null 2>&1; then
+          echo "✅ Docker image exists - skipping entire build pipeline"
+          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
+          echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG}"
+        else
+          echo "❌ Docker image not found - build pipeline required"
+          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
+        fi
     
     - name: Restore Go build cache
       if: steps.build_cache.outputs.skip_docker_build == 'false'
@@ -173,7 +179,6 @@ jobs:
         # Build and push with buildx
         docker buildx build \
           --platform linux/amd64 \
-          --file Dockerfile.prod \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.DEPLOYMENT_ID }} \
           --cache-from type=local,src=/tmp/.buildx-cache \
