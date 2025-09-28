@@ -157,7 +157,7 @@ jobs:
         echo "Deployment ID: ${{ steps.validate.outputs.deployment_id }}"
         
         # Initialize with deployment-specific state file
-        if terraform init -backend-config="key=environments/pr/${{ steps.validate.outputs.deployment_id }}.tfstate"; then
+        if terraform init -backend-config="key=environments/pr/${{ steps.validate.outputs.deployment_id }}.tfstate" -backend-config="region=${{ vars.TERRAFORM_AWS_S3_REGION }}"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           

@@ -153,7 +153,7 @@ jobs:
         echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
         
         # Initialize with production state file
-        if terraform init -backend-config="key=environments/prod/main.tfstate"; then
+        if terraform init -backend-config="key=environments/prod/main.tfstate" -backend-config="region=${{ vars.TERRAFORM_AWS_S3_REGION }}"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           

@@ -95,7 +95,7 @@ jobs:
         echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
         
         # Initialize with deployment-specific state file
-        if terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate"; then
+        if terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ vars.TERRAFORM_AWS_S3_REGION }}"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
@@ -415,7 +415,7 @@ jobs:
           # Check if we have any state (either local or need to re-init)
           if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
             echo "🔧 Re-initializing to check remote state..."
-            terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" || true
+            terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ vars.TERRAFORM_AWS_S3_REGION }}" || true
           fi
           
           # Show what resources exist before cleanup

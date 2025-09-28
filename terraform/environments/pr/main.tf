@@ -4,7 +4,7 @@ terraform {
   backend "s3" {
     bucket = "densestvoid-terraform"
     key    = "environments/pr/{deployment_id}.tfstate"
-    region = "us-east-1"
+    region = "us-east-1"  # This will be overridden by -backend-config
   }
   
   required_providers {
