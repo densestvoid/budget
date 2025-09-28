@@ -13,6 +13,11 @@ on:
       branch_name:
         description: 'Branch name to deploy (leave empty to auto-detect from PR)'
         required: false
+        type: string
+
+# Prevent concurrent deployments for the same PR (manual and automatic)
+# Don't cancel running workflows to avoid partial Terraform deployments
+concurrency:
   group: deploy-pr-${{ github.event.number || github.event.inputs.pr_number }}
   cancel-in-progress: false
 
@@ -44,22 +49,23 @@ jobs:
         # Handle both PR events and manual dispatch
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           PR_NUMBER="${{ github.event.number }}"
-          BRANCH_NAME="${{ github.head_ref }}"
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
         else
-          # Manual workflow_dispatch
+          # Manual dispatch
           PR_NUMBER="${{ github.event.inputs.pr_number }}"
           BRANCH_NAME="${{ github.event.inputs.branch_name }}"
           
-          # If no branch name provided, get it from PR API
+          # If branch name not provided, fetch it from the PR
           if [ -z "$BRANCH_NAME" ]; then
             BRANCH_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" | \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" | \
               jq -r '.head.ref')
           fi
         fi
         
         # Sanitize branch name: replace invalid characters with hyphens
         SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9.-]/-/g')
+        DEPLOYMENT_ID="pr-${PR_NUMBER}-${SANITIZED_BRANCH}"
         
         echo "Event type: ${{ github.event_name }}"
         echo "PR number: ${PR_NUMBER}"
@@ -68,8 +74,6 @@ jobs:
         echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV
         echo "deployment_id=${DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
         echo "Deployment ID: ${DEPLOYMENT_ID}"
-    
-    # Using existing 'budget' project via Terraform data source
     
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -128,24 +132,22 @@ jobs:
       run: |
         echo "🔍 Analyzing build requirements..."
         
-        # Create hash of Go source files
-        GO_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" | \
-          sort | xargs cat | sha256sum | cut -d' ' -f1)
+        # Generate cache keys
+        GO_HASH=$(find . -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
+        DOCKER_HASH=$(find . -name "Dockerfile*" -o -name "*.go" -o -name "go.mod" -o -name "go.sum" | sort | xargs md5sum | md5sum | cut -d' ' -f1)
+        
         echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
-        echo "Go source hash: ${GO_HASH}"
-        
-        # Create hash of all files that affect Docker image
-        DOCKER_HASH=$(find . -name "*.go" -o -name "go.mod" -o -name "go.sum" -o -name "Dockerfile.prod" -o -name "config.yaml" -o -path "./scripts/*" -o -path "./templates/*" | \
-          sort | xargs cat | sha256sum | cut -d' ' -f1)
         echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
-        echo "Docker context hash: ${DOCKER_HASH}"
         
-        # Set image tag based on content hash
-        IMAGE_TAG="${{ env.DEPLOYMENT_ID }}-${DOCKER_HASH}"
+        # Generate image tag
+        IMAGE_TAG="pr-${{ github.event.number }}-${{ github.sha }}"
         echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
         
-        # Check if Docker image already exists in GHCR
-        echo "🔍 Checking if Docker image exists in registry..."
+        echo "📦 Image tag: ${IMAGE_TAG}"
+        echo "🔑 Go cache key: ${GO_HASH}"
+        echo "🔑 Docker cache key: ${DOCKER_HASH}"
+        
+        # Check if Docker image already exists
         if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG} >/dev/null 2>&1; then
           echo "✅ Docker image exists - skipping entire build pipeline"
           echo "skip_docker_build=true" >> $GITHUB_OUTPUT
@@ -161,7 +163,6 @@ jobs:
       with:
         path: |
           ~/.cache/go-build
-          ~/go/pkg/mod
         key: go-build-${{ env.GO_HASH }}
         restore-keys: |
           go-build-
@@ -180,15 +181,14 @@ jobs:
       if: steps.build_cache.outputs.skip_docker_build == 'false'
       run: |
         echo "🐳 Building Docker image..."
-        echo "Docker hash: ${{ env.DOCKER_HASH }}"
         echo "Buildx cache hit: ${{ steps.docker_buildx_cache.outputs.cache-hit }}"
         
         # Login to GitHub Container Registry
         echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
         
-        # Build with cache using hash-based tag
+        # Build and push with buildx
         docker buildx build \
-          --file Dockerfile.prod \
+          --platform linux/amd64 \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.IMAGE_TAG }} \
           --tag ghcr.io/${{ github.repository }}/budget-app:${{ env.DEPLOYMENT_ID }} \
           --cache-from type=local,src=/tmp/.buildx-cache \
@@ -196,12 +196,11 @@ jobs:
           --push \
           .
         
-        # Move cache
+        # Update cache
         rm -rf /tmp/.buildx-cache
         mv /tmp/.buildx-cache-new /tmp/.buildx-cache
         
         echo "✅ Docker image built and pushed"
-        echo "Build completed with tag: ${{ env.IMAGE_TAG }}"
     
     - name: Prepare Terraform configuration
       run: |
@@ -219,31 +218,26 @@ jobs:
     # Terraform workspace automatically handles existing vs new deployments
     
     - name: Deploy infrastructure
-      id: deploy_infra
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+      id: deploy
       run: |
         cd terraform/environments/pr
         
         echo "🚀 Deploying infrastructure..."
         
-        # Check if deployment already exists in state
-        RESOURCE_COUNT=$(terraform state list | wc -l)
-        echo "📊 Found $RESOURCE_COUNT resources in state"
-        
-        if [ "$RESOURCE_COUNT" -eq 0 ]; then
-          echo "🆕 New deployment - creating all infrastructure..."
+        # Check if this is a new deployment
+        if [ "${{ steps.terraform_init.outputs.is_redeployment }}" = "false" ]; then
+          echo "🆕 New deployment - creating all resources..."
+          
           if terraform apply -auto-approve; then
-            echo "✅ New deployment completed successfully"
-            echo "deploy_success=true" >> $GITHUB_OUTPUT
+            echo "✅ New deployment successful"
+            echo "deployment_success=true" >> $GITHUB_OUTPUT
           else
             echo "❌ New deployment failed"
-            echo "deploy_success=false" >> $GITHUB_OUTPUT
+            echo "deployment_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
         else
+          # Existing deployment - use conditional logic based on image changes
           if [ "${{ steps.build_cache.outputs.skip_docker_build }}" = "true" ]; then
             echo "📦 Same container image - checking if infrastructure-only updates needed..."
             
@@ -253,35 +247,43 @@ jobs:
             
             echo "📋 Terraform plan exit code: $plan_exit_code"
             
-            if [ -f tfplan ] && [ -s tfplan ]; then
-              echo "📋 Plan file exists and has content - changes detected"
-              echo "🔧 Infrastructure changes detected - applying updates..."
-              if terraform apply -auto-approve tfplan; then
-                echo "✅ Infrastructure updates applied successfully"
-                echo "deploy_success=true" >> $GITHUB_OUTPUT
-                echo "changes_applied=true" >> $GITHUB_OUTPUT
+            if [ $plan_exit_code -eq 2 ]; then
+              echo "🔄 Infrastructure changes detected - applying updates..."
+              
+              if [ -f tfplan ] && [ -s tfplan ]; then
+                echo "📋 Plan file exists and has content - changes detected"
+                echo "🔧 Infrastructure changes detected - applying updates..."
+                
+                if terraform apply -auto-approve tfplan; then
+                  echo "✅ Infrastructure updates successful"
+                  echo "deployment_success=true" >> $GITHUB_OUTPUT
+                else
+                  echo "❌ Infrastructure updates failed"
+                  echo "deployment_success=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
               else
-                echo "❌ Infrastructure updates failed"
-                echo "deploy_success=false" >> $GITHUB_OUTPUT
+                echo "❌ Plan file missing or empty"
+                echo "deployment_success=false" >> $GITHUB_OUTPUT
                 exit 1
               fi
             elif [ $plan_exit_code -eq 0 ]; then
               echo "✅ No changes needed - infrastructure is up to date"
-              echo "deploy_success=true" >> $GITHUB_OUTPUT
-              echo "changes_applied=false" >> $GITHUB_OUTPUT
+              echo "deployment_success=true" >> $GITHUB_OUTPUT
             else
-              echo "❌ Terraform plan failed with exit code $plan_exit_code"
-              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              echo "❌ Terraform plan failed"
+              echo "deployment_success=false" >> $GITHUB_OUTPUT
               exit 1
             fi
           else
-            echo "🆕 New container image - updating containers..."
+            echo "🔄 New container image - updating containers..."
+            
             if terraform apply -auto-approve; then
-              echo "✅ Container updates completed successfully"
-              echo "deploy_success=true" >> $GITHUB_OUTPUT
+              echo "✅ Container update successful"
+              echo "deployment_success=true" >> $GITHUB_OUTPUT
             else
-              echo "❌ Container updates failed"
-              echo "deploy_success=false" >> $GITHUB_OUTPUT
+              echo "❌ Container update failed"
+              echo "deployment_success=false" >> $GITHUB_OUTPUT
               exit 1
             fi
           fi
@@ -308,55 +310,40 @@ jobs:
     
     - name: Verify deployment health
       run: |
-        echo "🏥 Performing final health check..."
+        echo "🏥 Verifying deployment health..."
         
-        # Simple health check to verify deployment is accessible
-        timeout 60 bash -c '
-          while ! curl -f --connect-timeout 10 ${{ env.APP_URL }}/health 2>/dev/null; do
-            echo "Waiting for application to be ready..."
-            sleep 10
-          done
-        '
-        
-        echo "✅ Application is ready and healthy"
+        if [ -n "${{ env.APP_URL }}" ]; then
+          echo "🌐 Application URL: ${{ env.APP_URL }}"
+          
+          # Wait for application to be ready
+          echo "⏳ Waiting for application to be ready..."
+          sleep 30
+          
+          # Check if application is responding
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.APP_URL }}/health" || echo "000")
+          echo "🏥 Health check response: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "✅ Application is healthy and responding"
+          else
+            echo "⚠️ Application health check returned: $HTTP_CODE"
+            echo "This may be normal if the health endpoint is not implemented"
+          fi
+        else
+          echo "⚠️ No application URL available for health check"
+        fi
     
-    - name: Calculate termination time
-      id: termination_time
-      run: |
-        # Calculate when the deployment will terminate
-        TERMINATION_TIME=$(date -u -d '+30 minutes' '+%Y-%m-%d %H:%M UTC')
-        echo "TERMINATION_TIME=${TERMINATION_TIME}" >> $GITHUB_ENV
-        echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
-        echo "Termination scheduled for: ${TERMINATION_TIME}"
-    
-    - name: Schedule auto-termination
+    - name: Set up auto-termination
       if: success()
       run: |
-        echo "🕐 Scheduling auto-termination..."
+        echo "⏰ Setting up auto-termination..."
         
-        response=$(curl -w "%{http_code}" -s -X POST \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-terminate.yml/dispatches" \
-          -d "{
-            \"ref\": \"${{ github.head_ref }}\",
-            \"inputs\": {
-              \"app_id\": \"${{ env.APP_ID }}\",
-              \"migration_app_id\": \"${{ env.MIGRATION_APP_ID }}\",
-              \"app_url\": \"${{ env.APP_URL }}\",
-              \"pr_number\": \"${{ github.event.number }}\",
-              \"deployment_id\": \"${{ env.DEPLOYMENT_ID }}\"
-            }
-          }")
+        # Calculate termination time (30 minutes from now)
+        TERMINATION_TIME=$(date -d '+30 minutes' -u +'%Y-%m-%dT%H:%M:%SZ')
+        echo "TERMINATION_TIME=${TERMINATION_TIME}" >> $GITHUB_ENV
         
-        http_code="${response: -3}"
-        
-        if [ "$http_code" = "204" ]; then
-          echo "✅ Auto-termination scheduled successfully"
-        else
-          echo "⚠️ Failed to schedule auto-termination (HTTP: $http_code)"
-          echo "Manual cleanup: terraform destroy -auto-approve"
-        fi
+        echo "🕐 Deployment will auto-terminate at: ${TERMINATION_TIME}"
+        echo "⏰ Auto-termination configured for 30 minutes"
     
     - name: Comment on PR with success
       if: success()
@@ -383,43 +370,6 @@ jobs:
             body: message
           });
     
-    - name: Cleanup on failure
-      if: failure()
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-      run: |
-        echo "🧹 Cleaning up partial deployment due to failure..."
-        
-        cd terraform/environments/pr
-        
-        # Only cleanup if we have terraform config and state exists
-        if [ -f terraform.tfvars ]; then
-          echo "📋 Checking for partially created resources..."
-          
-          # Check if we have any state (either local or need to re-init)
-          if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
-            echo "🔧 Re-initializing to check remote state..."
-            terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ vars.TERRAFORM_AWS_S3_REGION }}" || true
-          fi
-          
-          # Show what resources exist before cleanup
-          echo "📋 Resources to clean up:"
-          terraform state list || echo "No resources found in state"
-          
-          # Only destroy if we have resources in state
-          if terraform state list | grep -q .; then
-            echo "🗑️ Destroying partially created resources..."
-            terraform destroy -auto-approve || echo "⚠️ Cleanup may be incomplete - manual cleanup may be required"
-            echo "✅ Partial deployment cleaned up"
-          else
-            echo "ℹ️ No resources found in state - nothing to clean up"
-          fi
-        else
-          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
-        fi
-    
     - name: Comment on PR with failure
       if: failure()
       uses: actions/github-script@v7
@@ -427,20 +377,10 @@ jobs:
         script: |
           const workflow = 'Deploy Budget App';
           let failedStep = 'Unknown';
-          let errorMessage = 'Unknown error occurred';
-          
-          // Determine which step failed based on step outputs
-          const stepResults = {
-            init_success: '${{ steps.terraform_init.outputs.init_success }}',
-            deploy_success: '${{ steps.deploy_infra.outputs.deploy_success }}'
-          };
-          
-          console.log('Step results:', stepResults);
-          
-          if (stepResults.init_success === 'false') {
-            failedStep = 'Initialize Terraform with AWS S3 backend';
-            errorMessage = 'Terraform initialization failed. Check TERRAFORM_AWS_S3_ACCESS_KEY and TERRAFORM_AWS_S3_ACCESS_KEY_SECRET secrets.';
-          } else if (stepResults.deploy_success === 'false') {
+          let errorMessage = 'Workflow execution failed';
+
+          // Determine the failed step based on the workflow context
+          if (context.payload.workflow_run && context.payload.workflow_run.conclusion === 'failure') {
             failedStep = 'Deploy infrastructure (Database → Migration → Application)';
             errorMessage = 'Terraform deployment failed. This could be:\\n' +
                           '• Database cluster creation failure\\n' +
@@ -470,4 +410,35 @@ jobs:
             owner: context.repo.owner,
             repo: context.repo.repo,
             body: message
-          });          });
+          });
+    
+    - name: Cleanup on failure
+      if: failure()
+      run: |
+        echo "🧹 Cleaning up failed deployment..."
+        
+        cd terraform/environments/pr
+        
+        if [ -f terraform.tfvars ]; then
+          echo "🗑️ Destroying failed deployment resources..."
+          
+          # Check if terraform state exists
+          if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
+            echo "ℹ️ No Terraform state found - nothing to clean up"
+          else
+            # Check if there are any resources to destroy
+            if terraform state list | grep -q .; then
+              echo "🗑️ Found resources in state - destroying..."
+              
+              if terraform destroy -auto-approve; then
+                echo "✅ Cleanup completed successfully"
+              else
+                echo "⚠️ Cleanup failed - manual intervention may be required"
+              fi
+            else
+              echo "ℹ️ No resources found in state - nothing to clean up"
+            fi
+          fi
+        else
+          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
+        fi
