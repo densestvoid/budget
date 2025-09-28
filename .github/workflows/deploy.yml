@@ -261,10 +261,7 @@ jobs:
             plan_exit_code=$?
             
             echo "📋 Terraform plan exit code: $plan_exit_code"
-            echo "📋 Plan details:"
-            terraform show tfplan || echo "No plan file to show"
             
-            # Check if plan file exists and has content
             if [ -f tfplan ] && [ -s tfplan ]; then
               echo "📋 Plan file exists and has content - changes detected"
               echo "🔧 Infrastructure changes detected - applying updates..."
@@ -299,27 +296,19 @@ jobs:
           fi
         fi
         
-        # Always try to get outputs - they should exist if deployment was successful
+        # Get outputs
         echo "📊 Getting deployment outputs..."
-        
-        # Try to get outputs, but don't fail if they don't exist
-        APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
+        APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null || echo "")
         APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
         MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
-        DB_HOST=$(terraform output -raw database_host 2>/dev/null || echo "")
-        TOTAL_COST=$(terraform output -raw estimated_total_cost 2>/dev/null || echo "")
         
         if [ -n "$APP_URL" ]; then
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
           echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
           echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
-          echo "DB_HOST=${DB_HOST}" >> $GITHUB_ENV
-          echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
           echo "✅ Successfully retrieved deployment outputs"
         else
           echo "⚠️ No outputs found - this may indicate an incomplete deployment"
-          echo "📋 Available outputs:"
-          terraform output || echo "No outputs available"
         fi
     
     # Database readiness, migrations, and app deployment all handled by Terraform
@@ -388,7 +377,6 @@ jobs:
             '🆔 **App ID:** ${{ env.APP_ID }}',
             '🔧 **Migration ID:** ${{ env.MIGRATION_APP_ID }}',
             '📦 **Deployment:** ${{ env.DEPLOYMENT_ID }}',
-            '💰 **Cost:** ${{ env.TOTAL_COST }}',
             '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}',
             '',
             '_Architecture: Database → Migration Container → Application Container_'
@@ -456,8 +444,8 @@ jobs:
           console.log('Step results:', stepResults);
           
           if (stepResults.init_success === 'false') {
-            failedStep = 'Initialize Terraform with DigitalOcean Spaces backend';
-            errorMessage = 'Terraform initialization failed. Check DO_SPACES_ACCESS_KEY and DO_SPACES_SECRET_KEY secrets.';
+            failedStep = 'Initialize Terraform with AWS S3 backend';
+            errorMessage = 'Terraform initialization failed. Check TERRAFORM_AWS_S3_ACCESS_KEY and TERRAFORM_AWS_S3_ACCESS_KEY_SECRET secrets.';
           } else if (stepResults.deploy_success === 'false') {
             failedStep = 'Deploy infrastructure (Database → Migration → Application)';
             errorMessage = 'Terraform deployment failed. This could be:\\n' +
