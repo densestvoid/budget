@@ -93,9 +93,17 @@ jobs:
         
         echo "🔧 Initializing Terraform with AWS S3 backend..."
         echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
+        echo "AWS Region: ${{ vars.TERRAFORM_AWS_S3_REGION }}"
+        
+        # Set default region if not provided
+        AWS_REGION="${{ vars.TERRAFORM_AWS_S3_REGION }}"
+        if [ -z "$AWS_REGION" ]; then
+          AWS_REGION="us-east-1"
+          echo "⚠️ AWS region not set, using default: $AWS_REGION"
+        fi
         
         # Initialize with deployment-specific state file
-        if terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ vars.TERRAFORM_AWS_S3_REGION }}"; then
+        if terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=$AWS_REGION"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
