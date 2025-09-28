@@ -27,21 +27,15 @@ data "digitalocean_project" "budget_develop" {
 
 # Local values for PR deployment naming
 locals {
-  # Sanitize deployment_id for DigitalOcean naming constraints
-  sanitized_id = replace(replace(replace(var.deployment_id, "/[^a-zA-Z0-9_-]/", "-"), "/^-+|-+$/", ""), "/-+/", "-")
+  # Extract PR number from deployment_id (format: pr-{number}-{branch})
+  pr_number = split("-", var.deployment_id)[1]
   
-  # Create shorter versions for different resource types, ensuring no trailing hyphens
-  short_id = replace(substr(local.sanitized_id, 0, 20), "/-$/", "")
-  vpc_id = replace(substr(local.sanitized_id, 0, 21), "/-$/", "")
-  app_id = replace(substr(local.sanitized_id, 0, 32), "/-$/", "")
-  migration_app_id = replace(substr(local.sanitized_id, 0, 21), "/-$/", "")
-  
-  # PR-specific naming
-  vpc_name = "budget-vpc-${local.vpc_id}"
-  database_name = "budget-db-${local.short_id}"
-  database_user_name = "budget-app-${local.short_id}"
-  app_name = local.app_id
-  migration_app_name = "${local.migration_app_id}-migrations"
+  # Simple, clean naming
+  vpc_name = "pr-${local.pr_number}"
+  database_name = "pr-${local.pr_number}"
+  database_user_name = "pr-${local.pr_number}"
+  app_name = "pr-${local.pr_number}"
+  migration_app_name = "pr-${local.pr_number}-migrations"
   
   # PR tags
   tags = ["deployment-id:${var.deployment_id}", "environment:pr"]

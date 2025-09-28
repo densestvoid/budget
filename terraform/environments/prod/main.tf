@@ -27,12 +27,12 @@ data "digitalocean_project" "budget_prod" {
 
 # Local values for production naming
 locals {
-  # Production-specific naming
-  vpc_name = "budget-prod-vpc"
-  database_name = "budget-prod"
-  database_user_name = "budget-prod-app"
-  app_name = "budget-prod"
-  migration_app_name = "budget-prod-migrations"
+  # Simple, clean production naming
+  vpc_name = "prod"
+  database_name = "prod"
+  database_user_name = "prod"
+  app_name = "prod"
+  migration_app_name = "prod-migrations"
   
   # Production tags
   tags = ["environment:production", "project:budget-prod"]
