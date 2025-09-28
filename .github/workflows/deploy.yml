@@ -87,22 +87,16 @@ jobs:
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ vars.TERRAFORM_AWS_S3_REGION }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
         cd terraform/environments/pr
         
         echo "🔧 Initializing Terraform with AWS S3 backend..."
         echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
-        echo "Raw variable value: '${{ vars.TERRAFORM_AWS_S3_REGION }}'"
         
-        # Set AWS region with hardcoded fallback since variable is not accessible
-        AWS_REGION="${{ vars.TERRAFORM_AWS_S3_REGION }}"
-        if [ -z "$AWS_REGION" ]; then
-          AWS_REGION="us-east-1"
-          echo "⚠️ TERRAFORM_AWS_S3_REGION variable not accessible, using fallback: $AWS_REGION"
-        else
-          echo "AWS Region: '$AWS_REGION'"
-        fi
+        # Set AWS region from secret
+        AWS_REGION="${{ secrets.TERRAFORM_AWS_S3_REGION }}"
+        echo "AWS Region: '$AWS_REGION'"
         
         # Initialize with deployment-specific state file
         if terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=$AWS_REGION"; then
@@ -237,7 +231,7 @@ jobs:
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ vars.TERRAFORM_AWS_S3_REGION }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
         cd terraform/environments/pr
         
@@ -412,7 +406,7 @@ jobs:
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ vars.TERRAFORM_AWS_S3_REGION }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
         echo "🧹 Cleaning up partial deployment due to failure..."
         
