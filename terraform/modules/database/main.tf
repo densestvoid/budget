@@ -1,48 +1,6 @@
 # Database module for both PR and Production deployments
 # This module creates a managed PostgreSQL database cluster
 
-terraform {
-  required_providers {
-    digitalocean = {
-      source  = "digitalocean/digitalocean"
-      version = "~> 2.0"
-    }
-  }
-}
-
-# Variables for database module
-variable "database_name" {
-  description = "Name of the database"
-  type        = string
-}
-
-variable "database_user_name" {
-  description = "Name of the database user"
-  type        = string
-}
-
-variable "database_size" {
-  description = "Database cluster size"
-  type        = string
-  default     = "db-s-1vcpu-1gb"
-}
-
-variable "region" {
-  description = "DigitalOcean region"
-  type        = string
-}
-
-variable "vpc_id" {
-  description = "VPC ID for private networking"
-  type        = string
-}
-
-variable "tags" {
-  description = "Tags to apply to resources"
-  type        = list(string)
-  default     = []
-}
-
 # Managed PostgreSQL database with private VPC networking
 resource "digitalocean_database_cluster" "budget_db" {
   name                 = var.database_name
@@ -148,31 +106,4 @@ resource "null_resource" "database_health_check" {
       exit 1
     EOT
   }
-}
-
-# Outputs for database module
-output "database_cluster_id" {
-  description = "Database cluster ID"
-  value       = digitalocean_database_cluster.budget_db.id
-}
-
-output "database_cluster_urn" {
-  description = "Database cluster URN"
-  value       = digitalocean_database_cluster.budget_db.urn
-}
-
-output "database_url" {
-  description = "Database connection URL"
-  value       = "postgres://${digitalocean_database_user.budget_user.name}:${digitalocean_database_user.budget_user.password}@${digitalocean_database_cluster.budget_db.private_host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require&search_path=budget"
-  sensitive   = true
-}
-
-output "database_health_check" {
-  description = "Database health check resource"
-  value       = null_resource.database_health_check
-}
-
-output "database_schema_setup" {
-  description = "Database schema setup resource"
-  value       = null_resource.database_schema_setup
 }

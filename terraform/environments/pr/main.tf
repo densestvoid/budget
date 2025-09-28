@@ -49,7 +49,7 @@ locals {
 
 # Create VPC for PR deployment
 module "networking" {
-  source = "../../networking.tf"
+  source = "../../modules/networking"
   
   vpc_name = local.vpc_name
   region   = var.region
@@ -57,7 +57,7 @@ module "networking" {
 
 # Create PR database
 module "database" {
-  source = "../../database.tf"
+  source = "../../modules/database"
   
   database_name = local.database_name
   database_user_name = local.database_user_name
@@ -69,7 +69,7 @@ module "database" {
 
 # Create PR application
 module "app" {
-  source = "../../app.tf"
+  source = "../../modules/app"
   
   app_name = local.app_name
   migration_app_name = local.migration_app_name
