@@ -82,19 +82,20 @@ jobs:
       with:
         terraform_version: 1.5.7
     
-    - name: Initialize Terraform with DigitalOcean Spaces backend
+    - name: Initialize Terraform with AWS S3 backend
       id: terraform_init
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ vars.TERRAFORM_AWS_S3_REGION }}
       run: |
         cd terraform
         
-        echo "🔧 Initializing Terraform with DigitalOcean Spaces backend..."
+        echo "🔧 Initializing Terraform with AWS S3 backend..."
         echo "Deployment ID: ${{ env.DEPLOYMENT_ID }}"
         
         # Initialize with deployment-specific state file
-        if terraform init -backend-config="key=deployments/${{ env.DEPLOYMENT_ID }}.tfstate"; then
+        if terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
@@ -209,8 +210,6 @@ jobs:
         cd terraform
         cat > terraform.tfvars << EOF
         do_token = "${{ env.DO_TOKEN }}"
-        spaces_access_key = "${{ secrets.DO_SPACES_ACCESS_KEY }}"
-        spaces_secret_key = "${{ secrets.DO_SPACES_SECRET_KEY }}"
         region = "nyc1"
         deployment_id = "${{ env.DEPLOYMENT_ID }}"
         github_repo = "${{ github.repository }}"
@@ -226,8 +225,9 @@ jobs:
     - name: Deploy infrastructure
       id: deploy_infra
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ vars.TERRAFORM_AWS_S3_REGION }}
       run: |
         cd terraform
         
@@ -400,8 +400,9 @@ jobs:
     - name: Cleanup on failure
       if: failure()
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ vars.TERRAFORM_AWS_S3_REGION }}
       run: |
         echo "🧹 Cleaning up partial deployment due to failure..."
         
@@ -414,7 +415,7 @@ jobs:
           # Check if we have any state (either local or need to re-init)
           if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
             echo "🔧 Re-initializing to check remote state..."
-            terraform init -backend-config="key=deployments/${{ env.DEPLOYMENT_ID }}.tfstate" || true
+            terraform init -backend-config="key=environments/pr/${{ env.DEPLOYMENT_ID }}.tfstate" || true
           fi
           
           # Show what resources exist before cleanup
