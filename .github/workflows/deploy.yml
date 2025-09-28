@@ -10,10 +10,6 @@ on:
         description: 'PR number to deploy'
         required: true
         type: string
-      branch_name:
-        description: 'Branch name to deploy (leave empty to auto-detect from PR)'
-        type: string
-
 # Prevent concurrent deployments for the same PR (manual and automatic)
 # Don't cancel running workflows to avoid partial Terraform deployments
 concurrency:
@@ -50,16 +46,11 @@ jobs:
           PR_NUMBER="${{ github.event.number }}"
           BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
         else
-          # Manual dispatch
+          # Manual dispatch - fetch branch name from PR
           PR_NUMBER="${{ github.event.inputs.pr_number }}"
-          BRANCH_NAME="${{ github.event.inputs.branch_name }}"
-          
-          # If branch name not provided, fetch it from the PR
-          if [ -z "$BRANCH_NAME" ]; then
-            BRANCH_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" | \
-              jq -r '.head.ref')
-          fi
+          BRANCH_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" | \
+            jq -r '.head.ref')
         fi
         
         # Sanitize branch name: replace invalid characters with hyphens
