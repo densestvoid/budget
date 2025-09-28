@@ -1,5 +1,5 @@
 # Development stage with Air for hot reloading
-FROM golang:1.25-alpine
+FROM golang:1.24-alpine
 
 WORKDIR /app
 
