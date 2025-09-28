@@ -64,7 +64,6 @@ jobs:
         
         # Sanitize branch name: replace invalid characters with hyphens
         SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9.-]/-/g')
-        DEPLOYMENT_ID="pr-${PR_NUMBER}-${SANITIZED_BRANCH}"
         
         echo "Event type: ${{ github.event_name }}"
         echo "PR number: ${PR_NUMBER}"
@@ -249,7 +248,6 @@ jobs:
             exit 1
           fi
         else
-          # Existing deployment - use conditional logic based on image changes
           if [ "${{ steps.build_cache.outputs.skip_docker_build }}" = "true" ]; then
             echo "📦 Same container image - checking if infrastructure-only updates needed..."
             
