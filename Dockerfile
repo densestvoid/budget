@@ -30,4 +30,4 @@ COPY --from=builder /app/budget .
 EXPOSE 8080
 
 # Run the application
-CMD ["./budget"]
+CMD ["./budget", "serve"]
