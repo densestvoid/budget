@@ -287,14 +287,9 @@ jobs:
         echo "📊 Getting deployment outputs..."
         
         # Get outputs with better error handling
-        APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null | grep -v "Warning:" | grep -v "│" | head -1 || echo "")
-        APP_ID=$(terraform output -raw app_id 2>/dev/null | grep -v "Warning:" | grep -v "│" | head -1 || echo "")
-        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null | grep -v "Warning:" | grep -v "│" | head -1 || echo "")
-        
-        # Clean up any remaining formatting characters
-        APP_URL=$(echo "$APP_URL" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        APP_ID=$(echo "$APP_ID" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        MIGRATION_APP_ID=$(echo "$MIGRATION_APP_ID" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
+        APP_ID=$(terraform output -raw app_id 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
         
         if [ -n "$APP_URL" ] && [ "$APP_URL" != "" ]; then
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
@@ -356,9 +351,7 @@ jobs:
             '🆔 **App ID:** ${{ env.APP_ID }}',
             '🔧 **Migration ID:** ${{ env.MIGRATION_APP_ID }}',
             '📦 **Deployment:** ${{ env.DEPLOYMENT_ID }}',
-            '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}',
-            '',
-            '_Architecture: Database → Migration Container → Application Container_'
+            '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}'
           ].join('\n');
 
           await github.rest.issues.createComment({
