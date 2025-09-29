@@ -285,11 +285,18 @@ jobs:
         
         # Get outputs
         echo "📊 Getting deployment outputs..."
-        APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null || echo "")
-        APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
-        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
         
-        if [ -n "$APP_URL" ]; then
+        # Get outputs with better error handling
+        APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null | grep -v "Warning:" | grep -v "│" | head -1 || echo "")
+        APP_ID=$(terraform output -raw app_id 2>/dev/null | grep -v "Warning:" | grep -v "│" | head -1 || echo "")
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null | grep -v "Warning:" | grep -v "│" | head -1 || echo "")
+        
+        # Clean up any remaining formatting characters
+        APP_URL=$(echo "$APP_URL" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        APP_ID=$(echo "$APP_ID" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        MIGRATION_APP_ID=$(echo "$MIGRATION_APP_ID" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        if [ -n "$APP_URL" ] && [ "$APP_URL" != "" ]; then
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
           echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
           echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
