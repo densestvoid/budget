@@ -288,13 +288,11 @@ jobs:
         APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null || echo "")
         APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
         MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
-        TOTAL_COST=$(terraform output -raw estimated_total_cost 2>/dev/null || echo "$0.011")
         
         if [ -n "$APP_URL" ]; then
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
           echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
           echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
-          echo "TOTAL_COST=${TOTAL_COST}" >> $GITHUB_ENV
           echo "✅ Successfully retrieved deployment outputs"
         else
           echo "⚠️ No outputs found - this may indicate an incomplete deployment"
@@ -351,7 +349,6 @@ jobs:
             '🆔 **App ID:** ${{ env.APP_ID }}',
             '🔧 **Migration ID:** ${{ env.MIGRATION_APP_ID }}',
             '📦 **Deployment:** ${{ env.DEPLOYMENT_ID }}',
-            '💰 **Cost:** ${{ env.TOTAL_COST }}',
             '⏰ **Terminates:** ${{ env.TERMINATION_TIME }}',
             '',
             '_Architecture: Database → Migration Container → Application Container_'
