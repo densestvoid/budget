@@ -286,10 +286,10 @@ jobs:
         # Get outputs
         echo "📊 Getting deployment outputs..."
         
-        # Get outputs with better error handling
-        APP_URL=$(terraform output -raw app_default_ingress 2>&1 | grep -v "Warning:" | grep -v "│" | grep -v "The state file" | grep -v "Please define" | grep -v "You can use" | head -1 | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
-        APP_ID=$(terraform output -raw app_id 2>&1 | grep -v "Warning:" | grep -v "│" | grep -v "The state file" | grep -v "Please define" | grep -v "You can use" | head -1 | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
-        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>&1 | grep -v "Warning:" | grep -v "│" | grep -v "The state file" | grep -v "Please define" | grep -v "You can use" | head -1 | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
+        # Get outputs
+        APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null || echo "")
+        APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
         
         if [ -n "$APP_URL" ] && [ "$APP_URL" != "" ]; then
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
