@@ -224,7 +224,7 @@ resource "digitalocean_app" "budget_app" {
   # If image tag is same (cache hit), no redeployment needed
 
   spec {
-    name   = local.app_id
+    name   = local.resource_id
     region = var.region
     
     # Enable VPC networking for database access
