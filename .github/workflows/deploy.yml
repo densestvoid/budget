@@ -10,6 +10,7 @@ on:
         description: 'PR number to deploy'
         required: true
         type: string
+
 # Prevent concurrent deployments for the same PR (manual and automatic)
 # Don't cancel running workflows to avoid partial Terraform deployments
 concurrency:
@@ -361,6 +362,52 @@ jobs:
             body: message
           });
     
+    - name: Send success notification to Slack
+      if: success()
+      run: |
+        echo "📢 Sending success notification to Slack..."
+        
+        # Create success message
+        cat > slack_message.json << EOF
+        {
+          "text": "✅ PR Deployment Successful",
+          "attachments": [
+            {
+              "color": "good",
+              "fields": [
+                {
+                  "title": "Application URL",
+                  "value": "${{ env.APP_URL }}",
+                  "short": true
+                },
+                {
+                  "title": "PR Number",
+                  "value": "${{ github.event.number }}",
+                  "short": true
+                },
+                {
+                  "title": "Deployment ID",
+                  "value": "${{ env.DEPLOYMENT_ID }}",
+                  "short": true
+                },
+                {
+                  "title": "Auto-terminates",
+                  "value": "30 minutes",
+                  "short": true
+                }
+              ]
+            }
+          ]
+        }
+        EOF
+        
+        # Send to Slack
+        curl -X POST -H 'Content-type: application/json' \
+          --data @slack_message.json \
+          ${{ secrets.SLACK_WEBHOOK_PR }}
+        
+        echo "✅ Success notification sent to Slack"
+    
     - name: Comment on PR with failure
       if: failure()
       uses: actions/github-script@v7
@@ -402,6 +449,52 @@ jobs:
             repo: context.repo.repo,
             body: message
           });
+    
+    - name: Send failure notification to Slack
+      if: failure()
+      run: |
+        echo "📢 Sending failure notification to Slack..."
+        
+        # Create failure message
+        cat > slack_message.json << EOF
+        {
+          "text": "❌ PR Deployment Failed",
+          "attachments": [
+            {
+              "color": "danger",
+              "fields": [
+                {
+                  "title": "PR Number",
+                  "value": "${{ github.event.number }}",
+                  "short": true
+                },
+                {
+                  "title": "Deployment ID",
+                  "value": "${{ env.DEPLOYMENT_ID }}",
+                  "short": true
+                },
+                {
+                  "title": "Error Details",
+                  "value": "Deployment failed during infrastructure or application deployment",
+                  "short": false
+                },
+                {
+                  "title": "Cleanup Status",
+                  "value": "Partial deployment cleaned up automatically",
+                  "short": true
+                }
+              ]
+            }
+          ]
+        }
+        EOF
+        
+        # Send to Slack
+        curl -X POST -H 'Content-type: application/json' \
+          --data @slack_message.json \
+          ${{ secrets.SLACK_WEBHOOK_PR }}
+        
+        echo "✅ Failure notification sent to Slack"
     
     - name: Cleanup on failure
       if: failure()
