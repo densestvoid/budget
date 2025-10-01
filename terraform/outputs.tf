@@ -43,12 +43,3 @@ output "estimated_total_cost" {
   description = "Total estimated cost for 30-minute deployment"
   value       = "$0.02"  # ($15 DB + $5 App + $5 Migration) ÷ 730.56 hours/month × 0.5 hours = $0.017, rounded to $0.02
 }
-
-# Termination info
-output "termination_info" {
-  description = "Auto-termination details"
-  value = {
-    minutes_until_termination = var.auto_terminate_minutes
-    method = "workflow_dispatch with environment wait timer"
-  }
-}

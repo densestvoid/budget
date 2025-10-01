@@ -60,7 +60,7 @@ resource "digitalocean_database_cluster" "budget_db" {
 # Create database within the cluster
 resource "digitalocean_database_db" "budget_database" {
   cluster_id = digitalocean_database_cluster.budget_db.id
-  name       = "budget-${local.short_id}"
+  name       = local.resource_id
 }
 
 # Create database user
