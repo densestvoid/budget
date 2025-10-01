@@ -564,48 +564,48 @@ jobs:
         
         echo "✅ Failure notification sent to Slack"
     
-        - name: Cleanup on failure
-          if: failure()
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-            AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-          run: |
-            echo "🧹 Cleaning up failed deployment..."
+    - name: Cleanup on failure
+      if: failure()
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+      run: |
+        echo "🧹 Cleaning up failed deployment..."
+        
+        cd terraform
+        
+        if [ -f terraform.tfvars ]; then
+          echo "🗑️ Destroying failed deployment resources..."
+          
+          # Initialize Terraform to access state
+          if terraform init -backend-config="key=pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
+            echo "✅ Terraform initialized for cleanup"
             
-            cd terraform
-            
-            if [ -f terraform.tfvars ]; then
-              echo "🗑️ Destroying failed deployment resources..."
+            # Check if there are any resources to destroy
+            if terraform state list | grep -q .; then
+              echo "🗑️ Found resources in state - destroying..."
               
-              # Initialize Terraform to access state
-              if terraform init -backend-config="key=pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
-                echo "✅ Terraform initialized for cleanup"
+              if terraform destroy -auto-approve; then
+                echo "✅ Cleanup completed successfully"
                 
-                # Check if there are any resources to destroy
-                if terraform state list | grep -q .; then
-                  echo "🗑️ Found resources in state - destroying..."
-                  
-                  if terraform destroy -auto-approve; then
-                    echo "✅ Cleanup completed successfully"
-                    
-                    # Remove state file from S3 after successful destroy
-                    echo "🗑️ Removing state file from S3..."
-                    if aws s3 rm "s3://densestvoid-terraform/pr/${{ env.DEPLOYMENT_ID }}.tfstate"; then
-                      echo "✅ State file removed from S3"
-                    else
-                      echo "⚠️ Failed to remove state file from S3"
-                    fi
-                  else
-                    echo "⚠️ Cleanup failed - manual intervention may be required"
-                  fi
+                # Remove state file from S3 after successful destroy
+                echo "🗑️ Removing state file from S3..."
+                if aws s3 rm "s3://densestvoid-terraform/pr/${{ env.DEPLOYMENT_ID }}.tfstate"; then
+                  echo "✅ State file removed from S3"
                 else
-                  echo "ℹ️ No resources found in state - nothing to clean up"
+                  echo "⚠️ Failed to remove state file from S3"
                 fi
               else
-                echo "❌ Failed to initialize Terraform for cleanup"
-                echo "⚠️ Manual cleanup may be required for deployment: ${{ env.DEPLOYMENT_ID }}"
+                echo "⚠️ Cleanup failed - manual intervention may be required"
               fi
             else
-              echo "ℹ️ No terraform.tfvars found - skipping cleanup"
+              echo "ℹ️ No resources found in state - nothing to clean up"
             fi
+          else
+            echo "❌ Failed to initialize Terraform for cleanup"
+            echo "⚠️ Manual cleanup may be required for deployment: ${{ env.DEPLOYMENT_ID }}"
+          fi
+        else
+          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
+        fi
