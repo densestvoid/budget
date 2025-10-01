@@ -201,8 +201,8 @@ jobs:
     
     # Terraform workspace automatically handles existing vs new deployments
     
-    - name: Handle existing resources
-      id: handle_existing
+    - name: Import existing resources
+      id: import_existing
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
@@ -210,30 +210,28 @@ jobs:
       run: |
         cd terraform
         
-        echo "🔍 Checking for existing resources that might conflict..."
+        echo "🔍 Checking for existing resources to import..."
         
         # Check if VPC with same name exists
         VPC_NAME="${{ env.DEPLOYMENT_ID }}"
         echo "Checking for existing VPC: $VPC_NAME"
         
         # Use DigitalOcean API to check if VPC exists
-        VPC_EXISTS=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+        VPC_ID=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
           "https://api.digitalocean.com/v2/vpcs" | \
           jq -r ".vpcs[] | select(.name == \"$VPC_NAME\") | .id" || echo "")
         
-        if [ -n "$VPC_EXISTS" ] && [ "$VPC_EXISTS" != "" ]; then
-          echo "⚠️ Found existing VPC: $VPC_NAME (ID: $VPC_EXISTS)"
-          echo "🧹 Cleaning up existing VPC to avoid conflicts..."
+        if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
+          echo "📥 Found existing VPC: $VPC_NAME (ID: $VPC_ID) - importing..."
           
-          # Delete the existing VPC
-          if curl -s -X DELETE -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/vpcs/$VPC_EXISTS"; then
-            echo "✅ Existing VPC deleted successfully"
+          # Import the existing VPC into Terraform state
+          if terraform import digitalocean_vpc.budget_vpc "$VPC_ID"; then
+            echo "✅ VPC imported successfully"
           else
-            echo "❌ Failed to delete existing VPC - manual cleanup may be required"
+            echo "⚠️ Failed to import VPC - will be managed as new resource"
           fi
         else
-          echo "✅ No conflicting VPC found"
+          echo "✅ No existing VPC found - will create new"
         fi
         
         # Check for existing apps with same name
@@ -248,15 +246,15 @@ jobs:
           jq -r ".apps[] | select(.spec.name == \"$APP_NAME\") | .id" || echo "")
         
         if [ -n "$APP_ID" ] && [ "$APP_ID" != "" ]; then
-          echo "⚠️ Found existing app: $APP_NAME (ID: $APP_ID)"
-          echo "🧹 Cleaning up existing app..."
+          echo "📥 Found existing app: $APP_NAME (ID: $APP_ID) - importing..."
           
-          if curl -s -X DELETE -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/apps/$APP_ID"; then
-            echo "✅ Existing app deleted successfully"
+          if terraform import digitalocean_app.budget_app "$APP_ID"; then
+            echo "✅ App imported successfully"
           else
-            echo "❌ Failed to delete existing app"
+            echo "⚠️ Failed to import app - will be managed as new resource"
           fi
+        else
+          echo "✅ No existing app found - will create new"
         fi
         
         # Check for migration app
@@ -265,18 +263,18 @@ jobs:
           jq -r ".apps[] | select(.spec.name == \"$MIGRATION_APP_NAME\") | .id" || echo "")
         
         if [ -n "$MIGRATION_APP_ID" ] && [ "$MIGRATION_APP_ID" != "" ]; then
-          echo "⚠️ Found existing migration app: $MIGRATION_APP_NAME (ID: $MIGRATION_APP_ID)"
-          echo "🧹 Cleaning up existing migration app..."
+          echo "📥 Found existing migration app: $MIGRATION_APP_NAME (ID: $MIGRATION_APP_ID) - importing..."
           
-          if curl -s -X DELETE -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/apps/$MIGRATION_APP_ID"; then
-            echo "✅ Existing migration app deleted successfully"
+          if terraform import digitalocean_app.budget_migrations "$MIGRATION_APP_ID"; then
+            echo "✅ Migration app imported successfully"
           else
-            echo "❌ Failed to delete existing migration app"
+            echo "⚠️ Failed to import migration app - will be managed as new resource"
           fi
+        else
+          echo "✅ No existing migration app found - will create new"
         fi
         
-        echo "✅ Resource conflict check completed"
+        echo "✅ Resource import check completed"
 
     - name: Deploy infrastructure
       id: deploy
@@ -568,6 +566,10 @@ jobs:
     
         - name: Cleanup on failure
           if: failure()
+          env:
+            AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+            AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+            AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
           run: |
             echo "🧹 Cleaning up failed deployment..."
             
@@ -576,22 +578,33 @@ jobs:
             if [ -f terraform.tfvars ]; then
               echo "🗑️ Destroying failed deployment resources..."
               
-              # Check if terraform state exists
-              if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
-                echo "ℹ️ No Terraform state found - nothing to clean up"
-              else
+              # Initialize Terraform to access state
+              if terraform init -backend-config="key=pr/${{ env.DEPLOYMENT_ID }}.tfstate" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
+                echo "✅ Terraform initialized for cleanup"
+                
                 # Check if there are any resources to destroy
                 if terraform state list | grep -q .; then
                   echo "🗑️ Found resources in state - destroying..."
                   
                   if terraform destroy -auto-approve; then
                     echo "✅ Cleanup completed successfully"
+                    
+                    # Remove state file from S3 after successful destroy
+                    echo "🗑️ Removing state file from S3..."
+                    if aws s3 rm "s3://densestvoid-terraform/pr/${{ env.DEPLOYMENT_ID }}.tfstate"; then
+                      echo "✅ State file removed from S3"
+                    else
+                      echo "⚠️ Failed to remove state file from S3"
+                    fi
                   else
                     echo "⚠️ Cleanup failed - manual intervention may be required"
                   fi
                 else
                   echo "ℹ️ No resources found in state - nothing to clean up"
                 fi
+              else
+                echo "❌ Failed to initialize Terraform for cleanup"
+                echo "⚠️ Manual cleanup may be required for deployment: ${{ env.DEPLOYMENT_ID }}"
               fi
             else
               echo "ℹ️ No terraform.tfvars found - skipping cleanup"
