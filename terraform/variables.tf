@@ -49,11 +49,6 @@ variable "docker_image_tag" {
   type        = string
 }
 
-variable "github_token" {
-  description = "GitHub token for pulling from GHCR"
-  type        = string
-  sensitive   = true
-}
 
 # Domain configuration (optional)
 variable "domain_name" {

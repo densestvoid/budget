@@ -14,7 +14,6 @@ spaces_secret_key = "your-do-spaces-secret-key"
 # GitHub Integration (set by GitHub Actions)
 github_repo = "user/repo"
 docker_image_tag = "pr-1-automated-deployment"
-github_token = "github_token_here"
 
 # Auto-termination Configuration
 auto_terminate_minutes = 30
