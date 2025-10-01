@@ -509,7 +509,7 @@ jobs:
             echo "🔍 Extracting deployment outputs..."
             
             # Simple extraction with -raw flag (should be clean)
-            APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null || echo "")
+            APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
             APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
             MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
             
