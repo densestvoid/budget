@@ -299,15 +299,24 @@ jobs:
         if [ -n "$DB_ID" ] && [ "$DB_ID" != "" ]; then
           echo "Checking for existing database within cluster..."
           
-          # Get database name from cluster
-          DB_DB_NAME=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/databases/$DB_ID/dbs" | \
-            jq -r ".dbs[] | select(.name == \"$DB_NAME\") | .name" || echo "")
+          # Get all databases in the cluster
+          echo "🔍 Fetching databases from cluster $DB_ID..."
+          DB_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/databases/$DB_ID/dbs")
           
-          if [ -n "$DB_DB_NAME" ] && [ "$DB_DB_NAME" != "" ]; then
-            echo "📥 Found existing database: $DB_DB_NAME - importing..."
+          echo "📋 Database API response:"
+          echo "$DB_RESPONSE" | jq '.'
+          
+          DB_DBS=$(echo "$DB_RESPONSE" | jq -r ".dbs[] | select(.name == \"$DB_NAME\") | .name" || echo "")
+          
+          echo "🔍 Looking for database named: $DB_NAME"
+          echo "🔍 Found databases: $DB_DBS"
+          
+          if [ -n "$DB_DBS" ] && [ "$DB_DBS" != "" ]; then
+            echo "📥 Found existing database: $DB_DBS - importing..."
             
-            if terraform import digitalocean_database_db.budget_database "$DB_ID/$DB_DB_NAME"; then
+            # Import format: cluster_id/database_name
+            if terraform import digitalocean_database_db.budget_database "$DB_ID/$DB_DBS"; then
               echo "✅ Database imported successfully"
             else
               echo "⚠️ Failed to import database - will be managed as new resource"
@@ -316,15 +325,25 @@ jobs:
             echo "✅ No existing database found - will create new"
           fi
           
-          # Check for existing database user
-          DB_USER_NAME=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/databases/$DB_ID/users" | \
-            jq -r ".users[] | select(.name == \"$DB_NAME\") | .name" || echo "")
+          # Check for existing database users
+          echo "Checking for existing database users..."
+          echo "🔍 Fetching users from cluster $DB_ID..."
+          USER_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/databases/$DB_ID/users")
           
-          if [ -n "$DB_USER_NAME" ] && [ "$DB_USER_NAME" != "" ]; then
-            echo "📥 Found existing database user: $DB_USER_NAME - importing..."
+          echo "📋 User API response:"
+          echo "$USER_RESPONSE" | jq '.'
+          
+          DB_USERS=$(echo "$USER_RESPONSE" | jq -r ".users[] | select(.name == \"$DB_NAME\") | .name" || echo "")
+          
+          echo "🔍 Looking for user named: $DB_NAME"
+          echo "🔍 Found users: $DB_USERS"
+          
+          if [ -n "$DB_USERS" ] && [ "$DB_USERS" != "" ]; then
+            echo "📥 Found existing database user: $DB_USERS - importing..."
             
-            if terraform import digitalocean_database_user.budget_user "$DB_ID/$DB_USER_NAME"; then
+            # Import format: cluster_id/user_name
+            if terraform import digitalocean_database_user.budget_user "$DB_ID/$DB_USERS"; then
               echo "✅ Database user imported successfully"
             else
               echo "⚠️ Failed to import database user - will be managed as new resource"
