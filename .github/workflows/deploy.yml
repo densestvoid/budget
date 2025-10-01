@@ -505,10 +505,18 @@ jobs:
             # Get outputs
             echo "📊 Getting deployment outputs..."
             
-            # Get outputs
-            APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null || echo "")
-            APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
-            MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
+            # Get outputs with proper filtering
+            echo "🔍 Extracting deployment outputs..."
+            
+            # Get app URL and clean it
+            APP_URL=$(terraform output -raw app_default_ingress 2>/dev/null | grep -v "Warning:" | grep -v "│" | tr -d '\n\r' | sed 's/\x1b\[[0-9;]*m//g' || echo "")
+            APP_ID=$(terraform output -raw app_id 2>/dev/null | grep -v "Warning:" | grep -v "│" | tr -d '\n\r' | sed 's/\x1b\[[0-9;]*m//g' || echo "")
+            MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null | grep -v "Warning:" | grep -v "│" | tr -d '\n\r' | sed 's/\x1b\[[0-9;]*m//g' || echo "")
+            
+            echo "🔍 Raw outputs:"
+            echo "APP_URL: '$APP_URL'"
+            echo "APP_ID: '$APP_ID'"
+            echo "MIGRATION_APP_ID: '$MIGRATION_APP_ID'"
             
             if [ -n "$APP_URL" ] && [ "$APP_URL" != "" ]; then
               echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
