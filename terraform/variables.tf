@@ -25,18 +25,6 @@ variable "deployment_id" {
   type        = string
 }
 
-# DigitalOcean Spaces credentials for state backend
-variable "spaces_access_key" {
-  description = "DigitalOcean Spaces access key for Terraform state backend"
-  type        = string
-  sensitive   = true
-}
-
-variable "spaces_secret_key" {
-  description = "DigitalOcean Spaces secret key for Terraform state backend"
-  type        = string
-  sensitive   = true
-}
 
 # Docker image configuration for App Platform
 variable "github_repo" {
@@ -55,11 +43,4 @@ variable "domain_name" {
   description = "Domain name for the application (optional)"
   type        = string
   default     = ""
-}
-
-# Auto-termination configuration
-variable "auto_terminate_minutes" {
-  description = "Number of minutes after which to automatically terminate the deployment"
-  type        = number
-  default     = 30
 }
