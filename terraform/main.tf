@@ -2,15 +2,9 @@ terraform {
   required_version = ">= 1.0"
   
   backend "s3" {
-    endpoint                    = "https://nyc3.digitaloceanspaces.com"
-    bucket                      = "budget-develop-terraform-states"
-    # key will be set dynamically via terraform init -backend-config
-    region                      = "us-east-1"
-    skip_credentials_validation = true
-    skip_requesting_account_id  = true
-    skip_metadata_api_check     = true
-    skip_region_validation      = true
-    skip_s3_checksum            = true
+    bucket = "densestvoid-terraform"
+    key    = "pr/{deployment_id}.tfstate"
+    region = "us-east-1"  # This will be overridden by -backend-config
   }
   
   required_providers {
