@@ -201,6 +201,83 @@ jobs:
     
     # Terraform workspace automatically handles existing vs new deployments
     
+    - name: Handle existing resources
+      id: handle_existing
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+      run: |
+        cd terraform
+        
+        echo "🔍 Checking for existing resources that might conflict..."
+        
+        # Check if VPC with same name exists
+        VPC_NAME="${{ env.DEPLOYMENT_ID }}"
+        echo "Checking for existing VPC: $VPC_NAME"
+        
+        # Use DigitalOcean API to check if VPC exists
+        VPC_EXISTS=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/vpcs" | \
+          jq -r ".vpcs[] | select(.name == \"$VPC_NAME\") | .id" || echo "")
+        
+        if [ -n "$VPC_EXISTS" ] && [ "$VPC_EXISTS" != "" ]; then
+          echo "⚠️ Found existing VPC: $VPC_NAME (ID: $VPC_EXISTS)"
+          echo "🧹 Cleaning up existing VPC to avoid conflicts..."
+          
+          # Delete the existing VPC
+          if curl -s -X DELETE -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/vpcs/$VPC_EXISTS"; then
+            echo "✅ Existing VPC deleted successfully"
+          else
+            echo "❌ Failed to delete existing VPC - manual cleanup may be required"
+          fi
+        else
+          echo "✅ No conflicting VPC found"
+        fi
+        
+        # Check for existing apps with same name
+        APP_NAME="${{ env.DEPLOYMENT_ID }}"
+        MIGRATION_APP_NAME="${{ env.DEPLOYMENT_ID }}-migrations"
+        
+        echo "Checking for existing apps: $APP_NAME, $MIGRATION_APP_NAME"
+        
+        # Check for main app
+        APP_ID=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps" | \
+          jq -r ".apps[] | select(.spec.name == \"$APP_NAME\") | .id" || echo "")
+        
+        if [ -n "$APP_ID" ] && [ "$APP_ID" != "" ]; then
+          echo "⚠️ Found existing app: $APP_NAME (ID: $APP_ID)"
+          echo "🧹 Cleaning up existing app..."
+          
+          if curl -s -X DELETE -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/apps/$APP_ID"; then
+            echo "✅ Existing app deleted successfully"
+          else
+            echo "❌ Failed to delete existing app"
+          fi
+        fi
+        
+        # Check for migration app
+        MIGRATION_APP_ID=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps" | \
+          jq -r ".apps[] | select(.spec.name == \"$MIGRATION_APP_NAME\") | .id" || echo "")
+        
+        if [ -n "$MIGRATION_APP_ID" ] && [ "$MIGRATION_APP_ID" != "" ]; then
+          echo "⚠️ Found existing migration app: $MIGRATION_APP_NAME (ID: $MIGRATION_APP_ID)"
+          echo "🧹 Cleaning up existing migration app..."
+          
+          if curl -s -X DELETE -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/apps/$MIGRATION_APP_ID"; then
+            echo "✅ Existing migration app deleted successfully"
+          else
+            echo "❌ Failed to delete existing migration app"
+          fi
+        fi
+        
+        echo "✅ Resource conflict check completed"
+
     - name: Deploy infrastructure
       id: deploy
       env:
@@ -208,9 +285,9 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
-            cd terraform
-            
-            echo "🚀 Deploying infrastructure..."
+        cd terraform
+        
+        echo "🚀 Deploying infrastructure..."
             
             # Check if this is a new deployment
             if [ "${{ steps.terraform_init.outputs.is_redeployment }}" = "false" ]; then
@@ -495,27 +572,27 @@ jobs:
             echo "🧹 Cleaning up failed deployment..."
             
             cd terraform
-        
-        if [ -f terraform.tfvars ]; then
-          echo "🗑️ Destroying failed deployment resources..."
-          
-          # Check if terraform state exists
-          if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
-            echo "ℹ️ No Terraform state found - nothing to clean up"
-          else
-            # Check if there are any resources to destroy
-            if terraform state list | grep -q .; then
-              echo "🗑️ Found resources in state - destroying..."
+            
+            if [ -f terraform.tfvars ]; then
+              echo "🗑️ Destroying failed deployment resources..."
               
-              if terraform destroy -auto-approve; then
-                echo "✅ Cleanup completed successfully"
+              # Check if terraform state exists
+              if [ ! -f .terraform/terraform.tfstate ] && [ ! -d .terraform ]; then
+                echo "ℹ️ No Terraform state found - nothing to clean up"
               else
-                echo "⚠️ Cleanup failed - manual intervention may be required"
+                # Check if there are any resources to destroy
+                if terraform state list | grep -q .; then
+                  echo "🗑️ Found resources in state - destroying..."
+                  
+                  if terraform destroy -auto-approve; then
+                    echo "✅ Cleanup completed successfully"
+                  else
+                    echo "⚠️ Cleanup failed - manual intervention may be required"
+                  fi
+                else
+                  echo "ℹ️ No resources found in state - nothing to clean up"
+                fi
               fi
             else
-              echo "ℹ️ No resources found in state - nothing to clean up"
+              echo "ℹ️ No terraform.tfvars found - skipping cleanup"
             fi
-          fi
-        else
-          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
-        fi
