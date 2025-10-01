@@ -186,29 +186,29 @@ jobs:
         
         echo "✅ Docker image built and pushed"
     
-    - name: Prepare Terraform configuration
-      run: |
-        cd terraform
-        cat > terraform.tfvars << EOF
-        do_token = "${{ env.DO_TOKEN }}"
-        region = "nyc1"
-        deployment_id = "${{ env.DEPLOYMENT_ID }}"
-        github_repo = "${{ github.repository }}"
-        docker_image_tag = "${{ env.IMAGE_TAG }}"
-        EOF
-        
-        echo "✅ Terraform configuration prepared"
+        - name: Prepare Terraform configuration
+          run: |
+            cd terraform/environments/pr
+            cat > terraform.tfvars << EOF
+            do_token = "${{ env.DO_TOKEN }}"
+            region = "nyc1"
+            deployment_id = "${{ env.DEPLOYMENT_ID }}"
+            github_repo = "${{ github.repository }}"
+            docker_image_tag = "${{ env.IMAGE_TAG }}"
+            EOF
+            
+            echo "✅ Terraform configuration prepared"
     
     # Terraform workspace automatically handles existing vs new deployments
     
-    - name: Deploy infrastructure
-      id: deploy
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-      run: |
-        cd terraform
+        - name: Deploy infrastructure
+          id: deploy
+          env:
+            AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+            AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+            AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+          run: |
+            cd terraform/environments/pr
         
         echo "🚀 Deploying infrastructure..."
         
@@ -489,12 +489,12 @@ jobs:
         
         echo "✅ Failure notification sent to Slack"
     
-    - name: Cleanup on failure
-      if: failure()
-      run: |
-        echo "🧹 Cleaning up failed deployment..."
-        
-        cd terraform
+        - name: Cleanup on failure
+          if: failure()
+          run: |
+            echo "🧹 Cleaning up failed deployment..."
+            
+            cd terraform/environments/pr
         
         if [ -f terraform.tfvars ]; then
           echo "🗑️ Destroying failed deployment resources..."
