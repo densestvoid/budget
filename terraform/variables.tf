@@ -19,52 +19,40 @@ variable "region" {
   }
 }
 
-# Droplet configuration
-variable "droplet_size" {
-  description = "Size of the application droplet"
+# Deployment identification
+variable "deployment_id" {
+  description = "Unique deployment ID for this PR (format: pr-{number}-{branch})"
   type        = string
-  default     = "s-1vcpu-1gb"
-  validation {
-    condition = contains([
-      "s-1vcpu-1gb", "s-1vcpu-2gb", "s-2vcpu-2gb", "s-2vcpu-4gb",
-      "s-4vcpu-8gb", "s-6vcpu-16gb", "s-8vcpu-32gb"
-    ], var.droplet_size)
-    error_message = "Droplet size must be a valid DigitalOcean size."
-  }
 }
 
-# Database configuration
-variable "db_size" {
-  description = "Size of the database cluster"
+# DigitalOcean Spaces credentials for state backend
+variable "spaces_access_key" {
+  description = "DigitalOcean Spaces access key for Terraform state backend"
   type        = string
-  default     = "db-s-1vcpu-1gb"
-  validation {
-    condition = contains([
-      "db-s-1vcpu-1gb", "db-s-1vcpu-2gb", "db-s-2vcpu-4gb",
-      "db-s-4vcpu-8gb", "db-s-6vcpu-16gb"
-    ], var.db_size)
-    error_message = "Database size must be a valid DigitalOcean database size."
-  }
+  sensitive   = true
 }
 
-# SSH Key configuration
-variable "ssh_public_key_path" {
-  description = "Path to SSH public key file"
+variable "spaces_secret_key" {
+  description = "DigitalOcean Spaces secret key for Terraform state backend"
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
+  sensitive   = true
 }
 
-variable "ssh_private_key_path" {
-  description = "Path to SSH private key file"
+# Docker image configuration for App Platform
+variable "github_repo" {
+  description = "GitHub repository (user/repo format)"
   type        = string
-  default     = "~/.ssh/id_rsa"
 }
 
-# Application configuration
-variable "app_port" {
-  description = "Port the application runs on"
+variable "docker_image_tag" {
+  description = "Docker image tag to deploy"
   type        = string
-  default     = "8080"
+}
+
+variable "github_token" {
+  description = "GitHub token for pulling from GHCR"
+  type        = string
+  sensitive   = true
 }
 
 # Domain configuration (optional)
@@ -74,15 +62,9 @@ variable "domain_name" {
   default     = ""
 }
 
-# Environment variables
-variable "app_env" {
-  description = "Application environment"
-  type        = string
-  default     = "production"
-}
-
-variable "log_level" {
-  description = "Application log level"
-  type        = string
-  default     = "info"
+# Auto-termination configuration
+variable "auto_terminate_minutes" {
+  description = "Number of minutes after which to automatically terminate the deployment"
+  type        = number
+  default     = 30
 }

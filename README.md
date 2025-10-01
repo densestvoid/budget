@@ -252,24 +252,6 @@ go tool task docker-build
 - **Go Task**: Build automation
 - **Docker**: Containerization
 
-## Production Deployment
-
-The application includes automated production deployment using DigitalOcean App Platform:
-
-- **Automatic Deployment**: Deploys to production on merge to `main` branch
-- **Zero Downtime**: Blue-green deployment strategy with health checks
-- **Database Persistence**: Production database is never destroyed
-- **Automatic Migrations**: Database migrations run automatically with rollback on failure
-- **Slack Notifications**: Deployment status sent to `#budget-prod-deployments`
-- **Cost Optimized**: Production runs on minimal resources ($20/month)
-
-### Production Environment
-
-- **URL**: https://budget.densestvoid.dev
-- **Database**: Persistent PostgreSQL cluster
-- **Infrastructure**: Managed via Terraform with AWS S3 state backend
-- **Monitoring**: Health checks with automatic rollback on failures
-
 ## Contributing
 
 1. Fork the repository
