@@ -1,3 +1,20 @@
+terraform {
+  required_providers {
+    digitalocean = {
+      source  = "digitalocean/digitalocean"
+      version = "~> 2.0"
+    }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+    external = {
+      source  = "hashicorp/external"
+      version = "~> 2.0"
+    }
+  }
+}
+
 # Auto-detect GitHub repository from environment variable
 data "external" "github_repo" {
   program = ["sh", "-c", "echo '{\"repo\":\"'$${GITHUB_REPOSITORY:-}\"'}'"]
