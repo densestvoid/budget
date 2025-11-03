@@ -15,6 +15,11 @@ jobs:
   deploy:
     name: Deploy to Production
     needs: go-checks
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      actions: write
     uses: ./.github/workflows/deploy-reusable.yml
     with:
       environment: production

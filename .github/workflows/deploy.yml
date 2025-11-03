@@ -27,6 +27,11 @@ jobs:
   deploy:
     name: Deploy to DigitalOcean
     needs: go-checks
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      actions: write
     uses: ./.github/workflows/deploy-reusable.yml
     with:
       environment: pr
