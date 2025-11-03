@@ -751,72 +751,72 @@ jobs:
         
         if [ "${{ inputs.environment }}" = "pr" ]; then
           # PR deployment failure message
-          cat > slack_message.json <<SLACK_EOF
-{
-  "text": "❌ PR Deployment Failed",
-  "attachments": [
-    {
-      "color": "danger",
-      "fields": [
-        {
-          "title": "PR Number",
-          "value": "${{ inputs.pr_number }}",
-          "short": true
-        },
-        {
-          "title": "Deployment ID",
-          "value": "${{ inputs.deployment_id }}",
-          "short": true
-        },
-        {
-          "title": "Error Details",
-          "value": "Deployment failed during infrastructure or application deployment",
-          "short": false
-        },
-        {
-          "title": "Cleanup Status",
-          "value": "Partial deployment cleaned up automatically",
-          "short": true
-        }
-      ]
-    }
-  ]
-}
-SLACK_EOF
+          cat > slack_message.json << EOF
+          {
+            "text": "❌ PR Deployment Failed",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "PR Number",
+                    "value": "${{ inputs.pr_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Deployment ID",
+                    "value": "${{ inputs.deployment_id }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Error Details",
+                    "value": "Deployment failed during infrastructure or application deployment",
+                    "short": false
+                  },
+                  {
+                    "title": "Cleanup Status",
+                    "value": "Partial deployment cleaned up automatically",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
         else
           # Production deployment failure message
-          cat > slack_message.json <<SLACK_EOF
-{
-  "text": "❌ Production Deployment Failed",
-  "attachments": [
-    {
-      "color": "danger",
-      "fields": [
-        {
-          "title": "Commit",
-          "value": "${{ github.sha }}",
-          "short": true
-        },
-        {
-          "title": "Image Tag",
-          "value": "${{ inputs.image_tag }}",
-          "short": true
-        },
-        {
-          "title": "Error Details",
-          "value": "Deployment failed during infrastructure or application deployment",
-          "short": false
-        },
-        {
-          "title": "Branch",
-          "value": "${{ github.ref_name }}",
-          "short": true
-        }
-      ]
-    }
-  ]
-}
-SLACK_EOF
+          cat > slack_message.json << EOF
+          {
+            "text": "❌ Production Deployment Failed",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "Commit",
+                    "value": "${{ github.sha }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Image Tag",
+                    "value": "${{ inputs.image_tag }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Error Details",
+                    "value": "Deployment failed during infrastructure or application deployment",
+                    "short": false
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
         fi
         
         # Send to Slack
