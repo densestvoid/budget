@@ -127,6 +127,9 @@ module "budget_app" {
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
   
+  # VPC configuration - use the VPC created above
+  vpc_id = digitalocean_vpc.budget_vpc.id
+  
   # Database configuration from newly created resources
   database_cluster_id   = digitalocean_database_cluster.budget_db.id
   database_name         = digitalocean_database_db.budget_database.name

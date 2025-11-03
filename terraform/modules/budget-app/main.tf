@@ -17,7 +17,7 @@ terraform {
 
 # Auto-detect GitHub repository from environment variable
 data "external" "github_repo" {
-  program = ["sh", "-c", "echo '{\"repo\":\"'$${GITHUB_REPOSITORY:-}\"'}'"]
+  program = ["sh", "-c", "printf '{\"repo\":\"%s\"}' \"${GITHUB_REPOSITORY:-}\""]
 }
 
 locals {
@@ -51,7 +51,7 @@ data "digitalocean_project" "budget" {
 # Health check to ensure database is ready for connections
 resource "null_resource" "database_health_check" {
   provisioner "local-exec" {
-    command = <<-EOT
+    command     = <<-EOT
       echo "🔍 Testing database connectivity..."
       
       # Install postgresql-client if not available
@@ -70,6 +70,7 @@ resource "null_resource" "database_health_check" {
       echo "❌ Database failed to become ready after 5 minutes"
       exit 1
     EOT
+    interpreter = ["/bin/bash", "-c"]
   }
 }
 
