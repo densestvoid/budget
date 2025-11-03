@@ -120,11 +120,11 @@ jobs:
           fi
         fi
     
-        - name: Setup Terraform configuration for destroy
-          id: setup
-          run: |
-            echo "🔧 Setting up Terraform configuration for destroy..."
-            cd terraform
+    - name: Setup Terraform configuration for destroy
+      id: setup
+      run: |
+        echo "🔧 Setting up Terraform configuration for destroy..."
+        cd terraform
         
         DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         
@@ -142,14 +142,14 @@ jobs:
         echo "✅ Terraform configuration created for deployment: $DEPLOYMENT_ID"
         echo "setup_success=true" >> $GITHUB_OUTPUT
     
-        - name: Initialize Terraform with AWS S3 backend
-          id: init
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-            AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-          run: |
-            cd terraform
+    - name: Initialize Terraform with AWS S3 backend
+      id: init
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+      run: |
+        cd terraform
         
         echo "🔧 Initializing Terraform with AWS S3 backend..."
         echo "Deployment ID: ${{ steps.validate.outputs.deployment_id }}"
@@ -183,21 +183,21 @@ jobs:
     
     # State file contains the deployment state automatically via DigitalOcean Spaces backend
     
-        - name: Destroy deployment
-          if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true' && steps.init.outputs.already_terminated == 'false'
-          id: destroy
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-            AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-          run: |
-            DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
-            
-            echo "🗑️ Destroying deployment: $DEPLOYMENT_ID"
-            echo "Termination time: $(date -u)"
-            echo "Note: Shared project 'budget-develop' will be preserved"
-            
-            cd terraform
+    - name: Destroy deployment
+      if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true' && steps.init.outputs.already_terminated == 'false'
+      id: destroy
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+      run: |
+        DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
+        
+        echo "🗑️ Destroying deployment: $DEPLOYMENT_ID"
+        echo "Termination time: $(date -u)"
+        echo "Note: Shared project 'budget-develop' will be preserved"
+        
+        cd terraform
         
         # Show what will be destroyed
         echo "📋 Resources in state:"

@@ -68,8 +68,6 @@ on:
         required: true
       TERRAFORM_AWS_S3_REGION:
         required: true
-      GITHUB_TOKEN:
-        required: true
       SLACK_WEBHOOK:
         required: true
 
