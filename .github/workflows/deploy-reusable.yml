@@ -604,17 +604,13 @@ jobs:
             body: message
           });
     
-    - name: Send success notification to Slack
-      if: steps.deploy.outputs.deployment_success == 'true'
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-      run: |
-        echo "📢 Sending success notification to Slack..."
-        
-        if [ "${{ inputs.environment }}" = "pr" ]; then
-          # PR deployment message
-          cat > slack_message.json << EOF
+    - name: Send success notification to Slack (PR)
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
           {
             "text": "✅ PR Deployment Successful",
             "attachments": [
@@ -645,10 +641,14 @@ jobs:
               }
             ]
           }
-          EOF
-        else
-          # Production deployment message
-          cat > slack_message.json << EOF
+    
+    - name: Send success notification to Slack (Production)
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment != 'pr'
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
           {
             "text": "✅ Production Deployment Successful",
             "attachments": [
@@ -679,15 +679,6 @@ jobs:
               }
             ]
           }
-          EOF
-        fi
-        
-        # Send to Slack
-        curl -X POST -H 'Content-type: application/json' \
-          --data @slack_message.json \
-          $SLACK_WEBHOOK
-        
-        echo "✅ Success notification sent to Slack"
     
     - name: Comment on PR with failure
       if: failure() && inputs.post_pr_comments == true
@@ -741,17 +732,13 @@ jobs:
             body: message
           });
     
-    - name: Send failure notification to Slack
-      if: failure()
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-      run: |
-        echo "📢 Sending failure notification to Slack..."
-        
-        if [ "${{ inputs.environment }}" = "pr" ]; then
-          # PR deployment failure message
-          cat > slack_message.json << EOF
+    - name: Send failure notification to Slack (PR)
+      if: failure() && inputs.environment == 'pr'
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
           {
             "text": "❌ PR Deployment Failed",
             "attachments": [
@@ -782,10 +769,14 @@ jobs:
               }
             ]
           }
-          EOF
-        else
-          # Production deployment failure message
-          cat > slack_message.json << EOF
+    
+    - name: Send failure notification to Slack (Production)
+      if: failure() && inputs.environment != 'pr'
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
           {
             "text": "❌ Production Deployment Failed",
             "attachments": [
@@ -816,15 +807,6 @@ jobs:
               }
             ]
           }
-          EOF
-        fi
-        
-        # Send to Slack
-        curl -X POST -H 'Content-type: application/json' \
-          --data @slack_message.json \
-          $SLACK_WEBHOOK
-        
-        echo "✅ Failure notification sent to Slack"
     
     - name: Cleanup on failure
       if: failure() && inputs.environment == 'pr'
