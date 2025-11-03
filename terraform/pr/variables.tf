@@ -25,22 +25,8 @@ variable "deployment_id" {
   type        = string
 }
 
-
-# Docker image configuration for App Platform
-variable "github_repo" {
-  description = "GitHub repository (user/repo format)"
-  type        = string
-}
-
 variable "docker_image_tag" {
   description = "Docker image tag to deploy"
   type        = string
 }
 
-
-# Domain configuration (optional)
-variable "domain_name" {
-  description = "Domain name for the application (optional)"
-  type        = string
-  default     = ""
-}

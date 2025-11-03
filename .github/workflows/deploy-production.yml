@@ -1,0 +1,39 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  DO_TOKEN: ${{ secrets.DO_TOKEN }}
+
+jobs:
+  go-checks:
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+
+  deploy:
+    name: Deploy to Production
+    needs: go-checks
+    uses: ./.github/workflows/deploy-reusable.yml
+    with:
+      environment: production
+      deployment_id: production
+      terraform_dir: terraform/production
+      backend_key: production/production.tfstate
+      image_tag: production-${{ github.sha }}
+      slack_webhook_secret_name: SLACK_WEBHOOK_PRODUCTION
+      vpc_name: production
+      app_name: production
+      migration_app_name: production-migrations
+      db_name: production
+      project_name: budget-prod
+      post_pr_comments: false
+      setup_auto_termination: false
+    secrets:
+      DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      TERRAFORM_AWS_S3_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+      TERRAFORM_AWS_S3_ACCESS_KEY_SECRET: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+      TERRAFORM_AWS_S3_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_PRODUCTION }}

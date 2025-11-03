@@ -1,0 +1,13 @@
+# DigitalOcean Configuration
+do_token = "your-digitalocean-api-token-here"
+
+# Infrastructure Configuration
+region = "nyc1"
+
+# GitHub Integration
+# Note: github_repo is auto-detected from GITHUB_REPOSITORY environment variable
+docker_image_tag = "production-latest"
+
+# Note: Database cluster name, database name, database user name, and domain name
+# are hardcoded in main.tf (production/production/budget.densestvoid.dev)
+

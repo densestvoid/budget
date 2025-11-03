@@ -1,0 +1,877 @@
+name: Deploy Budget App (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment (pr or production)'
+        required: true
+        type: string
+      deployment_id:
+        description: 'Deployment ID (e.g., pr-123 or production)'
+        required: true
+        type: string
+      terraform_dir:
+        description: 'Terraform directory path (e.g., terraform/pr or terraform/production)'
+        required: true
+        type: string
+      backend_key:
+        description: 'Terraform backend state key (e.g., pr/pr-123.tfstate or production/production.tfstate)'
+        required: true
+        type: string
+      image_tag:
+        description: 'Docker image tag'
+        required: true
+        type: string
+      slack_webhook_secret_name:
+        description: 'Name of Slack webhook secret (for documentation only)'
+        required: true
+        type: string
+      vpc_name:
+        description: 'VPC name'
+        required: true
+        type: string
+      app_name:
+        description: 'App name'
+        required: true
+        type: string
+      migration_app_name:
+        description: 'Migration app name'
+        required: true
+        type: string
+      db_name:
+        description: 'Database cluster name'
+        required: true
+        type: string
+      project_name:
+        description: 'DigitalOcean project name (e.g., budget-develop or budget-prod)'
+        required: true
+        type: string
+      post_pr_comments:
+        description: 'Whether to post PR comments (true for PR, false for production)'
+        required: true
+        type: boolean
+      setup_auto_termination:
+        description: 'Whether to set up auto-termination (true for PR, false for production)'
+        required: true
+        type: boolean
+      pr_number:
+        description: 'PR number (only for PR deployments)'
+        required: false
+        type: string
+    secrets:
+      DO_TOKEN:
+        required: true
+      TERRAFORM_AWS_S3_ACCESS_KEY:
+        required: true
+      TERRAFORM_AWS_S3_ACCESS_KEY_SECRET:
+        required: true
+      TERRAFORM_AWS_S3_REGION:
+        required: true
+      GITHUB_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      actions: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7
+    
+    - name: Initialize Terraform with AWS S3 backend
+      id: terraform_init
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        cd ${{ inputs.terraform_dir }}
+        
+        echo "🔧 Initializing Terraform with AWS S3 backend..."
+        echo "Environment: ${{ inputs.environment }}"
+        echo "Deployment ID: ${{ inputs.deployment_id }}"
+        
+        # Set AWS region from secret
+        AWS_REGION="${{ secrets.TERRAFORM_AWS_S3_REGION }}"
+        echo "AWS Region: '$AWS_REGION'"
+        
+        # Initialize with deployment-specific state file
+        if terraform init -backend-config="key=${{ inputs.backend_key }}" -backend-config="region=$AWS_REGION"; then
+          echo "✅ Terraform initialized successfully"
+          echo "init_success=true" >> $GITHUB_OUTPUT
+          
+          # Check if this is a new or existing deployment
+          if terraform state list | grep -q "module.budget_app"; then
+            echo "♻️ Found existing deployment state"
+            echo "is_redeployment=true" >> $GITHUB_OUTPUT
+            
+            # Show current state
+            echo "📋 Current resources in state:"
+            terraform state list
+          else
+            echo "🆕 New deployment (empty state)"
+            echo "is_redeployment=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "❌ Terraform initialization failed"
+          echo "init_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Check build requirements and caches
+      id: build_cache
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🔍 Analyzing build requirements..."
+        
+        # Generate cache keys
+        GO_HASH=$(find . -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
+        DOCKER_HASH=$(find . -name "Dockerfile*" -o -name "*.go" -o -name "go.mod" -o -name "go.sum" | sort | xargs md5sum | md5sum | cut -d' ' -f1)
+        
+        echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
+        echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
+        echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_ENV
+        
+        echo "📦 Image tag: ${{ inputs.image_tag }}"
+        echo "🔑 Go cache key: ${GO_HASH}"
+        echo "🔑 Docker cache key: ${DOCKER_HASH}"
+        
+        # Check if Docker image already exists
+        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }} >/dev/null 2>&1; then
+          echo "✅ Docker image exists - skipping entire build pipeline"
+          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
+          echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }}"
+        else
+          echo "❌ Docker image not found - build pipeline required"
+          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Restore Go build cache
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+        key: go-build-${{ env.GO_HASH }}
+        restore-keys: |
+          go-build-
+    
+    - name: Restore Docker buildx cache
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      id: docker_buildx_cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: docker-buildx-${{ env.DOCKER_HASH }}
+        restore-keys: |
+          docker-buildx-
+    
+    - name: Build and push Docker image
+      if: steps.build_cache.outputs.skip_docker_build == 'false'
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🐳 Building Docker image for ${{ inputs.environment }}..."
+        echo "Buildx cache hit: ${{ steps.docker_buildx_cache.outputs.cache-hit }}"
+        
+        # Login to GitHub Container Registry
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Determine additional tags
+        ADDITIONAL_TAG="${{ inputs.deployment_id }}"
+        if [ "${{ inputs.environment }}" = "production" ]; then
+          ADDITIONAL_TAG="production-latest"
+        fi
+        
+        # Build and push with buildx
+        docker buildx build \
+          --platform linux/amd64 \
+          --tag ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }} \
+          --tag ghcr.io/${{ github.repository }}/budget-app:${ADDITIONAL_TAG} \
+          --cache-from type=local,src=/tmp/.buildx-cache \
+          --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+          --push \
+          .
+        
+        # Update cache
+        rm -rf /tmp/.buildx-cache
+        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+        
+        echo "✅ Docker image built and pushed"
+    
+    - name: Prepare Terraform configuration
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        cd ${{ inputs.terraform_dir }}
+        cat > terraform.tfvars << EOF
+        do_token = "${{ secrets.DO_TOKEN }}"
+        region = "nyc1"
+        docker_image_tag = "${{ inputs.image_tag }}"
+        EOF
+        
+        if [ "${{ inputs.environment }}" = "pr" ]; then
+          echo "deployment_id = \"${{ inputs.deployment_id }}\"" >> terraform.tfvars
+        fi
+        
+        echo "✅ Terraform configuration prepared"
+        echo "ℹ️ GitHub repository auto-detected from GITHUB_REPOSITORY env var"
+    
+    - name: Import existing resources
+      if: inputs.environment == 'pr'
+      id: import_existing
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        cd ${{ inputs.terraform_dir }}
+        
+        echo "🔍 Checking for existing resources to import..."
+        
+        # Check if VPC with same name exists
+        VPC_NAME="${{ inputs.vpc_name }}"
+        echo "Checking for existing VPC: $VPC_NAME"
+        
+        # Use DigitalOcean API to check if VPC exists
+        VPC_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/vpcs" | \
+          jq -r ".vpcs[] | select(.name == \"$VPC_NAME\") | .id" || echo "")
+        
+        if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
+          echo "📥 Found existing VPC: $VPC_NAME (ID: $VPC_ID) - importing..."
+          
+          # Import the existing VPC into Terraform state
+          if terraform import digitalocean_vpc.budget_vpc "$VPC_ID"; then
+            echo "✅ VPC imported successfully"
+          else
+            echo "⚠️ Failed to import VPC - will be managed as new resource"
+          fi
+        else
+          echo "✅ No existing VPC found - will create new"
+        fi
+        
+        # Check for existing apps with same name
+        APP_NAME="${{ inputs.app_name }}"
+        MIGRATION_APP_NAME="${{ inputs.migration_app_name }}"
+        
+        echo "Checking for existing apps: $APP_NAME, $MIGRATION_APP_NAME"
+        
+        # Check for main app (now in module)
+        APP_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps" | \
+          jq -r ".apps[] | select(.spec.name == \"$APP_NAME\") | .id" || echo "")
+        
+        if [ -n "$APP_ID" ] && [ "$APP_ID" != "" ]; then
+          echo "📥 Found existing app: $APP_NAME (ID: $APP_ID) - importing..."
+          
+          if terraform import module.budget_app.digitalocean_app.budget_app "$APP_ID"; then
+            echo "✅ App imported successfully"
+          else
+            echo "⚠️ Failed to import app - will be managed as new resource"
+          fi
+        else
+          echo "✅ No existing app found - will create new"
+        fi
+        
+        # Check for migration app (now in module)
+        MIGRATION_APP_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps" | \
+          jq -r ".apps[] | select(.spec.name == \"$MIGRATION_APP_NAME\") | .id" || echo "")
+        
+        if [ -n "$MIGRATION_APP_ID" ] && [ "$MIGRATION_APP_ID" != "" ]; then
+          echo "📥 Found existing migration app: $MIGRATION_APP_NAME (ID: $MIGRATION_APP_ID) - importing..."
+          
+          if terraform import module.budget_app.digitalocean_app.budget_migrations "$MIGRATION_APP_ID"; then
+            echo "✅ Migration app imported successfully"
+          else
+            echo "⚠️ Failed to import migration app - will be managed as new resource"
+          fi
+        else
+          echo "✅ No existing migration app found - will create new"
+        fi
+        
+        # Check for existing database cluster
+        DB_NAME="${{ inputs.db_name }}"
+        echo "Checking for existing database cluster: $DB_NAME"
+        
+        # Use DigitalOcean API to check if database cluster exists
+        DB_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/databases" | \
+          jq -r ".databases[] | select(.name == \"$DB_NAME\") | .id" || echo "")
+        
+        if [ -n "$DB_ID" ] && [ "$DB_ID" != "" ]; then
+          echo "📥 Found existing database cluster: $DB_NAME (ID: $DB_ID) - importing..."
+          
+          if terraform import digitalocean_database_cluster.budget_db "$DB_ID"; then
+            echo "✅ Database cluster imported successfully"
+          else
+            echo "⚠️ Failed to import database cluster - will be managed as new resource"
+          fi
+          
+          # Check for existing database within the cluster
+          echo "Checking for existing database within cluster..."
+          
+          # Get all databases in the cluster
+          echo "🔍 Fetching databases from cluster $DB_ID..."
+          DB_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/databases/$DB_ID/dbs")
+          
+          DB_DBS=$(echo "$DB_RESPONSE" | jq -r ".dbs[] | select(.name == \"$DB_NAME\") | .name" || echo "")
+          
+          echo "🔍 Looking for database named: $DB_NAME"
+          echo "🔍 Found databases: $DB_DBS"
+          
+          if [ -n "$DB_DBS" ] && [ "$DB_DBS" != "" ]; then
+            echo "📥 Found existing database: $DB_DBS - importing..."
+            
+            # Import format: cluster_id/database_name
+            if terraform import digitalocean_database_db.budget_database "$DB_ID/$DB_DBS"; then
+              echo "✅ Database imported successfully"
+            else
+              echo "⚠️ Failed to import database - will be managed as new resource"
+            fi
+          else
+            echo "✅ No existing database found - will create new"
+          fi
+          
+          # Check for existing database users
+          echo "Checking for existing database users..."
+          echo "🔍 Fetching users from cluster $DB_ID..."
+          USER_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/databases/$DB_ID/users")
+          
+          DB_USERS=$(echo "$USER_RESPONSE" | jq -r ".users[] | select(.name == \"$DB_NAME\") | .name" || echo "")
+          
+          echo "🔍 Looking for user named: $DB_NAME"
+          echo "🔍 Found users: $DB_USERS"
+          
+          if [ -n "$DB_USERS" ] && [ "$DB_USERS" != "" ]; then
+            echo "📥 Found existing database user: $DB_USERS - importing..."
+            
+            # Import format: cluster_id/user_name
+            if terraform import digitalocean_database_user.budget_user "$DB_ID/$DB_USERS"; then
+              echo "✅ Database user imported successfully"
+            else
+              echo "⚠️ Failed to import database user - will be managed as new resource"
+            fi
+          else
+            echo "✅ No existing database user found - will create new"
+          fi
+        else
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "ℹ️ No existing database cluster found - will create on first deployment"
+          else
+            echo "✅ No existing database cluster found - will create new"
+          fi
+        fi
+        
+        # Check for existing project resources assignment
+        echo "Checking for existing project resources assignment..."
+        
+        # Get project resources to see if any are already assigned
+        PROJECT_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/projects" | \
+          jq -r ".projects[] | select(.name == \"${{ inputs.project_name }}\") | .id" || echo "")
+        
+        if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "" ]; then
+          EXISTING_RESOURCES=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/projects/$PROJECT_ID/resources" | \
+            jq -r '.resources[] | select(.urn | contains("do:app:") or contains("do:dbaas:")) | .urn' || echo "")
+          
+          if [ -n "$EXISTING_RESOURCES" ] && [ "$EXISTING_RESOURCES" != "" ]; then
+            echo "📥 Found existing project resources - attempting to import..."
+            
+            # Try to import project resources (this might fail if already managed elsewhere)
+            if terraform import module.budget_app.digitalocean_project_resources.budget_resources "$PROJECT_ID"; then
+              echo "✅ Project resources imported successfully"
+            else
+              echo "⚠️ Failed to import project resources - may already be managed elsewhere"
+            fi
+          else
+            echo "✅ No conflicting project resources found"
+          fi
+        fi
+        
+        # Check for existing null resources (these are harder to detect, so we'll skip them)
+        echo "ℹ️ Skipping null_resource imports (database_health_check, database_schema_setup) - these will be recreated if needed"
+        
+        echo "✅ Resource import check completed"
+
+    - name: Deploy infrastructure
+      id: deploy
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        cd ${{ inputs.terraform_dir }}
+        
+        echo "🚀 Deploying infrastructure..."
+            
+        # Check if this is a new deployment
+        if [ "${{ steps.terraform_init.outputs.is_redeployment }}" = "false" ]; then
+          echo "🆕 New deployment - creating all resources..."
+          
+          if terraform apply -auto-approve; then
+            echo "✅ New deployment successful"
+            echo "deployment_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ New deployment failed"
+            echo "deployment_success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        else
+          # Existing deployment - use conditional logic based on image changes
+          if [ "${{ steps.build_cache.outputs.skip_docker_build }}" = "true" ]; then
+            echo "📦 Same container image - checking if infrastructure-only updates needed..."
+            
+            # Check what would change with a plan
+            terraform plan -detailed-exitcode -out=tfplan
+            plan_exit_code=$?
+            
+            echo "📋 Terraform plan exit code: $plan_exit_code"
+            
+            if [ $plan_exit_code -eq 2 ]; then
+              echo "🔄 Infrastructure changes detected - applying updates..."
+              
+              if [ -f tfplan ] && [ -s tfplan ]; then
+                echo "📋 Plan file exists and has content - changes detected"
+                echo "🔧 Infrastructure changes detected - applying updates..."
+                
+                if terraform apply -auto-approve tfplan; then
+                  echo "✅ Infrastructure updates successful"
+                  echo "deployment_success=true" >> $GITHUB_OUTPUT
+                else
+                  echo "❌ Infrastructure updates failed"
+                  echo "deployment_success=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              else
+                echo "❌ Plan file missing or empty"
+                echo "deployment_success=false" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            elif [ $plan_exit_code -eq 0 ]; then
+              echo "✅ No changes needed - infrastructure is up to date"
+              echo "deployment_success=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Terraform plan failed"
+              echo "deployment_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "🔄 New container image - updating containers..."
+            
+            if terraform apply -auto-approve; then
+              echo "✅ Container update successful"
+              echo "deployment_success=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Container update failed"
+              echo "deployment_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+        fi
+        
+        # Get outputs
+        echo "📊 Getting deployment outputs..."
+        
+        # Simple extraction with -raw flag (should be clean)
+        APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
+        APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
+        MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
+        
+        echo "📋 Extracted outputs:"
+        echo "APP_URL: '$APP_URL'"
+        echo "APP_ID: '$APP_ID'" 
+        echo "MIGRATION_APP_ID: '$MIGRATION_APP_ID'"
+        
+        if [ -n "$APP_URL" ] && [ "$APP_URL" != "" ]; then
+          echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
+          echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
+          echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
+          echo "✅ Successfully retrieved deployment outputs"
+        else
+          echo "⚠️ No outputs found - this may indicate an incomplete deployment"
+        fi
+    
+    - name: Verify deployment health
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🏥 Verifying deployment health..."
+        
+        if [ -n "${{ env.APP_URL }}" ]; then
+          echo "🌐 Application URL: ${{ env.APP_URL }}"
+          
+          # Wait for application to be ready
+          echo "⏳ Waiting for application to be ready..."
+          sleep 30
+          
+          # Check if application is responding
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.APP_URL }}/health" || echo "000")
+          echo "🏥 Health check response: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Application is healthy and responding"
+          else
+            echo "⚠️ Application health check returned: $HTTP_CODE"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              echo "This may be normal if the health endpoint is not implemented"
+            else
+              echo "This may be normal if the health endpoint is not implemented"
+            fi
+          fi
+        else
+          echo "⚠️ No application URL available for health check"
+        fi
+    
+    - name: Set up auto-termination
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "⏰ Setting up auto-termination..."
+        
+        # Calculate termination time (30 minutes from now)
+        TERMINATION_TIME=$(date -d '+30 minutes' -u +'%Y-%m-%dT%H:%M:%SZ')
+        echo "TERMINATION_TIME=${TERMINATION_TIME}" >> $GITHUB_ENV
+        
+        echo "🕐 Deployment will auto-terminate at: ${TERMINATION_TIME}"
+        echo "⏰ Auto-termination configured for 30 minutes"
+    
+    - name: Comment on PR with success
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.post_pr_comments == true
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        APP_URL: ${{ env.APP_URL }}
+        APP_ID: ${{ env.APP_ID }}
+        MIGRATION_APP_ID: ${{ env.MIGRATION_APP_ID }}
+        DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+        TERMINATION_TIME: ${{ env.TERMINATION_TIME }}
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
+          
+          if (!issueNumber) {
+            console.log('⚠️ Could not determine PR number, skipping comment');
+            return;
+          }
+          
+          const message = [
+            '## ✅ Deployment Successful',
+            '',
+            `🌐 **URL:** ${process.env.APP_URL || 'N/A'}`,
+            `🆔 **App ID:** ${process.env.APP_ID || 'N/A'}`,
+            `🔧 **Migration ID:** ${process.env.MIGRATION_APP_ID || 'N/A'}`,
+            `📦 **Deployment:** ${process.env.DEPLOYMENT_ID || 'N/A'}`,
+            `⏰ **Terminates:** ${process.env.TERMINATION_TIME || 'N/A'}`
+          ].join('\n');
+
+          await github.rest.issues.createComment({
+            issue_number: parseInt(issueNumber),
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
+    
+    - name: Send success notification to Slack
+      if: steps.deploy.outputs.deployment_success == 'true'
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      run: |
+        echo "📢 Sending success notification to Slack..."
+        
+        if [ "${{ inputs.environment }}" = "pr" ]; then
+          # PR deployment message
+          cat > slack_message.json << EOF
+          {
+            "text": "✅ PR Deployment Successful",
+            "attachments": [
+              {
+                "color": "good",
+                "fields": [
+                  {
+                    "title": "Application URL",
+                    "value": "${{ env.APP_URL }}",
+                    "short": true
+                  },
+                  {
+                    "title": "PR Number",
+                    "value": "${{ inputs.pr_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Deployment ID",
+                    "value": "${{ inputs.deployment_id }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Auto-terminates",
+                    "value": "30 minutes",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+        else
+          # Production deployment message
+          cat > slack_message.json << EOF
+          {
+            "text": "✅ Production Deployment Successful",
+            "attachments": [
+              {
+                "color": "good",
+                "fields": [
+                  {
+                    "title": "Application URL",
+                    "value": "${{ env.APP_URL }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Commit",
+                    "value": "${{ github.sha }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Image Tag",
+                    "value": "${{ inputs.image_tag }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+        fi
+        
+        # Send to Slack
+        curl -X POST -H 'Content-type: application/json' \
+          --data @slack_message.json \
+          $SLACK_WEBHOOK
+        
+        echo "✅ Success notification sent to Slack"
+    
+    - name: Comment on PR with failure
+      if: failure() && inputs.post_pr_comments == true
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
+          
+          if (!issueNumber) {
+            console.log('⚠️ Could not determine PR number, skipping comment');
+            return;
+          }
+          
+          const workflow = 'Deploy Budget App';
+          let failedStep = 'Unknown';
+          let errorMessage = 'Workflow execution failed';
+
+          // Determine the failed step based on the workflow context
+          if (context.payload.workflow_run && context.payload.workflow_run.conclusion === 'failure') {
+            failedStep = 'Deploy infrastructure (Database → Migration → Application)';
+            errorMessage = 'Terraform deployment failed. This could be:\\n' +
+                          '• Database cluster creation failure\\n' +
+                          '• Migration container failure (check migration logs in DigitalOcean App Platform)\\n' +
+                          '• Application container deployment failure\\n' +
+                          '• Database firewall configuration failure\\n' +
+                          'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
+          } else {
+            failedStep = 'Post-deployment verification';
+            errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
+          }
+          
+          const message = [
+            '## ❌ Deployment Failed',
+            '',
+            `**Workflow:** ${workflow}`,
+            `**Step:** ${failedStep}`,
+            '**Error:**',
+            '```',
+            errorMessage,
+            '```',
+            '**Cleanup:** Partial deployment cleaned up automatically'
+          ].join('\n');
+
+          await github.rest.issues.createComment({
+            issue_number: parseInt(issueNumber),
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
+    
+    - name: Send failure notification to Slack
+      if: failure()
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      run: |
+        echo "📢 Sending failure notification to Slack..."
+        
+        if [ "${{ inputs.environment }}" = "pr" ]; then
+          # PR deployment failure message
+          cat > slack_message.json << EOF
+          {
+            "text": "❌ PR Deployment Failed",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "PR Number",
+                    "value": "${{ inputs.pr_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Deployment ID",
+                    "value": "${{ inputs.deployment_id }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Error Details",
+                    "value": "Deployment failed during infrastructure or application deployment",
+                    "short": false
+                  },
+                  {
+                    "title": "Cleanup Status",
+                    "value": "Partial deployment cleaned up automatically",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+        else
+          # Production deployment failure message
+          cat > slack_message.json << EOF
+          {
+            "text": "❌ Production Deployment Failed",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "Commit",
+                    "value": "${{ github.sha }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Image Tag",
+                    "value": "${{ inputs.image_tag }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Error Details",
+                    "value": "Deployment failed during infrastructure or application deployment",
+                    "short": false
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+        fi
+        
+        # Send to Slack
+        curl -X POST -H 'Content-type: application/json' \
+          --data @slack_message.json \
+          $SLACK_WEBHOOK
+        
+        echo "✅ Failure notification sent to Slack"
+    
+    - name: Cleanup on failure
+      if: failure() && inputs.environment == 'pr'
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🧹 Cleaning up failed deployment..."
+        
+        cd ${{ inputs.terraform_dir }}
+        
+        if [ -f terraform.tfvars ]; then
+          echo "🗑️ Destroying failed deployment resources..."
+          
+          # Initialize Terraform to access state
+          if terraform init -backend-config="key=${{ inputs.backend_key }}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
+            echo "✅ Terraform initialized for cleanup"
+            
+            # Check if there are any resources to destroy
+            if terraform state list | grep -q .; then
+              echo "🗑️ Found resources in state - destroying..."
+              
+              if terraform destroy -auto-approve; then
+                echo "✅ Cleanup completed successfully"
+                
+                # Remove state file from S3 after successful destroy
+                echo "🗑️ Removing state file from S3..."
+                if aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}"; then
+                  echo "✅ State file removed from S3"
+                else
+                  echo "⚠️ Failed to remove state file from S3"
+                fi
+              else
+                echo "⚠️ Cleanup failed - manual intervention may be required"
+              fi
+            else
+              echo "ℹ️ No resources found in state - nothing to clean up"
+            fi
+          else
+            echo "❌ Failed to initialize Terraform for cleanup"
+            echo "⚠️ Manual cleanup may be required for deployment: ${{ inputs.deployment_id }}"
+          fi
+        else
+          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
+        fi
+
