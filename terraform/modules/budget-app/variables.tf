@@ -68,8 +68,7 @@ variable "database_port" {
 }
 
 variable "vpc_id" {
-  description = "Optional VPC ID to use instead of creating a new one (for production with existing database)"
+  description = "VPC ID for private networking (must be provided by parent configuration)"
   type        = string
-  default     = null
 }
 

@@ -28,19 +28,10 @@ locals {
   )
 }
 
-# Create VPC for private networking (only if not using existing VPC)
-resource "digitalocean_vpc" "budget_vpc" {
-  count    = var.vpc_id == null ? 1 : 0
-  name     = var.deployment_id
-  region   = var.region
-  ip_range = "172.16.0.0/16"  # Private IP range (avoiding conflicts)
-  
-  # Note: VPC doesn't support tags, but name includes deployment_id for identification
-}
-
-# Local to reference either existing or created VPC
+# VPC is always provided by the parent configuration
+# This module expects vpc_id to always be set (not null)
 locals {
-  vpc_id = var.vpc_id != null ? var.vpc_id : digitalocean_vpc.budget_vpc[0].id
+  vpc_id = var.vpc_id
 }
 
 # Reference existing DigitalOcean project
