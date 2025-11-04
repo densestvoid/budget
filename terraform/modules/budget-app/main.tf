@@ -68,29 +68,36 @@ resource "null_resource" "database_health_check" {
           continue
         fi
         
-        # Extract status from API response (handle different response structures)
-        STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.database.status.state // .database.status // .status.state // .status // "unknown"' 2>/dev/null || echo "unknown")
+        # Check if API returned an error
+        ERROR=$(echo "$STATUS_RESPONSE" | jq -r '.error // .message // empty' 2>/dev/null || echo "")
+        if [ -n "$ERROR" ]; then
+          echo "⚠️ API error: $ERROR"
+          sleep 10
+          continue
+        fi
         
-        # If status is still unknown, check if we got a valid response
+        # Extract status from API response
+        # DigitalOcean API structure: { "database": { "status": "online" } }
+        STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.database.status // "unknown"' 2>/dev/null || echo "unknown")
+        
         if [ "$STATUS" = "unknown" ]; then
-          ERROR=$(echo "$STATUS_RESPONSE" | jq -r '.error // .message // empty' 2>/dev/null || echo "")
-          if [ -n "$ERROR" ]; then
-            echo "⚠️ API error: $ERROR"
-          else
-            echo "⚠️ Could not parse status from API response"
-          fi
+          echo "⚠️ Could not parse status from API response"
+          sleep 10
+          continue
         fi
         
         echo "📊 Database cluster status: $STATUS"
         
-        # Check if cluster is ready (online/running)
-        if [ "$STATUS" = "online" ] || [ "$STATUS" = "running" ]; then
+        # Check if cluster is ready
+        # Status values: creating, online, resizing, migrating, forking, offline, etc.
+        if [ "$STATUS" = "online" ]; then
           echo "✅ Database cluster is ready (status: $STATUS)"
           exit 0
-        elif [ "$STATUS" = "creating" ] || [ "$STATUS" = "forking" ] || [ "$STATUS" = "resizing" ]; then
+        elif [ "$STATUS" = "creating" ] || [ "$STATUS" = "forking" ] || [ "$STATUS" = "resizing" ] || [ "$STATUS" = "migrating" ]; then
           echo "⏳ Database cluster is still $STATUS, waiting 10s..."
           sleep 10
         else
+          # For any other status (offline, etc.), wait and retry
           echo "⚠️ Database cluster status is $STATUS, waiting 10s..."
           sleep 10
         fi
