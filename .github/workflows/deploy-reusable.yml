@@ -504,25 +504,40 @@ jobs:
           console.log(`App URL: ${appUrl || 'auto-detect'}`);
           
           try {
-            // Get the default branch for the repository (workflow_dispatch requires a branch ref)
-            let defaultBranch = 'main'; // fallback
-            try {
-              const repo = await github.rest.repos.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-              defaultBranch = repo.data.default_branch;
-            } catch (e) {
-              console.log(`⚠️ Could not fetch default branch, using fallback: ${defaultBranch}`);
+            // Use the current branch instead of default branch
+            // Extract branch name from context.ref (handles PR merges and direct pushes)
+            let branchRef = context.ref;
+            
+            // If context.ref is a PR merge ref (refs/pull/N/merge), get the head branch
+            if (branchRef.startsWith('refs/pull/')) {
+              try {
+                const pr = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: parseInt(prNumber)
+                });
+                branchRef = `refs/heads/${pr.data.head.ref}`;
+                console.log(`Using PR head branch: ${branchRef}`);
+              } catch (e) {
+                console.log(`⚠️ Could not determine PR head branch, falling back to default branch`);
+                const repo = await github.rest.repos.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo
+                });
+                branchRef = `refs/heads/${repo.data.default_branch}`;
+              }
+            } else if (!branchRef.startsWith('refs/heads/')) {
+              // Ensure it's a proper branch ref
+              branchRef = `refs/heads/${branchRef}`;
             }
             
-            console.log(`Using branch ref: ${defaultBranch}`);
+            console.log(`Using branch ref: ${branchRef}`);
             
             const response = await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'auto-terminate.yml',
-              ref: defaultBranch,
+              ref: branchRef,
               inputs: {
                 pr_number: prNumber,
                 deployment_id: deploymentId,
