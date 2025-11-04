@@ -241,9 +241,10 @@ jobs:
         echo "✅ Terraform configuration prepared"
         echo "ℹ️ GitHub repository auto-detected from GITHUB_REPOSITORY env var"
     
-    - name: Import existing resources
-      if: inputs.environment == 'pr'
+    - name: Import existing resources (optional)
+      if: inputs.environment == 'pr' && steps.terraform_init.outputs.is_redeployment == 'false'
       id: import_existing
+      continue-on-error: true
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
@@ -252,176 +253,79 @@ jobs:
       run: |
         cd ${{ inputs.terraform_dir }}
         
-        echo "🔍 Checking for existing resources to import..."
+        echo "🔍 Attempting to import existing resources (optional, non-blocking)..."
+        echo "ℹ️ If this fails, terraform plan will show what needs importing."
+        echo "ℹ️ Terraform writes state incrementally during apply, so partial deployments are preserved."
         
-        # Check if VPC with same name exists
+        # Helper to try importing if resource exists and isn't in state
+        try_import() {
+          local resource_address="$1"
+          local resource_id="$2"
+          
+          if [ -z "$resource_id" ]; then
+            return 0  # No resource to import
+          fi
+          
+          if terraform state list | grep -q "^${resource_address}$" 2>/dev/null; then
+            echo "ℹ️ $resource_address already in state - skipping"
+            return 0
+          fi
+          
+          echo "📥 Attempting to import $resource_address..."
+          terraform import "$resource_address" "$resource_id" 2>/dev/null && \
+            echo "✅ Imported $resource_address" || \
+            echo "⚠️ Failed to import $resource_address (will create new or terraform plan will show import)"
+        }
+        
+        # Only attempt imports if state is empty (new deployment)
+        STATE_COUNT=$(terraform state list 2>/dev/null | wc -l)
+        if [ "$STATE_COUNT" -gt 0 ]; then
+          echo "ℹ️ State already contains resources - skipping import attempts"
+          exit 0
+        fi
+        
+        # Try importing VPC if exists
         VPC_NAME="${{ inputs.vpc_name }}"
-        echo "Checking for existing VPC: $VPC_NAME"
-        
-        # Use DigitalOcean API to check if VPC exists
         VPC_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
           "https://api.digitalocean.com/v2/vpcs" | \
-          jq -r ".vpcs[] | select(.name == \"$VPC_NAME\") | .id" || echo "")
+          jq -r ".vpcs[]? // empty | select(.name == \"$VPC_NAME\") | .id" || echo "")
+        try_import "digitalocean_vpc.budget_vpc" "$VPC_ID"
         
-        if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
-          echo "📥 Found existing VPC: $VPC_NAME (ID: $VPC_ID) - importing..."
-          
-          # Import the existing VPC into Terraform state
-          if terraform import digitalocean_vpc.budget_vpc "$VPC_ID"; then
-            echo "✅ VPC imported successfully"
-          else
-            echo "⚠️ Failed to import VPC - will be managed as new resource"
-          fi
-        else
-          echo "✅ No existing VPC found - will create new"
-        fi
-        
-        # Check for existing apps with same name
-        APP_NAME="${{ inputs.app_name }}"
-        MIGRATION_APP_NAME="${{ inputs.migration_app_name }}"
-        
-        echo "Checking for existing apps: $APP_NAME, $MIGRATION_APP_NAME"
-        
-        # Check for main app (now in module)
-        APP_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/apps" | \
-          jq -r ".apps[] | select(.spec.name == \"$APP_NAME\") | .id" || echo "")
-        
-        if [ -n "$APP_ID" ] && [ "$APP_ID" != "" ]; then
-          echo "📥 Found existing app: $APP_NAME (ID: $APP_ID) - importing..."
-          
-          if terraform import module.budget_app.digitalocean_app.budget_app "$APP_ID"; then
-            echo "✅ App imported successfully"
-          else
-            echo "⚠️ Failed to import app - will be managed as new resource"
-          fi
-        else
-          echo "✅ No existing app found - will create new"
-        fi
-        
-        # Check for migration app (now in module)
-        MIGRATION_APP_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/apps" | \
-          jq -r ".apps[] | select(.spec.name == \"$MIGRATION_APP_NAME\") | .id" || echo "")
-        
-        if [ -n "$MIGRATION_APP_ID" ] && [ "$MIGRATION_APP_ID" != "" ]; then
-          echo "📥 Found existing migration app: $MIGRATION_APP_NAME (ID: $MIGRATION_APP_ID) - importing..."
-          
-          if terraform import module.budget_app.digitalocean_app.budget_migrations "$MIGRATION_APP_ID"; then
-            echo "✅ Migration app imported successfully"
-          else
-            echo "⚠️ Failed to import migration app - will be managed as new resource"
-          fi
-        else
-          echo "✅ No existing migration app found - will create new"
-        fi
-        
-        # Check for existing database cluster
+        # Try importing database cluster if exists
         DB_NAME="${{ inputs.db_name }}"
-        echo "Checking for existing database cluster: $DB_NAME"
-        
-        # Use DigitalOcean API to check if database cluster exists
         DB_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
           "https://api.digitalocean.com/v2/databases" | \
-          jq -r ".databases[] | select(.name == \"$DB_NAME\") | .id" || echo "")
+          jq -r ".databases[]? // empty | select(.name == \"$DB_NAME\") | .id" || echo "")
+        try_import "digitalocean_database_cluster.budget_db" "$DB_ID"
         
-        if [ -n "$DB_ID" ] && [ "$DB_ID" != "" ]; then
-          echo "📥 Found existing database cluster: $DB_NAME (ID: $DB_ID) - importing..."
-          
-          if terraform import digitalocean_database_cluster.budget_db "$DB_ID"; then
-            echo "✅ Database cluster imported successfully"
-          else
-            echo "⚠️ Failed to import database cluster - will be managed as new resource"
+        # Try importing database and user if cluster exists
+        if [ -n "$DB_ID" ]; then
+          DB_DB_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/databases/$DB_ID/dbs" | \
+            jq -r ".dbs[]? // empty | select(.name == \"$DB_NAME\") | .name" || echo "")
+          if [ -n "$DB_DB_NAME" ]; then
+            try_import "digitalocean_database_db.budget_database" "$DB_ID,$DB_DB_NAME"
           fi
           
-          # Check for existing database within the cluster
-          echo "Checking for existing database within cluster..."
-          
-          # Get all databases in the cluster
-          echo "🔍 Fetching databases from cluster $DB_ID..."
-          DB_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/databases/$DB_ID/dbs")
-          
-          DB_DBS=$(echo "$DB_RESPONSE" | jq -r ".dbs[] | select(.name == \"$DB_NAME\") | .name" || echo "")
-          
-          echo "🔍 Looking for database named: $DB_NAME"
-          echo "🔍 Found databases: $DB_DBS"
-          
-          if [ -n "$DB_DBS" ] && [ "$DB_DBS" != "" ]; then
-            echo "📥 Found existing database: $DB_DBS - importing..."
-            
-            # Import format: cluster_id/database_name
-            if terraform import digitalocean_database_db.budget_database "$DB_ID/$DB_DBS"; then
-              echo "✅ Database imported successfully"
-            else
-              echo "⚠️ Failed to import database - will be managed as new resource"
-            fi
-          else
-            echo "✅ No existing database found - will create new"
-          fi
-          
-          # Check for existing database users
-          echo "Checking for existing database users..."
-          echo "🔍 Fetching users from cluster $DB_ID..."
-          USER_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/databases/$DB_ID/users")
-          
-          DB_USERS=$(echo "$USER_RESPONSE" | jq -r ".users[] | select(.name == \"$DB_NAME\") | .name" || echo "")
-          
-          echo "🔍 Looking for user named: $DB_NAME"
-          echo "🔍 Found users: $DB_USERS"
-          
-          if [ -n "$DB_USERS" ] && [ "$DB_USERS" != "" ]; then
-            echo "📥 Found existing database user: $DB_USERS - importing..."
-            
-            # Import format: cluster_id/user_name
-            if terraform import digitalocean_database_user.budget_user "$DB_ID/$DB_USERS"; then
-              echo "✅ Database user imported successfully"
-            else
-              echo "⚠️ Failed to import database user - will be managed as new resource"
-            fi
-          else
-            echo "✅ No existing database user found - will create new"
-          fi
-        else
-          if [ "${{ inputs.environment }}" = "production" ]; then
-            echo "ℹ️ No existing database cluster found - will create on first deployment"
-          else
-            echo "✅ No existing database cluster found - will create new"
+          DB_USER_NAME=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+            "https://api.digitalocean.com/v2/databases/$DB_ID/users" | \
+            jq -r ".users[]? // empty | select(.name == \"$DB_NAME\") | .name" || echo "")
+          if [ -n "$DB_USER_NAME" ]; then
+            try_import "digitalocean_database_user.budget_user" "$DB_ID,$DB_USER_NAME"
           fi
         fi
         
-        # Check for existing project resources assignment
-        echo "Checking for existing project resources assignment..."
+        # Try importing apps if exist
+        APP_NAME="${{ inputs.app_name }}"
+        MIGRATION_APP_NAME="${{ inputs.migration_app_name }}"
+        APP_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+          "https://api.digitalocean.com/v2/apps")
+        APP_ID=$(echo "$APP_RESPONSE" | jq -r ".apps[]? // empty | select(.spec.name == \"$APP_NAME\") | .id" || echo "")
+        MIGRATION_APP_ID=$(echo "$APP_RESPONSE" | jq -r ".apps[]? // empty | select(.spec.name == \"$MIGRATION_APP_NAME\") | .id" || echo "")
+        try_import "module.budget_app.digitalocean_app.budget_app" "$APP_ID"
+        try_import "module.budget_app.digitalocean_app.budget_migrations" "$MIGRATION_APP_ID"
         
-        # Get project resources to see if any are already assigned
-        PROJECT_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-          "https://api.digitalocean.com/v2/projects" | \
-          jq -r ".projects[] | select(.name == \"${{ inputs.project_name }}\") | .id" || echo "")
-        
-        if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "" ]; then
-          EXISTING_RESOURCES=$(curl -s -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/projects/$PROJECT_ID/resources" | \
-            jq -r '.resources[] | select(.urn | contains("do:app:") or contains("do:dbaas:")) | .urn' || echo "")
-          
-          if [ -n "$EXISTING_RESOURCES" ] && [ "$EXISTING_RESOURCES" != "" ]; then
-            echo "📥 Found existing project resources - attempting to import..."
-            
-            # Try to import project resources (this might fail if already managed elsewhere)
-            if terraform import module.budget_app.digitalocean_project_resources.budget_resources "$PROJECT_ID"; then
-              echo "✅ Project resources imported successfully"
-            else
-              echo "⚠️ Failed to import project resources - may already be managed elsewhere"
-            fi
-          else
-            echo "✅ No conflicting project resources found"
-          fi
-        fi
-        
-        # Check for existing null resources (these are harder to detect, so we'll skip them)
-        echo "ℹ️ Skipping null_resource imports (database_health_check, database_schema_setup) - these will be recreated if needed"
-        
-        echo "✅ Resource import check completed"
+        echo "✅ Import attempt completed (failures are non-blocking)"
 
     - name: Deploy infrastructure
       id: deploy
