@@ -471,6 +471,74 @@ jobs:
         echo "🕐 Deployment will auto-terminate at: ${TERMINATION_TIME}"
         echo "⏰ Auto-termination configured for 30 minutes"
     
+    - name: Trigger auto-termination workflow
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+        APP_ID: ${{ env.APP_ID }}
+        MIGRATION_APP_ID: ${{ env.MIGRATION_APP_ID }}
+        APP_URL: ${{ env.APP_URL }}
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const prNumber = process.env.PR_NUMBER;
+          const deploymentId = process.env.DEPLOYMENT_ID;
+          const appId = process.env.APP_ID;
+          const migrationAppId = process.env.MIGRATION_APP_ID;
+          const appUrl = process.env.APP_URL;
+          
+          if (!prNumber || !deploymentId) {
+            console.log('❌ Missing required inputs for auto-termination');
+            console.log(`PR Number: ${prNumber}`);
+            console.log(`Deployment ID: ${deploymentId}`);
+            return;
+          }
+          
+          console.log('🚀 Triggering auto-termination workflow...');
+          console.log(`PR Number: ${prNumber}`);
+          console.log(`Deployment ID: ${deploymentId}`);
+          console.log(`App ID: ${appId || 'auto-detect'}`);
+          console.log(`Migration App ID: ${migrationAppId || 'auto-detect'}`);
+          console.log(`App URL: ${appUrl || 'auto-detect'}`);
+          
+          try {
+            // Get the default branch for the repository (workflow_dispatch requires a branch ref)
+            let defaultBranch = 'main'; // fallback
+            try {
+              const repo = await github.rest.repos.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              defaultBranch = repo.data.default_branch;
+            } catch (e) {
+              console.log(`⚠️ Could not fetch default branch, using fallback: ${defaultBranch}`);
+            }
+            
+            console.log(`Using branch ref: ${defaultBranch}`);
+            
+            const response = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'auto-terminate.yml',
+              ref: defaultBranch,
+              inputs: {
+                pr_number: prNumber,
+                deployment_id: deploymentId,
+                app_id: appId || '',
+                migration_app_id: migrationAppId || '',
+                app_url: appUrl || ''
+              }
+            });
+            
+            console.log('✅ Auto-termination workflow triggered successfully');
+            console.log(`Workflow will execute after 30-minute delay (environment wait timer)`);
+          } catch (error) {
+            console.error('❌ Failed to trigger auto-termination workflow:', error);
+            throw error;
+          }
+    
     - name: Comment on PR with success
       if: steps.deploy.outputs.deployment_success == 'true' && inputs.post_pr_comments == true
       uses: actions/github-script@v7

@@ -5,6 +5,12 @@ on:
     branches:
       - main
 
+# Prevent concurrent deployments to production
+# Don't cancel running workflows to avoid partial Terraform deployments
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 

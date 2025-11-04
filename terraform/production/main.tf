@@ -56,9 +56,9 @@ resource "digitalocean_database_cluster" "budget_db" {
   tags = ["deployment:production"]
   
   # Prevent destruction - this is a long-living database
+  # Allow Terraform to manage database scaling (size, node_count)
   lifecycle {
     prevent_destroy = true
-    ignore_changes  = [size, node_count]
   }
 }
 
@@ -66,6 +66,11 @@ resource "digitalocean_database_cluster" "budget_db" {
 resource "digitalocean_database_db" "budget_database" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = local.database_name
+  
+  # Prevent destruction - this is a long-living database
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Create database user
