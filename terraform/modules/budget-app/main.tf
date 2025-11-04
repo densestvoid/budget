@@ -17,7 +17,7 @@ terraform {
 
 # Auto-detect GitHub repository from environment variable
 data "external" "github_repo" {
-  program = ["sh", "-c", "printf '{\"repo\":\"%s\"}' \"${GITHUB_REPOSITORY:-}\""]
+  program = ["sh", "-c", "printf '{\"repo\":\"%s\"}' \"$${GITHUB_REPOSITORY:-}\""]
 }
 
 locals {
