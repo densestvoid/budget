@@ -122,15 +122,42 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	var isAuthenticated bool
+	var moneyIn, moneyOut, netMoney float64
+	var monthName string
+
+	// Get current month
+	now := time.Now()
+	monthName = now.Format("January 2006")
+
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
+		acc := account.(*data.Account)
+
+		// Get transactions for current month
+		txs, err := s.store.GetTransactionsByMonth(acc.ID, now.Year(), int(now.Month()))
+		if err != nil {
+			log.Printf("Error fetching transactions: %v", err)
+			// Continue with zero values if there's an error
+		} else {
+			// Calculate money in, money out, and net
+			for _, tx := range txs {
+				amount := float64(tx.Amount) / 100.0 // Convert cents to dollars
+				if amount > 0 {
+					moneyIn += amount
+				} else {
+					moneyOut += -amount // Make positive for display
+				}
+				netMoney += amount
+			}
+		}
 		log.Printf("Home handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
 	} else {
 		log.Printf("Home handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
 	}
-	page := templates.HomePage()
-	if err := templates.BaseLayoutWithAuth("Home - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering home page: %v", err)
+
+	page := templates.SummaryPage(moneyIn, moneyOut, netMoney, monthName)
+	if err := templates.BaseLayoutWithAuth("Summary - Budget App", isAuthenticated, page).Render(w); err != nil {
+		log.Printf("Error rendering summary page: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 }

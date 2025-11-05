@@ -12,84 +12,87 @@ import (
 	"github.com/maragudk/gomponents/html"
 )
 
-func HomePage() g.Node {
+func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string) g.Node {
 	return g.Group([]g.Node{
 		html.Div(
 			html.Class("row"),
 			html.Div(
 				html.Class("col-12"),
-				html.H1(html.Class("display-4 mb-4 text-center"), g.Text("Welcome to Budget App")),
-				html.P(html.Class("lead"), g.Text("A modern budget management application built with Go, HTMX, and Alpine.js")),
+				html.H1(html.Class("display-4 mb-4 text-center"), g.Text("Summary")),
+				html.P(html.Class("lead text-center"), g.Text(fmt.Sprintf("Financial Overview for %s", monthName))),
 			),
 		),
 		html.Div(
-			html.Class("row mt-5"),
+			html.Class("row mt-5 justify-content-center"),
 			html.Div(
-				html.Class("col-md-6"),
+				html.Class("col-12 col-lg-10"),
 				html.Div(
-					html.Class("card h-100"),
+					html.Class("card"),
 					html.Div(
-						html.Class("card-body"),
-						html.H5(html.Class("card-title"), g.Text("HTMX Integration")),
-						html.P(html.Class("card-text"), g.Text("Experience dynamic web interactions without writing JavaScript. HTMX allows you to access modern browser features directly from HTML.")),
-						html.Button(
-							html.Class("btn btn-primary"),
-							html.DataAttr("hx-get", "/api/health"),
-							html.DataAttr("hx-target", "#demo-output"),
-							g.Text("Test HTMX"),
-						),
-						html.Div(
-							html.ID("demo-output"),
-							html.Class("mt-3 p-3 rounded"),
-							g.Text("Click the button above to test HTMX..."),
-						),
+						html.Class("card-header"),
+						html.H5(html.Class("card-title mb-0 text-center"), g.Text("Money Flow")),
 					),
-				),
-			),
-			html.Div(
-				html.Class("col-md-6"),
-				html.Div(
-					html.Class("card h-100"),
 					html.Div(
-						html.Class("card-body"),
-						html.H5(html.Class("card-title"), g.Text("Alpine.js Demo")),
-						html.P(html.Class("card-text"), g.Text("Alpine.js provides reactive and declarative behavior for your HTML using a lightweight JavaScript framework.")),
+						html.Class("card-body p-4"),
 						html.Div(
-							g.Attr("x-data", "{ count: 0 }"),
-							html.P(
-								g.Text("Count: "),
-								html.Span(g.Attr("x-text", "count"), html.Class("fw-bold")),
+							html.Class("d-flex align-items-center justify-content-center flex-wrap gap-3"),
+							// Money In Card
+							html.Div(
+								html.Class("card flex-fill"),
+								g.Attr("style", "min-width: 200px; max-width: 300px;"),
+								html.Div(
+									html.Class("card-body text-center"),
+									html.H6(html.Class("card-subtitle mb-2 text-muted"), g.Text("In")),
+									html.Div(
+										html.Class("display-6 fw-bold text-success"),
+										g.Text(fmt.Sprintf("$%.2f", moneyIn)),
+									),
+								),
 							),
-							html.Button(
-								html.Class("btn btn-success me-2"),
-								g.Attr("x-on:click", "count++"),
-								g.Text("Increment"),
+							// Minus Sign
+							html.Div(
+								html.Class("d-flex align-items-center"),
+								g.Attr("style", "font-size: 3rem; font-weight: bold; color: #6c757d;"),
+								g.Text("−"),
 							),
-							html.Button(
-								html.Class("btn btn-danger"),
-								g.Attr("x-on:click", "count = 0"),
-								g.Text("Reset"),
+							// Money Out Card
+							html.Div(
+								html.Class("card flex-fill"),
+								g.Attr("style", "min-width: 200px; max-width: 300px;"),
+								html.Div(
+									html.Class("card-body text-center"),
+									html.H6(html.Class("card-subtitle mb-2 text-muted"), g.Text("Out")),
+									html.Div(
+										html.Class("display-6 fw-bold text-danger"),
+										g.Text(fmt.Sprintf("$%.2f", moneyOut)),
+									),
+								),
+							),
+							// Equals Sign
+							html.Div(
+								html.Class("d-flex align-items-center"),
+								g.Attr("style", "font-size: 3rem; font-weight: bold; color: #6c757d;"),
+								g.Text("="),
+							),
+							// Net Money Card
+							html.Div(
+								html.Class("card flex-fill"),
+								g.Attr("style", "min-width: 200px; max-width: 300px;"),
+								html.Div(
+									html.Class("card-body text-center"),
+									html.H6(html.Class("card-subtitle mb-2 text-muted"), g.Text("Net")),
+									html.Div(
+										func() g.Node {
+											if netMoney >= 0 {
+												return html.Class("display-6 fw-bold text-success")
+											}
+											return html.Class("display-6 fw-bold text-danger")
+										}(),
+										g.Text(fmt.Sprintf("$%.2f", netMoney)),
+									),
+								),
 							),
 						),
-					),
-				),
-			),
-		),
-		html.Div(
-			html.Class("row mt-4"),
-			html.Div(
-				html.Class("col-12"),
-				html.Div(
-					html.Class("alert alert-info"),
-					html.H6(html.Class("alert-heading"), g.Text("Technologies Used:")),
-					html.Ul(
-						html.Li(g.Text("Go with Chi router")),
-						html.Li(g.Text("PostgreSQL database")),
-						html.Li(g.Text("Goose for migrations")),
-						html.Li(g.Text("HTMX for dynamic interactions")),
-						html.Li(g.Text("Alpine.js for reactive UI")),
-						html.Li(g.Text("Bootstrap 5 for styling")),
-						html.Li(g.Text("Gomponents for HTML generation")),
 					),
 				),
 			),

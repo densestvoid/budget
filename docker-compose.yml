@@ -50,7 +50,7 @@ services:
       - .:/app
       - /app/tmp
     working_dir: /app
-    command: go run main.go serve
+    command: air
     restart: unless-stopped
 
 volumes:

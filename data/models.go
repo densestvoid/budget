@@ -407,6 +407,33 @@ func (s *Storage) GetAllTransactionsByAccount(accountID int) ([]Transaction, err
 	return txs, nil
 }
 
+// GetTransactionsByMonth retrieves all transactions for a specific month
+func (s *Storage) GetTransactionsByMonth(accountID int, year int, month int) ([]Transaction, error) {
+	query := `
+		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+		FROM transactions
+		WHERE account_id = $1
+		AND EXTRACT(YEAR FROM date) = $2
+		AND EXTRACT(MONTH FROM date) = $3
+		ORDER BY date DESC, id DESC
+	`
+	rows, err := s.db.Query(query, accountID, year, month)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var txs []Transaction
+	for rows.Next() {
+		var t Transaction
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		txs = append(txs, t)
+	}
+	return txs, nil
+}
+
 // UpdateTransactionPayeeCategory updates a transaction's payee and category
 func (s *Storage) UpdateTransactionPayeeCategory(accountID, transactionID int, payee string, categoryID *int) error {
 	query := `
