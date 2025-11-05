@@ -1,8 +1,8 @@
-module budget
+module github.com/densestvoid/budget
 
-go 1.24
+go 1.25
 
-toolchain go1.24.4
+toolchain go1.25.0
 
 require (
 	github.com/go-chi/chi/v5 v5.0.10

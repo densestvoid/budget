@@ -1,23 +1,6 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - BUDGET_DATABASE_URL=postgres://postgres:password@db:5432/budget?sslmode=disable
-      - BUDGET_PORT=8080
-      - BUDGET_ENV=development
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - .:/app
-      - /app/tmp
-    working_dir: /app
-    restart: unless-stopped
-
   db:
     image: postgres:15-alpine
     environment:
@@ -28,12 +11,46 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./data/migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d budget"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    environment:
+      - BUDGET_DATABASE_URL=postgres://postgres:password@db:5432/budget?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: go run main.go migrate
+    restart: "no"
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - BUDGET_DATABASE_URL=postgres://postgres:password@db:5432/budget?sslmode=disable
+      - BUDGET_PORT=8080
+      - BUDGET_ENV=development
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/tmp
+    working_dir: /app
+    command: go run main.go serve
     restart: unless-stopped
 
 volumes:

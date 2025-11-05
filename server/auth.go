@@ -1,8 +1,8 @@
 package server
 
 import (
-	"budget/data"
-	"budget/templates"
+	"github.com/densestvoid/budget/data"
+	"github.com/densestvoid/budget/templates"
 	"context"
 	"encoding/json"
 	"log"

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"budget/data"
-	"budget/templates"
+	"github.com/densestvoid/budget/data"
+	"github.com/densestvoid/budget/templates"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"

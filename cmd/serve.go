@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"budget/app"
-	"budget/server"
+	"github.com/densestvoid/budget/app"
+	"github.com/densestvoid/budget/server"
 	"log"
 
 	"github.com/spf13/cobra"

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"budget/cmd"
+	"github.com/densestvoid/budget/cmd"
 )
 
 func main() {

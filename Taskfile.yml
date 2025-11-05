@@ -20,7 +20,12 @@ tasks:
       - ./bin/budget serve
 
   dev:
-    desc: Run the application in development mode
+    desc: Run the application in development mode with docker-compose (includes postgres and migrations)
+    cmds:
+      - docker-compose up --build
+
+  dev-local:
+    desc: Run the application locally without docker-compose (requires local postgres)
     deps: [deps]
     cmds:
       - go run main.go serve
@@ -92,9 +97,9 @@ tasks:
       - docker build -t budget-app .
 
   docker-run:
-    desc: Run with Docker Compose
+    desc: Run with Docker Compose (alias for dev)
     cmds:
-      - docker-compose up --build
+      - go tool task dev
 
   help:
     desc: Show available tasks

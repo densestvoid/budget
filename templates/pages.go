@@ -1,7 +1,7 @@
 package templates
 
 import (
-	"budget/data"
+	"github.com/densestvoid/budget/data"
 	"fmt"
 	"io"
 	"sort"

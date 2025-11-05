@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"budget/data"
+	"github.com/densestvoid/budget/data"
 	"fmt"
 	"log"
 
