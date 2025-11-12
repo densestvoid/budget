@@ -13,11 +13,16 @@ CREATE INDEX IF NOT EXISTS idx_categories_account_id ON categories(account_id);
 CREATE INDEX IF NOT EXISTS idx_categories_parent_id ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
 
--- Trigger for updated_at
-CREATE TRIGGER update_categories_updated_at 
-    BEFORE UPDATE ON categories 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at_column();
+-- Trigger for updated_at (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_categories_updated_at') THEN
+        CREATE TRIGGER update_categories_updated_at 
+            BEFORE UPDATE ON categories 
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
 -- +goose StatementEnd
 
 -- +goose Down

@@ -79,9 +79,218 @@ type Rule struct {
 	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
+// RecurringTransaction represents a recurring expense or income
+type RecurringTransaction struct {
+	ID              int        `json:"id"`
+	AccountID       int        `json:"account_id"`
+	Name            string     `json:"name"`
+	Counterparty    string     `json:"counterparty"` // payee for expenses, payer for income
+	CategoryID      *int       `json:"category_id"`
+	ExpectedAmount  int        `json:"expected_amount"` // cents, negative for expenses, positive for income
+	Tolerance       int        `json:"tolerance"`       // cents
+	StartDate       time.Time  `json:"start_date"`
+	RecurrenceUnit  string     `json:"recurrence_unit"` // 'week', 'month', 'year'
+	RecurrenceValue int        `json:"recurrence_value"`
+	EndDate         *time.Time `json:"end_date"` // nullable, NULL = active
+	Type            string     `json:"type"`     // 'expense' or 'income' (generated column)
+	Archived        bool       `json:"archived"` // computed: end_date IS NOT NULL
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
 // AmountDecimal returns the amount as a decimal string (e.g., 1234 -> "12.34")
 func (t Transaction) AmountDecimal() string {
 	return fmt.Sprintf("%.2f", float64(t.Amount)/100.0)
+}
+
+// ExpectedAmountDecimal returns the expected amount as a decimal string (absolute value)
+func (rt RecurringTransaction) ExpectedAmountDecimal() string {
+	amount := rt.ExpectedAmount
+	if amount < 0 {
+		amount = -amount
+	}
+	return fmt.Sprintf("%.2f", float64(amount)/100.0)
+}
+
+// ToleranceDecimal returns the tolerance as a decimal string
+func (rt RecurringTransaction) ToleranceDecimal() string {
+	return fmt.Sprintf("%.2f", float64(rt.Tolerance)/100.0)
+}
+
+// RecurrenceDisplay returns a human-readable string for the recurrence
+func (rt RecurringTransaction) RecurrenceDisplay() string {
+	unit := rt.RecurrenceUnit
+	if rt.RecurrenceValue > 1 {
+		unit = unit + "s"
+	}
+	return fmt.Sprintf("Every %d %s starting %s", rt.RecurrenceValue, unit, rt.StartDate.Format("Jan 2, 2006"))
+}
+
+// IsExpense returns true if this is an expense
+func (rt RecurringTransaction) IsExpense() bool {
+	return rt.Type == "expense"
+}
+
+// IsIncome returns true if this is income
+func (rt RecurringTransaction) IsIncome() bool {
+	return rt.Type == "income"
+}
+
+// NextOccurrence calculates the next occurrence date after the given date
+func (rt RecurringTransaction) NextOccurrence(after time.Time) time.Time {
+	// If start_date is after 'after', return start_date
+	if rt.StartDate.After(after) {
+		// Check if archived
+		if rt.EndDate != nil && rt.StartDate.After(*rt.EndDate) {
+			return time.Time{}
+		}
+		return rt.StartDate
+	}
+
+	// Calculate how many periods have passed since start_date
+	var periods int
+	switch rt.RecurrenceUnit {
+	case "week":
+		daysDiff := int(after.Sub(rt.StartDate).Hours() / 24)
+		weeksDiff := daysDiff / 7
+		periods = (weeksDiff / rt.RecurrenceValue) + 1
+	case "month":
+		yearsDiff := after.Year() - rt.StartDate.Year()
+		monthsDiff := yearsDiff*12 + int(after.Month()) - int(rt.StartDate.Month())
+		periods = (monthsDiff / rt.RecurrenceValue) + 1
+	case "year":
+		yearsDiff := after.Year() - rt.StartDate.Year()
+		periods = (yearsDiff / rt.RecurrenceValue) + 1
+	}
+
+	// Calculate next occurrence
+	var next time.Time
+	switch rt.RecurrenceUnit {
+	case "week":
+		next = rt.StartDate.AddDate(0, 0, periods*rt.RecurrenceValue*7)
+	case "month":
+		next = rt.StartDate.AddDate(0, periods*rt.RecurrenceValue, 0)
+	case "year":
+		next = rt.StartDate.AddDate(periods*rt.RecurrenceValue, 0, 0)
+	}
+
+	// Ensure next is after 'after'
+	if !next.After(after) {
+		// Add one more period
+		switch rt.RecurrenceUnit {
+		case "week":
+			next = next.AddDate(0, 0, rt.RecurrenceValue*7)
+		case "month":
+			next = next.AddDate(0, rt.RecurrenceValue, 0)
+		case "year":
+			next = next.AddDate(rt.RecurrenceValue, 0, 0)
+		}
+	}
+
+	// Check if recurring transaction is archived and next occurrence is after end_date
+	if rt.EndDate != nil && next.After(*rt.EndDate) {
+		// Recurring transaction is archived and this occurrence is after end_date
+		// Return zero time to indicate no more occurrences
+		return time.Time{}
+	}
+
+	return next
+}
+
+// Occurrence represents a single occurrence of a recurring transaction
+type Occurrence struct {
+	RecurringTransaction RecurringTransaction
+	ExpectedDate         time.Time
+	IsMatched            bool
+	TransactionDate      *time.Time
+}
+
+// GetOccurrencesInMonth returns all occurrences of a recurring transaction within a given month
+func (rt RecurringTransaction) GetOccurrencesInMonth(year int, month time.Month) []Occurrence {
+	var occurrences []Occurrence
+	
+	// Calculate month boundaries
+	monthStart := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	// Calculate last day of month: first day of next month minus 1 day
+	nextMonth := monthStart.AddDate(0, 1, 0)
+	lastDayOfMonth := nextMonth.AddDate(0, 0, -1)
+	monthEnd := time.Date(year, month, lastDayOfMonth.Day(), 23, 59, 59, 999999999, time.UTC)
+	
+	// If archived and start_date is after end_date, no occurrences
+	if rt.EndDate != nil && rt.StartDate.After(*rt.EndDate) {
+		return occurrences
+	}
+	
+	// Find the first occurrence on or after monthStart
+	current := rt.StartDate
+	
+	// If start_date is before monthStart, calculate the first occurrence in the month
+	if rt.StartDate.Before(monthStart) {
+		var periods int
+		switch rt.RecurrenceUnit {
+		case "week":
+			daysDiff := int(monthStart.Sub(rt.StartDate).Hours() / 24)
+			weeksDiff := daysDiff / 7
+			periods = weeksDiff / rt.RecurrenceValue
+			current = rt.StartDate.AddDate(0, 0, periods*rt.RecurrenceValue*7)
+			// If current is still before monthStart, add one more period
+			for current.Before(monthStart) {
+				current = current.AddDate(0, 0, rt.RecurrenceValue*7)
+			}
+		case "month":
+			yearsDiff := monthStart.Year() - rt.StartDate.Year()
+			monthsDiff := yearsDiff*12 + int(monthStart.Month()) - int(rt.StartDate.Month())
+			periods = monthsDiff / rt.RecurrenceValue
+			current = rt.StartDate.AddDate(0, periods*rt.RecurrenceValue, 0)
+			// If current is still before monthStart, add one more period
+			for current.Before(monthStart) {
+				current = current.AddDate(0, rt.RecurrenceValue, 0)
+			}
+		case "year":
+			yearsDiff := monthStart.Year() - rt.StartDate.Year()
+			periods = yearsDiff / rt.RecurrenceValue
+			current = rt.StartDate.AddDate(periods*rt.RecurrenceValue, 0, 0)
+			// If current is still before monthStart, add one more period
+			for current.Before(monthStart) {
+				current = current.AddDate(rt.RecurrenceValue, 0, 0)
+			}
+		}
+	}
+	
+	// Collect all occurrences in the month
+	// Keep iterating until we've passed the end of the month
+	for !current.After(monthEnd) {
+		// Check if archived and this occurrence is after end_date
+		if rt.EndDate != nil && current.After(*rt.EndDate) {
+			break
+		}
+		
+		// Only add if occurrence is within the month (on or after monthStart, on or before monthEnd)
+		if !current.Before(monthStart) && !current.After(monthEnd) {
+			// Add this occurrence
+			occurrences = append(occurrences, Occurrence{
+				RecurringTransaction: rt,
+				ExpectedDate:         current,
+			})
+		}
+		
+		// Calculate next occurrence
+		switch rt.RecurrenceUnit {
+		case "week":
+			current = current.AddDate(0, 0, rt.RecurrenceValue*7)
+		case "month":
+			current = current.AddDate(0, rt.RecurrenceValue, 0)
+		case "year":
+			current = current.AddDate(rt.RecurrenceValue, 0, 0)
+		}
+		
+		// Safety check to prevent infinite loops
+		if current.Before(rt.StartDate) {
+			break
+		}
+	}
+	
+	return occurrences
 }
 
 // CreateAccount creates a new account with hashed password
@@ -458,8 +667,9 @@ func (s *Storage) BulkInsertTransactions(accountID int, txs []Transaction) error
 		if payee == "" {
 			payee = modifiedTx.OriginalPayee
 		}
-		_, err = s.CreateTransaction(accountID, modifiedTx.Date, modifiedTx.OriginalPayee, payee, modifiedTx.CategoryID, modifiedTx.Amount)
-		if err != nil {
+		// Create the transaction
+		// Bill matching is now handled dynamically by the view, so no explicit matching needed
+		if _, err = s.CreateTransaction(accountID, modifiedTx.Date, modifiedTx.OriginalPayee, payee, modifiedTx.CategoryID, modifiedTx.Amount); err != nil {
 			return err
 		}
 	}
@@ -893,4 +1103,301 @@ func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule Rule) (int, err
 		}
 	}
 	return updated, nil
+}
+
+// RecurringTransaction management methods
+
+// CreateRecurringTransaction creates a new recurring transaction (expense or income)
+func (s *Storage) CreateRecurringTransaction(accountID int, name, counterparty string, categoryID *int, expectedAmount, tolerance int, startDate time.Time, recurrenceUnit string, recurrenceValue int) (*RecurringTransaction, error) {
+	var rt RecurringTransaction
+	var endDate sql.NullTime
+	query := `
+		INSERT INTO recurring_transactions (account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+	`
+	err := s.db.QueryRow(query, accountID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue, nil).Scan(
+		&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+		&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
+		&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create recurring transaction: %w", err)
+	}
+	if endDate.Valid {
+		rt.EndDate = &endDate.Time
+	}
+
+	return &rt, nil
+}
+
+// GetRecurringTransactionsByAccount retrieves all recurring transactions for an account
+func (s *Storage) GetRecurringTransactionsByAccount(accountID int) ([]RecurringTransaction, error) {
+	query := `
+		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		FROM recurring_transactions
+		WHERE account_id = $1
+		ORDER BY name ASC
+	`
+	rows, err := s.db.Query(query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var rts []RecurringTransaction
+	for rows.Next() {
+		var rt RecurringTransaction
+		var endDate sql.NullTime
+		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+			&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
+			&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan recurring transaction: %w", err)
+		}
+		if endDate.Valid {
+			rt.EndDate = &endDate.Time
+		}
+		rts = append(rts, rt)
+	}
+	return rts, nil
+}
+
+// GetRecurringExpensesByAccount retrieves all recurring expenses for an account
+func (s *Storage) GetRecurringExpensesByAccount(accountID int) ([]RecurringTransaction, error) {
+	query := `
+		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		FROM recurring_transactions
+		WHERE account_id = $1 AND type = 'expense'
+		ORDER BY name ASC
+	`
+	rows, err := s.db.Query(query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring expenses: %w", err)
+	}
+	defer rows.Close()
+
+	var rts []RecurringTransaction
+	for rows.Next() {
+		var rt RecurringTransaction
+		var endDate sql.NullTime
+		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+			&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
+			&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan recurring expense: %w", err)
+		}
+		if endDate.Valid {
+			rt.EndDate = &endDate.Time
+		}
+		rts = append(rts, rt)
+	}
+	return rts, nil
+}
+
+// GetRecurringIncomeByAccount retrieves all recurring income for an account
+func (s *Storage) GetRecurringIncomeByAccount(accountID int) ([]RecurringTransaction, error) {
+	query := `
+		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		FROM recurring_transactions
+		WHERE account_id = $1 AND type = 'income'
+		ORDER BY name ASC
+	`
+	rows, err := s.db.Query(query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring income: %w", err)
+	}
+	defer rows.Close()
+
+	var rts []RecurringTransaction
+	for rows.Next() {
+		var rt RecurringTransaction
+		var endDate sql.NullTime
+		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+			&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
+			&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan recurring income: %w", err)
+		}
+		if endDate.Valid {
+			rt.EndDate = &endDate.Time
+		}
+		rts = append(rts, rt)
+	}
+	return rts, nil
+}
+
+// GetRecurringTransaction retrieves a single recurring transaction by ID
+func (s *Storage) GetRecurringTransaction(accountID, rtID int) (*RecurringTransaction, error) {
+	var rt RecurringTransaction
+	var endDate sql.NullTime
+	query := `
+		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		FROM recurring_transactions
+		WHERE id = $1 AND account_id = $2
+	`
+	err := s.db.QueryRow(query, rtID, accountID).Scan(
+		&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+		&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
+		&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get recurring transaction: %w", err)
+	}
+	if endDate.Valid {
+		rt.EndDate = &endDate.Time
+	}
+	return &rt, nil
+}
+
+// UpdateRecurringTransaction updates a recurring transaction
+func (s *Storage) UpdateRecurringTransaction(accountID, rtID int, name, counterparty string, categoryID *int, expectedAmount, tolerance int, startDate time.Time, recurrenceUnit string, recurrenceValue int) error {
+	query := `
+		UPDATE recurring_transactions
+		SET name = $1, counterparty = $2, category_id = $3, expected_amount = $4, tolerance = $5, start_date = $6, recurrence_unit = $7, recurrence_value = $8, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $9 AND account_id = $10
+	`
+	result, err := s.db.Exec(query, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue, rtID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update recurring transaction: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("recurring transaction not found or not owned by account")
+	}
+	return nil
+}
+
+// ArchiveRecurringTransaction archives a recurring transaction by setting its end_date
+func (s *Storage) ArchiveRecurringTransaction(accountID, rtID int, endDate time.Time) error {
+	query := `
+		UPDATE recurring_transactions
+		SET end_date = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND account_id = $3
+	`
+	result, err := s.db.Exec(query, endDate, rtID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to archive recurring transaction: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("recurring transaction not found or not owned by account")
+	}
+	return nil
+}
+
+// DeleteRecurringTransaction deletes a recurring transaction
+func (s *Storage) DeleteRecurringTransaction(accountID, rtID int) error {
+	result, err := s.db.Exec("DELETE FROM recurring_transactions WHERE id = $1 AND account_id = $2", rtID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to delete recurring transaction: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("recurring transaction not found or not owned by account")
+	}
+	return nil
+}
+
+// GetMatchedTransactionsForRecurring returns all transaction dates matched to a recurring transaction in a given month
+func (s *Storage) GetMatchedTransactionsForRecurring(rtID int, year, month int) ([]time.Time, error) {
+	query := `
+		SELECT transaction_date
+		FROM recurring_transactions_view
+		WHERE recurring_transaction_id = $1
+		AND year = $2
+		AND month = $3
+		ORDER BY transaction_date
+	`
+	
+	rows, err := s.db.Query(query, rtID, year, month)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get matched transactions: %w", err)
+	}
+	defer rows.Close()
+	
+	var transactions []time.Time
+	for rows.Next() {
+		var txDate time.Time
+		if err := rows.Scan(&txDate); err != nil {
+			continue
+		}
+		transactions = append(transactions, txDate)
+	}
+	
+	return transactions, nil
+}
+
+// IsRecurringTransactionMatchedForMonth checks if a recurring transaction has a matching transaction for a given month/year using the view
+func (s *Storage) IsRecurringTransactionMatchedForMonth(rtID int, year, month int) (bool, error) {
+	var count int
+	query := `
+		SELECT COUNT(*)
+		FROM recurring_transactions_view
+		WHERE recurring_transaction_id = $1 AND year = $2 AND month = $3
+	`
+	err := s.db.QueryRow(query, rtID, year, month).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if recurring transaction is matched: %w", err)
+	}
+	return count > 0, nil
+}
+
+// GetRecurringTransactionDate gets the transaction date for a matched recurring transaction in a given month/year
+func (s *Storage) GetRecurringTransactionDate(rtID int, year, month int) (*time.Time, error) {
+	var transactionDate time.Time
+	query := `
+		SELECT transaction_date
+		FROM recurring_transactions_view
+		WHERE recurring_transaction_id = $1 AND year = $2 AND month = $3
+		LIMIT 1
+	`
+	err := s.db.QueryRow(query, rtID, year, month).Scan(&transactionDate)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get recurring transaction date: %w", err)
+	}
+	return &transactionDate, nil
+}
+
+// MatchRecurringTransactionsToTransaction checks if a transaction matches any recurring transactions for an account
+// Returns the matched recurring transaction if found, nil otherwise
+// Note: This is now read-only - matches are determined dynamically by the view
+func (s *Storage) MatchRecurringTransactionsToTransaction(accountID int, tx *Transaction) (*RecurringTransaction, error) {
+	// Check the view to see if this transaction matches any recurring transaction
+	var rtID int
+	year := tx.Date.Year()
+	month := int(tx.Date.Month())
+
+	query := `
+		SELECT recurring_transaction_id
+		FROM recurring_transactions_view
+		WHERE transaction_id = $1 AND year = $2 AND month = $3
+		LIMIT 1
+	`
+	err := s.db.QueryRow(query, tx.ID, year, month).Scan(&rtID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No match found
+		}
+		return nil, fmt.Errorf("failed to check recurring transaction match: %w", err)
+	}
+
+	// Get the matched recurring transaction
+	rt, err := s.GetRecurringTransaction(accountID, rtID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get matched recurring transaction: %w", err)
+	}
+	return rt, nil
 }

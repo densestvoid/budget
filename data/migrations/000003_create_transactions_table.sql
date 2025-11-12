@@ -17,10 +17,16 @@ CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_i
 CREATE INDEX IF NOT EXISTS idx_transactions_category_id ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 
-CREATE TRIGGER update_transactions_updated_at 
-    BEFORE UPDATE ON transactions 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at_column();
+-- Trigger for updated_at (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_transactions_updated_at') THEN
+        CREATE TRIGGER update_transactions_updated_at 
+            BEFORE UPDATE ON transactions 
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
 -- +goose StatementEnd
 
 -- +goose Down

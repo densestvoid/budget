@@ -33,6 +33,11 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 					.category-dropdown option[selected] {
 						padding-left: 0 !important;
 					}
+					@media (min-width: 992px) {
+						.sidebar-layout-row {
+							flex-wrap: nowrap !important;
+						}
+					}
 				`)),
 			),
 			html.Body(
@@ -43,11 +48,12 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 					html.Div(
 						html.Class("container-fluid"),
 						html.Button(
-							html.Class("btn btn-link text-light d-lg-none"),
+							html.Class("btn btn-link text-light d-lg-none me-2"),
 							html.Type("button"),
 							html.DataAttr("bs-toggle", "offcanvas"),
 							html.DataAttr("bs-target", "#sidePane"),
 							html.DataAttr("aria-controls", "sidePane"),
+							html.DataAttr("aria-label", "Toggle navigation"),
 							html.I(html.Class("bi bi-list")),
 						),
 						html.A(
@@ -62,11 +68,12 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 				html.Div(
 					html.Class("container-fluid px-2"),
 					html.Div(
-						html.Class("row"),
+						html.Class("row sidebar-layout-row"),
 
-						// Sidebar (visible on md+ screens)
+						// Sidebar (visible on lg+ screens)
 						html.Div(
-							html.Class("col-md-3 d-none d-md-block"),
+							html.Class("d-none d-lg-block"),
+							g.Attr("style", "width: 280px; flex-shrink: 0;"),
 							html.Div(
 								html.Class("position-fixed h-100 bg-body-secondary border-end"),
 								g.Attr("style", "width: 280px; top: 56px; left: 0; z-index: 1000; overflow-y: auto;"),
@@ -127,6 +134,14 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 																g.Text("🧩 Rules"),
 															),
 														),
+														html.Li(
+															html.Class("nav-item"),
+															html.A(
+																html.Class("nav-link"),
+																html.Href("/bills/"),
+																g.Text("📄 Bills"),
+															),
+														),
 													}
 												}
 												return nil
@@ -177,7 +192,8 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 
 						// Main content area
 						html.Div(
-							html.Class("col-12 col-md-9"),
+							html.Class("col-12"),
+							g.Attr("style", "flex: 1; min-width: 0;"),
 							html.Main(
 								html.Div(
 									html.Class("mx-2"),
@@ -265,6 +281,14 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 													html.Class("nav-link"),
 													html.Href("/rules/"),
 													g.Text("🧩 Rules"),
+												),
+											),
+											html.Li(
+												html.Class("nav-item"),
+												html.A(
+													html.Class("nav-link"),
+													html.Href("/bills/"),
+													g.Text("📄 Bills"),
 												),
 											),
 										}

@@ -26,10 +26,16 @@ CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority);
 CREATE INDEX IF NOT EXISTS idx_rules_active ON rules(active);
 CREATE INDEX IF NOT EXISTS idx_rule_conditions_rule_id ON rule_conditions(rule_id);
 
-CREATE TRIGGER update_rules_updated_at 
-    BEFORE UPDATE ON rules 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at_column();
+-- Trigger for updated_at (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_rules_updated_at') THEN
+        CREATE TRIGGER update_rules_updated_at 
+            BEFORE UPDATE ON rules 
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
 -- +goose StatementEnd
 
 -- +goose Down

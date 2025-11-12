@@ -1,18 +1,20 @@
 package templates
 
 import (
-	"github.com/densestvoid/budget/data"
 	"fmt"
 	"io"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/densestvoid/budget/data"
 
 	g "github.com/maragudk/gomponents"
 	"github.com/maragudk/gomponents/html"
 )
 
-func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string) g.Node {
+func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string, allOccurrences []data.Occurrence, includeUpcoming bool) g.Node {
 	return g.Group([]g.Node{
 		html.Div(
 			html.Class("row"),
@@ -29,13 +31,34 @@ func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string) g.Node {
 				html.Div(
 					html.Class("card"),
 					html.Div(
-						html.Class("card-header"),
-						html.H5(html.Class("card-title mb-0 text-center"), g.Text("Money Flow")),
+						html.Class("card-header d-flex justify-content-between align-items-center"),
+						html.H5(html.Class("card-title mb-0"), g.Text("Money Flow")),
+						html.Div(
+							html.Class("form-check form-switch"),
+							html.Input(
+								html.Type("checkbox"),
+								html.Class("form-check-input"),
+								html.ID("include-upcoming-toggle"),
+								func() g.Node {
+									if includeUpcoming {
+										return html.Checked()
+									}
+									return nil
+								}(),
+								g.Attr("onchange", "const checked = this.checked; htmx.ajax('GET', '/?include_upcoming=' + checked, {target: 'body', swap: 'outerHTML'})"),
+							),
+							html.Label(
+								html.Class("form-check-label"),
+								html.For("include-upcoming-toggle"),
+								g.Text("Include Upcoming"),
+							),
+						),
 					),
 					html.Div(
 						html.Class("card-body p-4"),
+						// Desktop view: horizontal layout with large text
 						html.Div(
-							html.Class("d-flex align-items-center justify-content-center flex-wrap gap-3"),
+							html.Class("d-none d-md-flex align-items-center justify-content-center flex-wrap gap-3"),
 							// Money In Card
 							html.Div(
 								html.Class("card flex-fill"),
@@ -93,6 +116,186 @@ func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string) g.Node {
 								),
 							),
 						),
+						// Mobile Option 1: Inline with smaller text (all on one line, rounded to dollar)
+						html.Div(
+							html.Class("d-md-none"),
+							html.Div(
+								html.Class("d-flex align-items-center justify-content-center gap-1"),
+								g.Attr("style", "flex-wrap: nowrap; overflow-x: auto;"),
+								// Money In Card
+								html.Div(
+									html.Class("card"),
+									g.Attr("style", "min-width: 80px; flex-shrink: 0;"),
+									html.Div(
+										html.Class("card-body text-center p-2"),
+										html.H6(html.Class("card-subtitle mb-1 text-muted"), g.Attr("style", "font-size: 0.75rem;"), g.Text("In")),
+										html.Div(
+											html.Class("fw-bold text-success"),
+											g.Attr("style", "font-size: 1.5rem; white-space: nowrap;"),
+											g.Text(fmt.Sprintf("$%.0f", moneyIn)),
+										),
+									),
+								),
+								// Minus Sign
+								html.Div(
+									html.Class("d-flex align-items-center"),
+									g.Attr("style", "font-size: 1.8rem; font-weight: bold; color: #6c757d; flex-shrink: 0;"),
+									g.Text("−"),
+								),
+								// Money Out Card
+								html.Div(
+									html.Class("card"),
+									g.Attr("style", "min-width: 80px; flex-shrink: 0;"),
+									html.Div(
+										html.Class("card-body text-center p-2"),
+										html.H6(html.Class("card-subtitle mb-1 text-muted"), g.Attr("style", "font-size: 0.75rem;"), g.Text("Out")),
+										html.Div(
+											html.Class("fw-bold text-danger"),
+											g.Attr("style", "font-size: 1.5rem; white-space: nowrap;"),
+											g.Text(fmt.Sprintf("$%.0f", moneyOut)),
+										),
+									),
+								),
+								// Equals Sign
+								html.Div(
+									html.Class("d-flex align-items-center"),
+									g.Attr("style", "font-size: 1.8rem; font-weight: bold; color: #6c757d; flex-shrink: 0;"),
+									g.Text("="),
+								),
+								// Net Money Card
+								html.Div(
+									html.Class("card"),
+									g.Attr("style", "min-width: 80px; flex-shrink: 0;"),
+									html.Div(
+										html.Class("card-body text-center p-2"),
+										html.H6(html.Class("card-subtitle mb-1 text-muted"), g.Attr("style", "font-size: 0.75rem;"), g.Text("Net")),
+										html.Div(
+											func() g.Node {
+												if netMoney >= 0 {
+													return html.Class("fw-bold text-success")
+												}
+												return html.Class("fw-bold text-danger")
+											}(),
+											g.Attr("style", "font-size: 1.5rem; white-space: nowrap;"),
+											g.Text(fmt.Sprintf("$%.0f", netMoney)),
+										),
+									),
+								),
+							),
+						),
+					),
+				),
+			),
+		),
+		// Combined recurring transactions table
+		html.Div(
+			html.Class("row mt-5 justify-content-center"),
+			html.Div(
+				html.Class("col-12 col-lg-10"),
+				html.Div(
+					html.Class("card"),
+					html.Div(
+						html.Class("card-header"),
+						html.H5(html.Class("card-title mb-0"), g.Text(fmt.Sprintf("Recurring Transactions (%d)", len(allOccurrences)))),
+					),
+					html.Div(
+						html.Class("card-body"),
+						func() g.Node {
+							if len(allOccurrences) == 0 {
+								return html.P(html.Class("text-muted mb-0"), g.Text("No recurring transactions for this month."))
+							}
+							return html.Div(
+								html.Class("table-responsive"),
+								html.Table(
+									html.Class("table table-hover"),
+									g.El("thead",
+										html.Tr(
+											html.Th(g.Text("Name")),
+											html.Th(g.Text("Status")),
+											html.Th(g.Text("Date")),
+											html.Th(html.Class("text-end"), g.Text("Amount")),
+										),
+									),
+									g.El("tbody",
+										g.Group(func() []g.Node {
+											var rows []g.Node
+											today := time.Now()
+											for _, occ := range allOccurrences {
+												rt := occ.RecurringTransaction
+												var displayDate time.Time
+												
+												if occ.IsMatched && occ.TransactionDate != nil {
+													displayDate = *occ.TransactionDate
+												} else {
+													displayDate = occ.ExpectedDate
+												}
+												
+												dateText := displayDate.Format("Jan 2")
+
+												// Determine status: matched, overdue, or upcoming
+												var statusBadge g.Node
+												if occ.IsMatched {
+													if rt.IsExpense() {
+														statusBadge = html.Span(
+															html.Class("badge bg-success"),
+															g.Text("Paid"),
+														)
+													} else {
+														statusBadge = html.Span(
+															html.Class("badge bg-success"),
+															g.Text("Received"),
+														)
+													}
+												} else {
+													// Check if overdue (expected date has passed)
+													if occ.ExpectedDate.Before(today) {
+														statusBadge = html.Span(
+															html.Class("badge bg-danger"),
+															g.Text("Overdue"),
+														)
+													} else {
+														if rt.IsExpense() {
+															statusBadge = html.Span(
+																html.Class("badge bg-warning text-dark"),
+																g.Text("Upcoming"),
+															)
+														} else {
+															statusBadge = html.Span(
+																html.Class("badge bg-warning text-dark"),
+																g.Text("Expected"),
+															)
+														}
+													}
+												}
+
+												// Format amount: negative for expenses, positive for income
+												var amountText string
+												var amountClass string
+												amount := float64(rt.ExpectedAmount) / 100.0
+												if rt.IsExpense() {
+													amountText = fmt.Sprintf("-$%.2f", -amount) // Show as negative
+													amountClass = "text-danger" // Red text for expenses
+												} else {
+													amountText = fmt.Sprintf("$%.2f", amount)
+													amountClass = "text-success" // Green text for income
+												}
+
+												rows = append(rows, html.Tr(
+													html.Td(g.Text(rt.Name)),
+													html.Td(statusBadge),
+													html.Td(g.Text(dateText)),
+													html.Td(
+														html.Class(fmt.Sprintf("text-end fw-bold %s", amountClass)),
+														g.Text(amountText),
+													),
+												))
+											}
+											return rows
+										}()),
+									),
+								),
+							)
+						}(),
 					),
 				),
 			),
@@ -1691,6 +1894,26 @@ func RuleFormFields(categories []data.Category, rule *data.Rule, modalType strin
 				return nil
 			}(), nil, false, nil),
 		),
+		// Add checkbox for running rule on existing transactions (only in edit mode)
+		func() g.Node {
+			if modalType == "edit" {
+				return html.Div(
+					html.Class("form-check mb-3"),
+					html.Input(
+						html.Class("form-check-input"),
+						html.Type("checkbox"),
+						html.ID("run-on-existing-edit"),
+						html.Name("run_on_existing"),
+					),
+					html.Label(
+						html.Class("form-check-label"),
+						html.For("run-on-existing-edit"),
+						g.Text("Apply this rule to all existing transactions"),
+					),
+				)
+			}
+			return nil
+		}(),
 		html.Script(g.Raw(`
 			function addConditionRow(modalType) {
 				const container = document.getElementById('conditions-container-' + modalType);
@@ -1831,17 +2054,27 @@ func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID 
 			selectCategory(value, display) {
 				this.selectedValue = value;
 				this.selectedDisplay = display;
+				// Immediately update the hidden input
+				const hiddenInput = this.$el.querySelector('input[name="%s"]');
+				if (hiddenInput) {
+					hiddenInput.value = value || '';
+				}
 			},
 			init() {
-				// Watch for form reset events and sync Alpine state
+				// Set initial value on the hidden input
+				const hiddenInput = this.$el.querySelector('input[name="%s"]');
+				if (hiddenInput) {
+					hiddenInput.value = this.selectedValue || '';
+				}
+				// Watch for changes and sync Alpine state
 				this.$watch('selectedValue', (value) => {
 					const hiddenInput = this.$el.querySelector('input[name="%s"]');
 					if (hiddenInput) {
-						hiddenInput.value = value;
+						hiddenInput.value = value || '';
 					}
 				});
 			}
-		}`, escapedSelectedValue, escapedSelectedDisplay, selectName)),
+		}`, escapedSelectedValue, escapedSelectedDisplay, selectName, selectName, selectName)),
 		// Dropdown button
 		html.Button(
 			html.Class("btn border dropdown-toggle w-100 d-flex justify-content-between align-items-center"),
@@ -1938,7 +2171,485 @@ func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID 
 		html.Input(
 			html.Type("hidden"),
 			html.Name(selectName),
+			html.Value(selectedValue),
 			g.Attr("x-model", "selectedValue"),
+			g.Attr("x-bind:value", "selectedValue"),
 		),
 	)
+}
+
+// RecurringTransactionsPage renders the recurring transactions management page
+func RecurringTransactionsPage(rts []data.RecurringTransaction, categories []data.Category) g.Node {
+	return html.Div(
+		html.Class("row"),
+		html.Div(
+			html.Class("col-12 col-md-8 px-2"),
+			html.H1(html.Class("display-6 my-2 text-center"), g.Text("Recurring Transactions")),
+			// Toolbar
+			html.Div(
+				html.Class("card p-2 mb-3 bg-body-tertiary border"),
+				html.Div(
+					html.Class("d-flex align-items-center gap-2"),
+					html.Button(
+						html.Class("btn btn-primary"),
+						html.Type("button"),
+						html.DataAttr("bs-toggle", "modal"),
+						html.DataAttr("bs-target", "#addRecurringTransactionModal"),
+						g.Text("Add Recurring Transaction"),
+					),
+				),
+			),
+			// Recurring transactions list
+			html.Div(
+				html.ID("recurring-transactions-list"),
+				html.Class("list-group"),
+				g.Group(func() []g.Node {
+					var rows []g.Node
+					for _, rt := range rts {
+						rows = append(rows, RecurringTransactionCard(rt, categories))
+					}
+					return rows
+				}()),
+			),
+		),
+		// Add Recurring Transaction Modal
+		AddRecurringTransactionModal(categories),
+		// Edit Recurring Transaction Modal
+		EditRecurringTransactionModal(categories),
+		// JavaScript functions for recurring transaction actions
+		html.Script(g.Raw(`
+			function openEditRecurringTransactionModal(rtId) {
+				const modal = document.getElementById('editRecurringTransactionModal');
+				if (!modal) return;
+				
+				// Load the edit form via HTMX
+				fetch('/bills/' + rtId + '/edit')
+					.then(response => response.text())
+					.then(html => {
+						document.getElementById('editRecurringTransactionModalBody').innerHTML = html;
+						// Process HTMX attributes on the newly loaded content
+						if (typeof htmx !== 'undefined') {
+							htmx.process(document.getElementById('editRecurringTransactionModalBody'));
+						}
+						const bsModal = bootstrap.Modal.getOrCreateInstance(modal);
+						bsModal.show();
+					})
+					.catch(error => console.error('Error loading edit form:', error));
+			}
+			
+			function archiveRecurringTransaction(rtId) {
+				const endDate = prompt('Enter the last recurrence date for this recurring transaction (YYYY-MM-DD):');
+				if (endDate && endDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+					const formData = new FormData();
+					formData.append('end_date', endDate);
+					
+					fetch('/bills/' + rtId + '/archive', {
+						method: 'POST',
+						headers: {
+							'HX-Request': 'true',
+						},
+						body: formData,
+					})
+					.then(response => {
+						if (response.ok) {
+							return response.text();
+						} else {
+							throw new Error('Error archiving recurring transaction');
+						}
+					})
+					.then(html => {
+						// Replace the recurring transactions list
+						document.getElementById('recurring-transactions-list').outerHTML = html;
+					})
+					.catch(error => {
+						console.error('Error archiving recurring transaction:', error);
+						alert('Failed to archive recurring transaction. Please try again.');
+					});
+				} else if (endDate) {
+					alert('Invalid date format. Please use YYYY-MM-DD format.');
+				}
+			}
+			
+			function deleteRecurringTransaction(rtId) {
+				if (confirm('Are you sure you want to delete this recurring transaction? This action cannot be undone.')) {
+					fetch('/bills/' + rtId, {
+						method: 'DELETE',
+						headers: {
+							'Content-Type': 'application/json',
+							'HX-Request': 'true',
+						},
+					})
+					.then(response => {
+						if (response.ok) {
+							// Find and remove the specific recurring transaction card
+							const rtCard = document.querySelector('[data-recurring-transaction-id="' + rtId + '"]');
+							if (rtCard) {
+								rtCard.remove();
+							}
+						} else {
+							console.error('Error deleting recurring transaction:', response.statusText);
+						}
+					})
+					.catch(error => console.error('Error deleting recurring transaction:', error));
+				}
+			}
+		`)),
+	)
+}
+
+// RecurringTransactionCard renders a single recurring transaction card
+func RecurringTransactionCard(rt data.RecurringTransaction, categories []data.Category) g.Node {
+	typeBadgeClass := "badge bg-danger"
+	typeBadgeText := "Expense"
+	counterpartyLabel := "Payee"
+	if rt.IsIncome() {
+		typeBadgeClass = "badge bg-success"
+		typeBadgeText = "Income"
+		counterpartyLabel = "Payer"
+	}
+
+	return html.Div(
+		html.Class("card mb-3"),
+		g.Attr("data-recurring-transaction-id", strconv.Itoa(rt.ID)),
+		html.Div(
+			html.Class("card-body"),
+			html.Div(
+				html.Class("d-flex"),
+				// Left side - Recurring transaction content
+				html.Div(
+					html.Class("flex-grow-1 pe-3"),
+					html.Div(
+						html.Class("mb-3"),
+						html.Div(
+							html.Class("d-flex align-items-center gap-2 mb-1"),
+							html.H5(html.Class("card-title mb-0"), g.Text(rt.Name)),
+							html.Span(
+								html.Class(typeBadgeClass),
+								g.Text(typeBadgeText),
+							),
+						),
+						html.P(html.Class("mb-1 text-muted"), g.Text(fmt.Sprintf("%s: %s", counterpartyLabel, rt.Counterparty))),
+						func() g.Node {
+							if rt.CategoryID != nil {
+								categoryName := "Unknown"
+								for _, cat := range categories {
+									if cat.ID == *rt.CategoryID {
+										categoryName = cat.Name
+										break
+									}
+								}
+								return html.P(html.Class("mb-1 text-muted"), g.Text(fmt.Sprintf("Category: %s", categoryName)))
+							}
+							return html.P(html.Class("mb-1 text-muted"), g.Text("Category: None"))
+						}(),
+						html.P(html.Class("mb-1"), g.Text(fmt.Sprintf("Expected Amount: $%s", rt.ExpectedAmountDecimal()))),
+						html.P(html.Class("mb-1 text-muted"), g.Text(fmt.Sprintf("Tolerance: $%s", rt.ToleranceDecimal()))),
+						html.P(html.Class("mb-0"), g.Text(fmt.Sprintf("Recurrence: %s", rt.RecurrenceDisplay()))),
+					),
+				),
+				// Right side - Action buttons
+				html.Div(
+					html.Class("d-flex flex-column justify-content-center align-items-center"),
+					html.Div(
+						html.Class("btn-group"),
+						html.Button(
+							html.Type("button"),
+							html.Class("btn btn-primary"),
+							g.Attr("onclick", fmt.Sprintf("openEditRecurringTransactionModal(%d)", rt.ID)),
+							g.Text("Edit"),
+						),
+						html.Button(
+							html.Type("button"),
+							html.Class("btn btn-primary dropdown-toggle dropdown-toggle-split"),
+							g.Attr("data-bs-toggle", "dropdown"),
+							g.Attr("aria-expanded", "false"),
+							g.Attr("aria-label", "Toggle dropdown"),
+						),
+						html.Ul(
+							html.Class("dropdown-menu"),
+							func() g.Node {
+								if rt.Archived {
+									return html.Li(
+										html.Class("dropdown-item-text text-muted"),
+										g.Text(fmt.Sprintf("Archived until %s", rt.EndDate.Format("Jan 2, 2006"))),
+									)
+								}
+								return html.Li(
+									html.Class("dropdown-item"),
+									html.Button(
+										html.Type("button"),
+										html.Class("btn btn-warning w-100"),
+										g.Attr("onclick", fmt.Sprintf("archiveRecurringTransaction(%d)", rt.ID)),
+										g.Text("Archive"),
+									),
+								)
+							}(),
+							html.Li(html.Hr(html.Class("dropdown-divider"))),
+							html.Li(
+								html.Class("dropdown-item"),
+								html.Button(
+									html.Type("button"),
+									html.Class("btn btn-danger w-100"),
+									g.Attr("onclick", fmt.Sprintf("deleteRecurringTransaction(%d)", rt.ID)),
+									g.Text("Delete"),
+								),
+							),
+						),
+					),
+				),
+			),
+		),
+	)
+}
+
+// AddRecurringTransactionModal renders the modal for adding a new recurring transaction
+func AddRecurringTransactionModal(categories []data.Category) g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("addRecurringTransactionModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "addRecurringTransactionModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("addRecurringTransactionModalLabel"), g.Text("Add Recurring Transaction")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					g.El("form",
+						html.Action("/bills/"),
+						html.Method("POST"),
+						g.Attr("hx-post", "/bills/"),
+						g.Attr("hx-target", "#recurring-transactions-list"),
+						g.Attr("hx-swap", "outerHTML"),
+						g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addRecurringTransactionModal')).hide(); }"),
+						RecurringTransactionFormFields(categories, nil),
+						html.Div(
+							html.Class("d-flex justify-content-end gap-2"),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Recurring Transaction")),
+						),
+					),
+				),
+			),
+		),
+		// Modal reset script
+		html.Script(g.Raw(`
+			document.getElementById('addRecurringTransactionModal').addEventListener('show.bs.modal', function() {
+				const form = this.querySelector('form');
+				if (form) form.reset();
+			});
+		`)),
+	)
+}
+
+// EditRecurringTransactionModal renders the modal for editing a recurring transaction
+func EditRecurringTransactionModal(categories []data.Category) g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("editRecurringTransactionModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "editRecurringTransactionModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("editRecurringTransactionModalLabel"), g.Text("Edit Recurring Transaction")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.ID("editRecurringTransactionModalBody"),
+					html.Class("modal-body"),
+					// Content will be loaded via HTMX
+				),
+			),
+		),
+	)
+}
+
+// RecurringTransactionFormFields renders the form fields for a recurring transaction
+func RecurringTransactionFormFields(categories []data.Category, rt *data.RecurringTransaction) g.Node {
+	return g.Group([]g.Node{
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-name"), g.Text("Name")),
+			html.Input(
+				html.Type("text"),
+				html.Name("name"),
+				html.ID("rt-name"),
+				html.Class("form-control"),
+				html.Required(),
+				func() g.Node {
+					if rt != nil {
+						return html.Value(rt.Name)
+					}
+					return nil
+				}(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-counterparty"), g.Text("Counterparty")),
+			html.Input(
+				html.Type("text"),
+				html.Name("counterparty"),
+				html.ID("rt-counterparty"),
+				html.Class("form-control"),
+				html.Required(),
+				func() g.Node {
+					if rt != nil {
+						return html.Value(rt.Counterparty)
+					}
+					return nil
+				}(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-category"), g.Text("Category (optional)")),
+			CategoryBootstrapDropdown(categories, "category_id", "rt-category", func() *int {
+				if rt != nil {
+					return rt.CategoryID
+				}
+				return nil
+			}(), nil, false, nil),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-expected-amount"), g.Text("Expected Amount")),
+			html.Input(
+				html.Type("number"),
+				html.Name("expected_amount"),
+				html.ID("rt-expected-amount"),
+				html.Class("form-control"),
+				html.Step("0.01"),
+				html.Required(),
+				func() g.Node {
+					if rt != nil {
+						// Show actual signed value: negative for expenses, positive for income
+						amount := float64(rt.ExpectedAmount) / 100.0
+						return html.Value(fmt.Sprintf("%.2f", amount))
+					}
+					return nil
+				}(),
+			),
+			html.Small(html.Class("form-text text-muted"), g.Text("Enter negative for expenses, positive for income")),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-tolerance"), g.Text("Tolerance")),
+			html.Input(
+				html.Type("number"),
+				html.Name("tolerance"),
+				html.ID("rt-tolerance"),
+				html.Class("form-control"),
+				html.Step("0.01"),
+				html.Required(),
+				func() g.Node {
+					if rt != nil {
+						return html.Value(rt.ToleranceDecimal())
+					}
+					return html.Value("0")
+				}(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-start-date"), g.Text("Start Date")),
+			html.Input(
+				html.Type("date"),
+				html.Name("start_date"),
+				html.ID("rt-start-date"),
+				html.Class("form-control"),
+				html.Required(),
+				func() g.Node {
+					if rt != nil {
+						return html.Value(rt.StartDate.Format("2006-01-02"))
+					}
+					return nil
+				}(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-recurrence-unit"), g.Text("Recurrence Unit")),
+			html.Select(
+				html.Name("recurrence_unit"),
+				html.ID("rt-recurrence-unit"),
+				html.Class("form-select"),
+				html.Required(),
+				g.Group([]g.Node{
+					func() g.Node {
+						if rt != nil && rt.RecurrenceUnit == "week" {
+							return html.Option(html.Value("week"), g.Attr("selected", "selected"), g.Text("Week"))
+						}
+						return html.Option(html.Value("week"), g.Text("Week"))
+					}(),
+					func() g.Node {
+						if rt != nil && rt.RecurrenceUnit == "month" {
+							return html.Option(html.Value("month"), g.Attr("selected", "selected"), g.Text("Month"))
+						}
+						return html.Option(html.Value("month"), g.Text("Month"))
+					}(),
+					func() g.Node {
+						if rt != nil && rt.RecurrenceUnit == "year" {
+							return html.Option(html.Value("year"), g.Attr("selected", "selected"), g.Text("Year"))
+						}
+						return html.Option(html.Value("year"), g.Text("Year"))
+					}(),
+				}),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-recurrence-value"), g.Text("Recurrence Value")),
+			html.Input(
+				html.Type("number"),
+				html.Name("recurrence_value"),
+				html.ID("rt-recurrence-value"),
+				html.Class("form-control"),
+				html.Min("1"),
+				html.Required(),
+				func() g.Node {
+					if rt != nil {
+						return html.Value(strconv.Itoa(rt.RecurrenceValue))
+					}
+					return html.Value("1")
+				}(),
+			),
+		),
+	})
+}
+
+// RenderRecurringTransactionsList renders the recurring transactions list for HTMX responses
+func RenderRecurringTransactionsList(w io.Writer, rts []data.RecurringTransaction, categories []data.Category) error {
+	return html.Div(
+		html.ID("recurring-transactions-list"),
+		html.Class("list-group"),
+		g.Group(func() []g.Node {
+			var rows []g.Node
+			for _, rt := range rts {
+				rows = append(rows, RecurringTransactionCard(rt, categories))
+			}
+			return rows
+		}()),
+	).Render(w)
 }

@@ -33,16 +33,26 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Create triggers for updated_at columns
-CREATE TRIGGER update_accounts_updated_at 
-    BEFORE UPDATE ON accounts 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at_column();
+-- Create triggers for updated_at columns (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_accounts_updated_at') THEN
+        CREATE TRIGGER update_accounts_updated_at 
+            BEFORE UPDATE ON accounts 
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
 
-CREATE TRIGGER update_sessions_updated_at 
-    BEFORE UPDATE ON sessions 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_sessions_updated_at') THEN
+        CREATE TRIGGER update_sessions_updated_at 
+            BEFORE UPDATE ON sessions 
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
 -- +goose StatementEnd
 
 -- +goose Down

@@ -44,12 +44,33 @@ var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Run database migrations",
 	Long: `Run database migrations using embedded migration files.
-This command will apply pending migrations to the database.`,
+This command will apply pending migrations to the database and then apply all views.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runMigration(data.Up, "Migration"); err != nil {
-			log.Fatalf("%v", err)
+		dsn := viper.GetString("DATABASE_URL")
+		if dsn == "" {
+			dsn = defaultDSN
+		}
+
+		// Initialize migrations
+		data.InitMigrations()
+
+		// Get database connection
+		db, err := data.GetDBConnection(dsn)
+		if err != nil {
+			log.Fatalf("Failed to connect to database: %v", err)
+		}
+		defer db.Close()
+
+		// Create storage instance
+		store := data.NewStorage(db)
+
+		// Run migrations
+		if err := data.Up(store); err != nil {
+			log.Fatalf("Migration failed: %v", err)
 		}
 		fmt.Println("Migrations completed successfully")
+
+		// Views are now managed via migrations, no need to apply separately
 	},
 }
 

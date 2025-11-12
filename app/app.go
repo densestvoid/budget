@@ -40,6 +40,11 @@ func (a *App) ConnectDB(dsn string) error {
 
 	a.db = db
 	log.Println("Connected to database successfully")
+
+	// Views are now managed via migrations, no need to apply at startup
+	// Ensure migrations are up to date instead
+	// (This assumes migrations are run separately, e.g., via docker-compose migrate service)
+
 	return nil
 }
 

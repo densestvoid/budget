@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -106,6 +107,16 @@ func (s *Server) SetupRoutes() {
 		r.Get("/{id}/edit", s.editRuleHandler)
 	})
 
+	// Bills routes (require authentication)
+	s.router.With(authHandler.AuthRequiredMiddleware).Route("/bills", func(r chi.Router) {
+		r.Get("/", s.recurringTransactionsPageHandler)
+		r.Post("/", s.createRecurringTransactionHandler)
+		r.Put("/{id}", s.updateRecurringTransactionHandler)
+		r.Post("/{id}/archive", s.archiveRecurringTransactionHandler)
+		r.Delete("/{id}", s.deleteRecurringTransactionHandler)
+		r.Get("/{id}/edit", s.editRecurringTransactionHandler)
+	})
+
 	// Web routes with optional authentication
 	s.router.With(authHandler.OptionalAuthMiddleware).Get("/", s.homeHandler)
 	s.router.With(authHandler.OptionalAuthMiddleware).Get("/about", s.aboutHandler)
@@ -124,17 +135,28 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	var isAuthenticated bool
 	var moneyIn, moneyOut, netMoney float64
 	var monthName string
+	var expenseOccurrences []data.Occurrence
+	var incomeOccurrences []data.Occurrence
+	var allOccurrences []data.Occurrence
+	includeUpcoming := true // Default to including upcoming transactions
 
 	// Get current month
 	now := time.Now()
 	monthName = now.Format("January 2006")
+	year := now.Year()
+	month := int(now.Month())
+	
+	// Check if user wants to include upcoming transactions (default: true)
+	if includeUpcomingStr := r.URL.Query().Get("include_upcoming"); includeUpcomingStr != "" {
+		includeUpcoming = includeUpcomingStr == "true" || includeUpcomingStr == "1"
+	}
 
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
 		acc := account.(*data.Account)
 
 		// Get transactions for current month
-		txs, err := s.store.GetTransactionsByMonth(acc.ID, now.Year(), int(now.Month()))
+		txs, err := s.store.GetTransactionsByMonth(acc.ID, year, month)
 		if err != nil {
 			log.Printf("Error fetching transactions: %v", err)
 			// Continue with zero values if there's an error
@@ -150,12 +172,232 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 				netMoney += amount
 			}
 		}
+
+		// Get expenses and expand into occurrences for current month
+		allExpenses, err := s.store.GetRecurringExpensesByAccount(acc.ID)
+		if err != nil {
+			log.Printf("Error fetching expenses: %v", err)
+		} else {
+			currentDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+			// Filter out archived expenses that have passed their end_date
+			for _, expense := range allExpenses {
+				// Skip archived expenses that have passed their end_date
+				if expense.EndDate != nil && expense.EndDate.Before(currentDate) {
+					continue
+				}
+
+				// Get all occurrences for this month
+				occurrences := expense.GetOccurrencesInMonth(year, time.Month(month))
+				
+				// Get all matched transactions for this recurring transaction in this month
+				matchedTransactions, err := s.store.GetMatchedTransactionsForRecurring(expense.ID, year, month)
+				if err != nil {
+					log.Printf("Error getting matched transactions: %v", err)
+					matchedTransactions = []time.Time{}
+				}
+				
+				// Match transactions to occurrences (each transaction can only match one occurrence)
+				usedTransactions := make(map[time.Time]bool)
+				for i := range occurrences {
+					occ := &occurrences[i]
+					// Find the closest unmatched transaction to this occurrence
+					var bestMatch *time.Time
+					bestDiff := 7 * 24 * time.Hour // Max 7 days difference
+					
+					for _, txDate := range matchedTransactions {
+						if usedTransactions[txDate] {
+							continue // This transaction is already matched to another occurrence
+						}
+						
+						diff := txDate.Sub(occ.ExpectedDate)
+						if diff < 0 {
+							diff = -diff
+						}
+						if diff <= bestDiff {
+							bestDiff = diff
+							txDateCopy := txDate
+							bestMatch = &txDateCopy
+						}
+					}
+					
+					if bestMatch != nil {
+						occ.IsMatched = true
+						occ.TransactionDate = bestMatch
+						usedTransactions[*bestMatch] = true
+					}
+					
+					expenseOccurrences = append(expenseOccurrences, *occ)
+				}
+			}
+
+			// Sort occurrences: paid first (by transaction date), then upcoming (by expected date)
+			sort.Slice(expenseOccurrences, func(i, j int) bool {
+				occI := expenseOccurrences[i]
+				occJ := expenseOccurrences[j]
+
+				// Paid occurrences come first
+				if occI.IsMatched && !occJ.IsMatched {
+					return true
+				}
+				if !occI.IsMatched && occJ.IsMatched {
+					return false
+				}
+
+				// Within same status, sort by date
+				var dateI, dateJ time.Time
+				if occI.IsMatched && occI.TransactionDate != nil {
+					dateI = *occI.TransactionDate
+				} else {
+					dateI = occI.ExpectedDate
+				}
+				if occJ.IsMatched && occJ.TransactionDate != nil {
+					dateJ = *occJ.TransactionDate
+				} else {
+					dateJ = occJ.ExpectedDate
+				}
+				return dateI.Before(dateJ)
+			})
+		}
+
+		// Get income and expand into occurrences for current month
+		allIncome, err := s.store.GetRecurringIncomeByAccount(acc.ID)
+		if err != nil {
+			log.Printf("Error fetching income: %v", err)
+		} else {
+			currentDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+			// Filter out archived income that has passed their end_date
+			for _, inc := range allIncome {
+				// Skip archived income that has passed their end_date
+				if inc.EndDate != nil && inc.EndDate.Before(currentDate) {
+					continue
+				}
+
+				// Get all occurrences for this month
+				occurrences := inc.GetOccurrencesInMonth(year, time.Month(month))
+				
+				// Get all matched transactions for this recurring transaction in this month
+				matchedTransactions, err := s.store.GetMatchedTransactionsForRecurring(inc.ID, year, month)
+				if err != nil {
+					log.Printf("Error getting matched transactions: %v", err)
+					matchedTransactions = []time.Time{}
+				}
+				
+				// Match transactions to occurrences (each transaction can only match one occurrence)
+				usedTransactions := make(map[time.Time]bool)
+				for i := range occurrences {
+					occ := &occurrences[i]
+					// Find the closest unmatched transaction to this occurrence
+					var bestMatch *time.Time
+					bestDiff := 7 * 24 * time.Hour // Max 7 days difference
+					
+					for _, txDate := range matchedTransactions {
+						if usedTransactions[txDate] {
+							continue // This transaction is already matched to another occurrence
+						}
+						
+						diff := txDate.Sub(occ.ExpectedDate)
+						if diff < 0 {
+							diff = -diff
+						}
+						if diff <= bestDiff {
+							bestDiff = diff
+							txDateCopy := txDate
+							bestMatch = &txDateCopy
+						}
+					}
+					
+					if bestMatch != nil {
+						occ.IsMatched = true
+						occ.TransactionDate = bestMatch
+						usedTransactions[*bestMatch] = true
+					}
+					
+					incomeOccurrences = append(incomeOccurrences, *occ)
+				}
+			}
+
+			// Sort occurrences: matched first (by transaction date), then upcoming (by expected date)
+			sort.Slice(incomeOccurrences, func(i, j int) bool {
+				occI := incomeOccurrences[i]
+				occJ := incomeOccurrences[j]
+
+				// Matched occurrences come first
+				if occI.IsMatched && !occJ.IsMatched {
+					return true
+				}
+				if !occI.IsMatched && occJ.IsMatched {
+					return false
+				}
+
+				// Within same status, sort by date
+				var dateI, dateJ time.Time
+				if occI.IsMatched && occI.TransactionDate != nil {
+					dateI = *occI.TransactionDate
+				} else {
+					dateI = occI.ExpectedDate
+				}
+				if occJ.IsMatched && occJ.TransactionDate != nil {
+					dateJ = *occJ.TransactionDate
+				} else {
+					dateJ = occJ.ExpectedDate
+				}
+				return dateI.Before(dateJ)
+			})
+		}
+
+		// Combine all occurrences and sort by date
+		allOccurrences = append(allOccurrences, expenseOccurrences...)
+		allOccurrences = append(allOccurrences, incomeOccurrences...)
+		
+		// Sort all occurrences by date (use transaction date if matched, expected date if not)
+		sort.Slice(allOccurrences, func(i, j int) bool {
+			occI := allOccurrences[i]
+			occJ := allOccurrences[j]
+			
+			var dateI, dateJ time.Time
+			if occI.IsMatched && occI.TransactionDate != nil {
+				dateI = *occI.TransactionDate
+			} else {
+				dateI = occI.ExpectedDate
+			}
+			if occJ.IsMatched && occJ.TransactionDate != nil {
+				dateJ = *occJ.TransactionDate
+			} else {
+				dateJ = occJ.ExpectedDate
+			}
+			return dateI.Before(dateJ)
+		})
+
+		// If including upcoming transactions, add them to the totals
+		if includeUpcoming {
+			// Add upcoming expense occurrences
+			for _, occ := range expenseOccurrences {
+				if !occ.IsMatched {
+					amount := float64(occ.RecurringTransaction.ExpectedAmount) / 100.0
+					if amount < 0 {
+						moneyOut += -amount // Make positive for display
+					}
+					netMoney += amount
+				}
+			}
+			// Add upcoming income occurrences
+			for _, occ := range incomeOccurrences {
+				if !occ.IsMatched {
+					amount := float64(occ.RecurringTransaction.ExpectedAmount) / 100.0
+					if amount > 0 {
+						moneyIn += amount
+					}
+					netMoney += amount
+				}
+			}
+		}
+
 		log.Printf("Home handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
 	} else {
 		log.Printf("Home handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
 	}
 
-	page := templates.SummaryPage(moneyIn, moneyOut, netMoney, monthName)
+	page := templates.SummaryPage(moneyIn, moneyOut, netMoney, monthName, allOccurrences, includeUpcoming)
 	if err := templates.BaseLayoutWithAuth("Summary - Budget App", isAuthenticated, page).Render(w); err != nil {
 		log.Printf("Error rendering summary page: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -856,11 +1098,12 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "text/html")
 
 	// Render the edit form
+	cardID := "transaction-card-" + strconv.Itoa(transaction.ID)
 	g.El("form",
 		g.Attr("hx-patch", "/transactions/"+strconv.Itoa(transaction.ID)),
-		g.Attr("hx-target", "closest .mb-2"),
+		g.Attr("hx-target", "#"+cardID),
 		g.Attr("hx-swap", "outerHTML"),
-		g.Attr("hx-on::after-request", `if (event.target === this) { bootstrap.Modal.getInstance(this.closest('.modal')).hide(); }`),
+		g.Attr("hx-on::after-request", `if (event.detail.successful) { const modal = bootstrap.Modal.getInstance(document.querySelector('#editTransactionModal')); if (modal) modal.hide(); }`),
 		html.Div(
 			html.Class("mb-3"),
 			html.Label(html.Class("form-label"), html.For("edit-payee-"+strconv.Itoa(transaction.ID)), g.Text("Payee")),
@@ -1286,8 +1529,26 @@ func (s *Server) updateRuleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if run_on_existing was requested
+	updatedCount := 0
+	if r.FormValue("run_on_existing") == "on" || r.FormValue("run_on_existing") == "true" {
+		// Get the updated rule to apply it
+		rules, err := s.store.GetRulesByAccount(account.ID)
+		if err == nil {
+			for _, rule := range rules {
+				if rule.ID == ruleID {
+					count, err := s.store.ApplyRuleToAllTransactions(account.ID, rule)
+					if err == nil {
+						updatedCount = count
+					}
+					break
+				}
+			}
+		}
+	}
+
 	if isHTMX(r) {
-		// Return updated rules list
+		// Return updated rules list with banner if needed
 		rules, err := s.store.GetRulesByAccount(account.ID)
 		if err != nil {
 			http.Error(w, "Failed to load rules", http.StatusInternalServerError)
@@ -1299,6 +1560,9 @@ func (s *Server) updateRuleHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
+		if updatedCount > 0 {
+			w.Write([]byte(`<div id="rule-banner" class="alert alert-success position-fixed top-0 start-50 translate-middle-x mt-3" style="z-index:2000; min-width:300px; text-align:center;">Updated ` + strconv.Itoa(updatedCount) + ` transactions</div><script>setTimeout(function(){ var b=document.getElementById('rule-banner'); if(b){b.remove();}}, 3500);</script>`))
+		}
 		templates.RenderRulesList(w, rules, categories)
 	} else {
 		http.Redirect(w, r, "/rules/", http.StatusSeeOther)
@@ -1475,5 +1739,408 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 				container.insertBefore(clone, container.lastElementChild);
 			};
 		`)),
+	).Render(w)
+}
+
+// RecurringTransaction management handlers
+
+func (s *Server) recurringTransactionsPageHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+		return
+	}
+	rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
+		return
+	}
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+	page := templates.RecurringTransactionsPage(rts, categories)
+	_ = templates.BaseLayoutWithAuth("Recurring Transactions - Budget App", true, page).Render(w)
+}
+
+func (s *Server) createRecurringTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	name := r.FormValue("name")
+	counterparty := r.FormValue("counterparty")
+	categoryIDStr := r.FormValue("category_id")
+	expectedAmountStr := r.FormValue("expected_amount")
+	toleranceStr := r.FormValue("tolerance")
+	startDateStr := r.FormValue("start_date")
+	recurrenceUnitStr := r.FormValue("recurrence_unit")
+	recurrenceValueStr := r.FormValue("recurrence_value")
+
+	if name == "" || counterparty == "" || expectedAmountStr == "" || toleranceStr == "" || startDateStr == "" || recurrenceUnitStr == "" || recurrenceValueStr == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	var categoryID *int
+	if categoryIDStr != "" {
+		cid, err := strconv.Atoi(categoryIDStr)
+		if err == nil {
+			// Validate that the category belongs to the current account
+			categories, err := s.store.GetCategoriesByAccount(account.ID)
+			if err != nil {
+				http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+				return
+			}
+
+			// Check if the category ID exists for this account
+			categoryExists := false
+			for _, cat := range categories {
+				if cat.ID == cid {
+					categoryExists = true
+					break
+				}
+			}
+
+			if categoryExists {
+				categoryID = &cid
+			}
+		}
+	}
+
+	expectedAmount, err := parseAmountToCents(expectedAmountStr)
+	if err != nil {
+		http.Error(w, "Invalid expected amount", http.StatusBadRequest)
+		return
+	}
+
+	// Type is generated from amount sign by the database
+	// Store amount as-is: negative = expense, positive = income
+	// No conversion needed - user enters the signed value
+
+	tolerance, err := parseAmountToCents(toleranceStr)
+	if err != nil {
+		http.Error(w, "Invalid tolerance", http.StatusBadRequest)
+		return
+	}
+	if tolerance < 0 {
+		tolerance = -tolerance // Make positive
+	}
+
+	startDate, err := time.Parse("2006-01-02", startDateStr)
+	if err != nil {
+		http.Error(w, "Invalid start date", http.StatusBadRequest)
+		return
+	}
+
+	recurrenceUnit := recurrenceUnitStr
+	if recurrenceUnit != "week" && recurrenceUnit != "month" && recurrenceUnit != "year" {
+		http.Error(w, "Recurrence unit must be 'week', 'month', or 'year'", http.StatusBadRequest)
+		return
+	}
+
+	recurrenceValue, err := strconv.Atoi(recurrenceValueStr)
+	if err != nil {
+		http.Error(w, "Invalid recurrence value", http.StatusBadRequest)
+		return
+	}
+	if recurrenceValue < 1 {
+		http.Error(w, "Recurrence value must be greater than 0", http.StatusBadRequest)
+		return
+	}
+
+	_, err = s.store.CreateRecurringTransaction(account.ID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue)
+	if err != nil {
+		http.Error(w, "Failed to create recurring transaction", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated recurring transactions list
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
+			return
+		}
+		categories, err := s.store.GetCategoriesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderRecurringTransactionsList(w, rts, categories)
+	} else {
+		http.Redirect(w, r, "/bills/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) updateRecurringTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	rtID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid recurring transaction ID", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	name := r.FormValue("name")
+	counterparty := r.FormValue("counterparty")
+	categoryIDStr := r.FormValue("category_id")
+	expectedAmountStr := r.FormValue("expected_amount")
+	toleranceStr := r.FormValue("tolerance")
+	startDateStr := r.FormValue("start_date")
+	recurrenceUnitStr := r.FormValue("recurrence_unit")
+	recurrenceValueStr := r.FormValue("recurrence_value")
+
+	if name == "" || counterparty == "" || expectedAmountStr == "" || toleranceStr == "" || startDateStr == "" || recurrenceUnitStr == "" || recurrenceValueStr == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	var categoryID *int
+	if categoryIDStr != "" {
+		cid, err := strconv.Atoi(categoryIDStr)
+		if err == nil {
+			// Validate that the category belongs to the current account
+			categories, err := s.store.GetCategoriesByAccount(account.ID)
+			if err != nil {
+				http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+				return
+			}
+
+			// Check if the category ID exists for this account
+			categoryExists := false
+			for _, cat := range categories {
+				if cat.ID == cid {
+					categoryExists = true
+					break
+				}
+			}
+
+			if categoryExists {
+				categoryID = &cid
+			}
+		}
+	}
+
+	expectedAmount, err := parseAmountToCents(expectedAmountStr)
+	if err != nil {
+		http.Error(w, "Invalid expected amount", http.StatusBadRequest)
+		return
+	}
+	
+	// Type is generated from amount sign by the database
+	// Store amount as-is: negative = expense, positive = income
+	// User enters the signed value directly, no conversion needed
+
+	tolerance, err := parseAmountToCents(toleranceStr)
+	if err != nil {
+		http.Error(w, "Invalid tolerance", http.StatusBadRequest)
+		return
+	}
+	if tolerance < 0 {
+		tolerance = -tolerance // Make positive
+	}
+
+	startDate, err := time.Parse("2006-01-02", startDateStr)
+	if err != nil {
+		http.Error(w, "Invalid start date", http.StatusBadRequest)
+		return
+	}
+
+	recurrenceUnit := recurrenceUnitStr
+	if recurrenceUnit != "week" && recurrenceUnit != "month" && recurrenceUnit != "year" {
+		http.Error(w, "Recurrence unit must be 'week', 'month', or 'year'", http.StatusBadRequest)
+		return
+	}
+
+	recurrenceValue, err := strconv.Atoi(recurrenceValueStr)
+	if err != nil {
+		http.Error(w, "Invalid recurrence value", http.StatusBadRequest)
+		return
+	}
+	if recurrenceValue < 1 {
+		http.Error(w, "Recurrence value must be greater than 0", http.StatusBadRequest)
+		return
+	}
+
+	err = s.store.UpdateRecurringTransaction(account.ID, rtID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue)
+	if err != nil {
+		http.Error(w, "Failed to update recurring transaction", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated recurring transactions list
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
+			return
+		}
+		categories, err := s.store.GetCategoriesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderRecurringTransactionsList(w, rts, categories)
+	} else {
+		http.Redirect(w, r, "/bills/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) archiveRecurringTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	rtID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid recurring transaction ID", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	endDateStr := r.FormValue("end_date")
+	if endDateStr == "" {
+		http.Error(w, "Missing end_date", http.StatusBadRequest)
+		return
+	}
+
+	endDate, err := time.Parse("2006-01-02", endDateStr)
+	if err != nil {
+		http.Error(w, "Invalid end date", http.StatusBadRequest)
+		return
+	}
+
+	err = s.store.ArchiveRecurringTransaction(account.ID, rtID, endDate)
+	if err != nil {
+		http.Error(w, "Failed to archive recurring transaction", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated recurring transactions list
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
+			return
+		}
+		categories, err := s.store.GetCategoriesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderRecurringTransactionsList(w, rts, categories)
+	} else {
+		http.Redirect(w, r, "/bills/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) deleteRecurringTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	rtID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid recurring transaction ID", http.StatusBadRequest)
+		return
+	}
+
+	err = s.store.DeleteRecurringTransaction(account.ID, rtID)
+	if err != nil {
+		http.Error(w, "Failed to delete recurring transaction", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated recurring transactions list
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
+			return
+		}
+		categories, err := s.store.GetCategoriesByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderRecurringTransactionsList(w, rts, categories)
+	} else {
+		http.Redirect(w, r, "/bills/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) editRecurringTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	rtID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid recurring transaction ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get the recurring transaction
+	rt, err := s.store.GetRecurringTransaction(account.ID, rtID)
+	if err != nil {
+		http.Error(w, "Failed to load recurring transaction", http.StatusInternalServerError)
+		return
+	}
+
+	if rt == nil {
+		http.Error(w, "Recurring transaction not found", http.StatusNotFound)
+		return
+	}
+
+	// Get categories for the form
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+
+	// Render the edit form
+	g.El("form",
+		g.Attr("hx-put", "/bills/"+strconv.Itoa(rt.ID)),
+		g.Attr("hx-target", "#recurring-transactions-list"),
+		g.Attr("hx-swap", "outerHTML"),
+		g.Attr("hx-on::after-request", `if (event.target === this) { bootstrap.Modal.getInstance(this.closest('.modal')).hide(); }`),
+		templates.RecurringTransactionFormFields(categories, rt),
+		html.Div(
+			html.Class("d-flex justify-content-end gap-2"),
+			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
+		),
 	).Render(w)
 }
