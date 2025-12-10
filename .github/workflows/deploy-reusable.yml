@@ -144,7 +144,6 @@ jobs:
   go-checks:
     name: Run Go Checks
     needs: check-builds
-    runs-on: ubuntu-latest
     if: needs.check-builds.outputs.need_go_build == 'true'
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 
