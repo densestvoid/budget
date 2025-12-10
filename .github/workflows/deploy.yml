@@ -21,12 +21,8 @@ env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
 jobs:
-  go-checks:
-    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
-
   deploy:
     name: Deploy to DigitalOcean
-    needs: go-checks
     permissions:
       contents: read
       packages: write

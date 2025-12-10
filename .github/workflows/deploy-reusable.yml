@@ -141,11 +141,18 @@ jobs:
           echo "need_go_build=true" >> $GITHUB_OUTPUT
         fi
 
-  build-go:
-    name: Build Go Binary
+  go-checks:
+    name: Run Go Checks
     needs: check-builds
     runs-on: ubuntu-latest
-    if: needs.check-builds.outputs.need_docker_build == 'true' && needs.check-builds.outputs.need_go_build == 'true'
+    if: needs.check-builds.outputs.need_go_build == 'true'
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+
+  build-go:
+    name: Build Go Binary
+    needs: [check-builds, go-checks]
+    runs-on: ubuntu-latest
+    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && needs.check-builds.outputs.need_go_build == 'true' && (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped')
     outputs:
       go_built: ${{ steps.build.outputs.go_built }}
       go_cache_hit: ${{ steps.cache.outputs.cache-hit }}
@@ -198,10 +205,6 @@ jobs:
       run: |
         echo "✅ Go binary built successfully"
         echo "binary_available=true" >> $GITHUB_OUTPUT
-    
-    - name: Run go-checks if cache miss
-      if: steps.binary_cache.outputs.cache-hit != 'true'
-      uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
     
     - name: Build Go binary
       id: build
