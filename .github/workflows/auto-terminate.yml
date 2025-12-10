@@ -313,6 +313,44 @@ jobs:
             body: message
           });
     
+    - name: Send termination notification to Slack
+      if: always() && steps.validate.outputs.pr_number != ''
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
+          {
+            "text": "${{ steps.init.outputs.already_terminated == 'true' && 'ℹ️ PR Deployment Already Terminated' || steps.destroy.outputs.destroy_success == 'true' && '✅ PR Deployment Auto-Terminated' || '❌ PR Deployment Termination Failed' }}",
+            "attachments": [
+              {
+                "color": "${{ steps.init.outputs.already_terminated == 'true' && 'warning' || steps.destroy.outputs.destroy_success == 'true' && 'good' || 'danger' }}",
+                "fields": [
+                  {
+                    "title": "PR Number",
+                    "value": "${{ steps.validate.outputs.pr_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Deployment ID",
+                    "value": "${{ steps.validate.outputs.deployment_id }}",
+                    "short": true
+                  },
+                  {
+                    "title": "App URL",
+                    "value": "${{ steps.validate.outputs.app_url }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Status",
+                    "value": "${{ steps.init.outputs.already_terminated == 'true' && 'Already terminated' || steps.destroy.outputs.destroy_success == 'true' && 'Successfully destroyed' || 'Termination failed' }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+    
     - name: Update workflow summary
       run: |
         echo "## 🗑️ Auto-Termination Results" >> $GITHUB_STEP_SUMMARY

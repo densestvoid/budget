@@ -72,19 +72,307 @@ on:
         required: true
 
 jobs:
+  check-builds:
+    name: Check Build Requirements
+    runs-on: ubuntu-latest
+    outputs:
+      need_docker_build: ${{ steps.check.outputs.need_docker_build }}
+      need_go_build: ${{ steps.set_need_go_build.outputs.need_go_build }}
+      go_hash: ${{ steps.check.outputs.go_hash }}
+      docker_hash: ${{ steps.check.outputs.docker_hash }}
+      image_tag: ${{ inputs.image_tag }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+    
+    - name: Check build requirements
+      id: check
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🔍 Analyzing build requirements..."
+        
+        # Generate cache keys
+        GO_HASH=$(find . -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
+        DOCKER_HASH=$(find . -name "Dockerfile*" -o -name "*.go" -o -name "go.mod" -o -name "go.sum" | sort | xargs md5sum | md5sum | cut -d' ' -f1)
+        
+        echo "go_hash=${GO_HASH}" >> $GITHUB_OUTPUT
+        echo "docker_hash=${DOCKER_HASH}" >> $GITHUB_OUTPUT
+        echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+        
+        echo "📦 Image tag: ${{ inputs.image_tag }}"
+        echo "🔑 Go cache key: ${GO_HASH}"
+        echo "🔑 Docker cache key: ${DOCKER_HASH}"
+        
+        # Check if Docker image already exists
+        echo "🔍 Checking if Docker image exists..."
+        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }} >/dev/null 2>&1; then
+          echo "✅ Docker image exists - skipping Docker build"
+          echo "need_docker_build=false" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Docker image not found - Docker build required"
+          echo "need_docker_build=true" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Check Go binary cache
+      id: go_binary_cache_check
+      uses: actions/cache@v4
+      with:
+        path: budget
+        key: go-binary-${{ steps.check.outputs.go_hash }}
+        restore-keys: |
+          go-binary-
+    
+    - name: Set need_go_build output
+      id: set_need_go_build
+      run: |
+        # If Go binary cache hit, we don't need to build
+        if [ "${{ steps.go_binary_cache_check.outputs.cache-hit }}" = "true" ]; then
+          echo "✅ Go binary found in cache - no build needed"
+          echo "need_go_build=false" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Go binary not in cache - build needed"
+          echo "need_go_build=true" >> $GITHUB_OUTPUT
+        fi
+
+  build-go:
+    name: Build Go Binary
+    needs: check-builds
+    runs-on: ubuntu-latest
+    if: needs.check-builds.outputs.need_docker_build == 'true' && needs.check-builds.outputs.need_go_build == 'true'
+    outputs:
+      go_built: ${{ steps.build.outputs.go_built }}
+      go_cache_hit: ${{ steps.cache.outputs.cache-hit }}
+      binary_available: ${{ steps.final_binary_available.outputs.binary_available }}
+    
+    permissions:
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Restore Go build cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+        key: go-build-${{ needs.check-builds.outputs.go_hash }}
+        restore-keys: |
+          go-build-
+    
+    - name: Restore Go binary cache
+      id: binary_cache
+      uses: actions/cache@v4
+      with:
+        path: budget
+        key: go-binary-${{ needs.check-builds.outputs.go_hash }}
+        restore-keys: |
+          go-binary-
+    
+    - name: Check if binary is available
+      id: check_binary
+      run: |
+        # Binary is available if it came from cache OR will be built
+        if [ "${{ steps.binary_cache.outputs.cache-hit }}" = "true" ]; then
+          echo "✅ Go binary found (from cache)"
+          echo "binary_available=true" >> $GITHUB_OUTPUT
+        elif [ -f "budget" ]; then
+          echo "✅ Go binary found (from previous step)"
+          echo "binary_available=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Go binary not found - will build"
+          echo "binary_available=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Update binary available after build
+      id: update_binary_available
+      if: steps.build.outputs.go_built == 'true'
+      run: |
+        echo "✅ Go binary built successfully"
+        echo "binary_available=true" >> $GITHUB_OUTPUT
+    
+    - name: Run go-checks if cache miss
+      if: steps.binary_cache.outputs.cache-hit != 'true'
+      uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+    
+    - name: Build Go binary
+      id: build
+      if: steps.check_binary.outputs.binary_available != 'true'
+      run: |
+        echo "🔨 Building Go binary..."
+        
+        CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o budget .
+        
+        echo "✅ Go binary built successfully"
+        echo "go_built=true" >> $GITHUB_OUTPUT
+    
+    - name: Cache Go build
+      if: steps.build.outputs.go_built == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+        key: go-build-${{ needs.check-builds.outputs.go_hash }}
+    
+    - name: Cache Go binary
+      if: steps.build.outputs.go_built == 'true'
+      uses: actions/cache@v4
+      with:
+        path: budget
+        key: go-binary-${{ needs.check-builds.outputs.go_hash }}
+    
+    - name: Upload Go binary artifact
+      if: steps.check_binary.outputs.binary_available == 'true' || steps.build.outputs.go_built == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: go-binary
+        path: budget
+        retention-days: 1
+    
+    - name: Set final binary available output
+      id: final_binary_available
+      run: |
+        # Binary is available if it came from cache OR was built
+        if [ "${{ steps.binary_cache.outputs.cache-hit }}" = "true" ] || [ "${{ steps.build.outputs.go_built }}" = "true" ]; then
+          echo "binary_available=true" >> $GITHUB_OUTPUT
+        else
+          echo "binary_available=false" >> $GITHUB_OUTPUT
+        fi
+
+  build-docker:
+    name: Build Docker Image
+    needs: [check-builds, build-go]
+    runs-on: ubuntu-latest
+    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && (needs.build-go.result == 'success' || (needs.build-go.result == 'skipped' && needs.check-builds.outputs.need_go_build == 'false'))
+    outputs:
+      image_built: ${{ steps.build.outputs.image_built }}
+      docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download Go binary artifact
+      if: needs.build-go.result == 'success'
+      uses: actions/download-artifact@v4
+      with:
+        name: go-binary
+        path: .
+      continue-on-error: true
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Restore Docker buildx cache
+      id: docker_cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: docker-buildx-${{ needs.check-builds.outputs.docker_hash }}
+        restore-keys: |
+          docker-buildx-
+    
+    - name: Build and push Docker image
+      id: build
+      env:
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🐳 Building Docker image for ${{ inputs.environment }}..."
+        echo "Buildx cache hit: ${{ steps.docker_cache.outputs.cache-hit }}"
+        
+        # Login to GitHub Container Registry
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Determine additional tags
+        ADDITIONAL_TAG="${{ inputs.deployment_id }}"
+        if [ "${{ inputs.environment }}" = "production" ]; then
+          ADDITIONAL_TAG="production-latest"
+        fi
+        
+        # Build and push with buildx
+        # Use --target production with USE_PREBUILT_BINARY=true if binary is provided, otherwise build from source
+        if [ -f "budget" ]; then
+          echo "📦 Using pre-built binary, targeting production stage"
+          docker buildx build \
+            --platform linux/amd64 \
+            --target production \
+            --build-arg USE_PREBUILT_BINARY=true \
+            --tag ghcr.io/${{ github.repository }}/budget-app:${{ needs.check-builds.outputs.image_tag }} \
+            --tag ghcr.io/${{ github.repository }}/budget-app:${ADDITIONAL_TAG} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --push \
+            .
+        else
+          echo "🔨 Building from source (no binary provided)"
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg USE_PREBUILT_BINARY=false \
+            --tag ghcr.io/${{ github.repository }}/budget-app:${{ needs.check-builds.outputs.image_tag }} \
+            --tag ghcr.io/${{ github.repository }}/budget-app:${ADDITIONAL_TAG} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --push \
+            .
+        fi
+        
+        # Update cache
+        rm -rf /tmp/.buildx-cache
+        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+        
+        echo "✅ Docker image built and pushed"
+        echo "image_built=true" >> $GITHUB_OUTPUT
+    
+    - name: Cache Docker buildx cache
+      if: steps.build.outputs.image_built == 'true'
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: docker-buildx-${{ needs.check-builds.outputs.docker_hash }}
+
   deploy:
     name: Deploy to DigitalOcean
+    needs: [check-builds, build-docker]
     runs-on: ubuntu-latest
+    if: always() && (needs.check-builds.result == 'success' && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped'))
+    outputs:
+      deployment_success: ${{ steps.defaults.outputs.deployment_success || steps.deploy.outputs.deployment_success }}
+      app_url: ${{ steps.defaults.outputs.app_url || steps.deploy.outputs.app_url }}
+      app_id: ${{ steps.defaults.outputs.app_id || steps.deploy.outputs.app_id }}
+      migration_app_id: ${{ steps.defaults.outputs.migration_app_id || steps.deploy.outputs.migration_app_id }}
+      termination_time: ${{ steps.defaults.outputs.termination_time || steps.deploy.outputs.termination_time }}
     
     permissions:
       contents: read
       packages: write
       pull-requests: write
       actions: write
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+    
+    - name: Set default failure outputs
+      id: defaults
+      run: |
+        # Set default outputs in case deployment fails early
+        echo "deployment_success=false" >> $GITHUB_OUTPUT
+        echo "app_url=" >> $GITHUB_OUTPUT
+        echo "app_id=" >> $GITHUB_OUTPUT
+        echo "migration_app_id=" >> $GITHUB_OUTPUT
+        echo "termination_time=" >> $GITHUB_OUTPUT
     
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -132,96 +420,6 @@ jobs:
           exit 1
         fi
     
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.24'
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Check build requirements and caches
-      id: build_cache
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-      run: |
-        echo "🔍 Analyzing build requirements..."
-        
-        # Generate cache keys
-        GO_HASH=$(find . -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
-        DOCKER_HASH=$(find . -name "Dockerfile*" -o -name "*.go" -o -name "go.mod" -o -name "go.sum" | sort | xargs md5sum | md5sum | cut -d' ' -f1)
-        
-        echo "GO_HASH=${GO_HASH}" >> $GITHUB_ENV
-        echo "DOCKER_HASH=${DOCKER_HASH}" >> $GITHUB_ENV
-        echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_ENV
-        
-        echo "📦 Image tag: ${{ inputs.image_tag }}"
-        echo "🔑 Go cache key: ${GO_HASH}"
-        echo "🔑 Docker cache key: ${DOCKER_HASH}"
-        
-        # Check if Docker image already exists
-        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }} >/dev/null 2>&1; then
-          echo "✅ Docker image exists - skipping entire build pipeline"
-          echo "skip_docker_build=true" >> $GITHUB_OUTPUT
-          echo "Using existing image: ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }}"
-        else
-          echo "❌ Docker image not found - build pipeline required"
-          echo "skip_docker_build=false" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Restore Go build cache
-      if: steps.build_cache.outputs.skip_docker_build == 'false'
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-        key: go-build-${{ env.GO_HASH }}
-        restore-keys: |
-          go-build-
-    
-    - name: Restore Docker buildx cache
-      if: steps.build_cache.outputs.skip_docker_build == 'false'
-      id: docker_buildx_cache
-      uses: actions/cache@v4
-      with:
-        path: /tmp/.buildx-cache
-        key: docker-buildx-${{ env.DOCKER_HASH }}
-        restore-keys: |
-          docker-buildx-
-    
-    - name: Build and push Docker image
-      if: steps.build_cache.outputs.skip_docker_build == 'false'
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-      run: |
-        echo "🐳 Building Docker image for ${{ inputs.environment }}..."
-        echo "Buildx cache hit: ${{ steps.docker_buildx_cache.outputs.cache-hit }}"
-        
-        # Login to GitHub Container Registry
-        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-        
-        # Determine additional tags
-        ADDITIONAL_TAG="${{ inputs.deployment_id }}"
-        if [ "${{ inputs.environment }}" = "production" ]; then
-          ADDITIONAL_TAG="production-latest"
-        fi
-        
-        # Build and push with buildx
-        docker buildx build \
-          --platform linux/amd64 \
-          --tag ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }} \
-          --tag ghcr.io/${{ github.repository }}/budget-app:${ADDITIONAL_TAG} \
-          --cache-from type=local,src=/tmp/.buildx-cache \
-          --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
-          --push \
-          .
-        
-        # Update cache
-        rm -rf /tmp/.buildx-cache
-        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
-        
-        echo "✅ Docker image built and pushed"
-    
     - name: Prepare Terraform configuration
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -231,7 +429,7 @@ jobs:
         cat > terraform.tfvars << EOF
         do_token = "${{ secrets.DO_TOKEN }}"
         region = "nyc1"
-        docker_image_tag = "${{ inputs.image_tag }}"
+        docker_image_tag = "${{ needs.check-builds.outputs.image_tag }}"
         EOF
         
         if [ "${{ inputs.environment }}" = "pr" ]; then
@@ -353,7 +551,7 @@ jobs:
           fi
         else
           # Existing deployment - use conditional logic based on image changes
-          if [ "${{ steps.build_cache.outputs.skip_docker_build }}" = "true" ]; then
+          if [ "${{ needs.check-builds.outputs.need_docker_build }}" = "false" ]; then
             echo "📦 Same container image - checking if infrastructure-only updates needed..."
             
             # Check what would change with a plan
@@ -421,9 +619,16 @@ jobs:
           echo "APP_URL=${APP_URL}" >> $GITHUB_ENV
           echo "APP_ID=${APP_ID}" >> $GITHUB_ENV
           echo "MIGRATION_APP_ID=${MIGRATION_APP_ID}" >> $GITHUB_ENV
+          echo "app_url=${APP_URL}" >> $GITHUB_OUTPUT
+          echo "app_id=${APP_ID}" >> $GITHUB_OUTPUT
+          echo "migration_app_id=${MIGRATION_APP_ID}" >> $GITHUB_OUTPUT
           echo "✅ Successfully retrieved deployment outputs"
         else
           echo "⚠️ No outputs found - this may indicate an incomplete deployment"
+          # Ensure outputs are set even on failure
+          echo "app_url=" >> $GITHUB_OUTPUT
+          echo "app_id=" >> $GITHUB_OUTPUT
+          echo "migration_app_id=" >> $GITHUB_OUTPUT
         fi
     
     - name: Verify deployment health
@@ -447,39 +652,37 @@ jobs:
             echo "✅ Application is healthy and responding"
           else
             echo "⚠️ Application health check returned: $HTTP_CODE"
-            if [ "${{ inputs.environment }}" = "production" ]; then
-              echo "This may be normal if the health endpoint is not implemented"
-            else
-              echo "This may be normal if the health endpoint is not implemented"
-            fi
+            echo "This may be normal if the health endpoint is not implemented"
           fi
         else
           echo "⚠️ No application URL available for health check"
         fi
     
-    - name: Set up auto-termination
+    - name: Calculate termination time
       if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
       run: |
-        echo "⏰ Setting up auto-termination..."
-        
-        # Calculate termination time (30 minutes from now)
         TERMINATION_TIME=$(date -d '+30 minutes' -u +'%Y-%m-%dT%H:%M:%SZ')
-        echo "TERMINATION_TIME=${TERMINATION_TIME}" >> $GITHUB_ENV
-        
-        echo "🕐 Deployment will auto-terminate at: ${TERMINATION_TIME}"
-        echo "⏰ Auto-termination configured for 30 minutes"
+        echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
+
+  auto-termination:
+    name: Set Up Auto-Termination
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: needs.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true && inputs.environment == 'pr'
     
+    permissions:
+      contents: read
+      actions: write
+    
+    steps:
     - name: Trigger auto-termination workflow
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
       uses: actions/github-script@v7
       env:
         PR_NUMBER: ${{ inputs.pr_number }}
         DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-        APP_ID: ${{ env.APP_ID }}
-        MIGRATION_APP_ID: ${{ env.MIGRATION_APP_ID }}
-        APP_URL: ${{ env.APP_URL }}
+        APP_ID: ${{ needs.deploy.outputs.app_id }}
+        MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
+        APP_URL: ${{ needs.deploy.outputs.app_url }}
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
@@ -504,11 +707,8 @@ jobs:
           console.log(`App URL: ${appUrl || 'auto-detect'}`);
           
           try {
-            // Use the current branch instead of default branch
-            // Extract branch name from context.ref (handles PR merges and direct pushes)
             let branchRef = context.ref;
             
-            // If context.ref is a PR merge ref (refs/pull/N/merge), get the head branch
             if (branchRef.startsWith('refs/pull/')) {
               try {
                 const pr = await github.rest.pulls.get({
@@ -527,7 +727,6 @@ jobs:
                 branchRef = `refs/heads/${repo.data.default_branch}`;
               }
             } else if (!branchRef.startsWith('refs/heads/')) {
-              // Ensure it's a proper branch ref
               branchRef = `refs/heads/${branchRef}`;
             }
             
@@ -553,36 +752,142 @@ jobs:
             console.error('❌ Failed to trigger auto-termination workflow:', error);
             throw error;
           }
+
+  cleanup:
+    name: Cleanup Failed Deployment
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy.result != 'success' && inputs.environment == 'pr'
     
-    - name: Comment on PR with success
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.post_pr_comments == true
+    permissions:
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7
+    
+    - name: Cleanup failed deployment
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+        DO_TOKEN: ${{ secrets.DO_TOKEN }}
+      run: |
+        echo "🧹 Cleaning up failed deployment..."
+        
+        cd ${{ inputs.terraform_dir }}
+        
+        if [ -f terraform.tfvars ]; then
+          echo "🗑️ Destroying failed deployment resources..."
+          
+          if terraform init -backend-config="key=${{ inputs.backend_key }}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
+            echo "✅ Terraform initialized for cleanup"
+            
+            if terraform state list | grep -q .; then
+              echo "🗑️ Found resources in state - destroying..."
+              
+              if terraform destroy -auto-approve; then
+                echo "✅ Cleanup completed successfully"
+                
+                echo "🗑️ Removing state file from S3..."
+                if aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}"; then
+                  echo "✅ State file removed from S3"
+                else
+                  echo "⚠️ Failed to remove state file from S3"
+                fi
+              else
+                echo "⚠️ Cleanup failed - manual intervention may be required"
+              fi
+            else
+              echo "ℹ️ No resources found in state - nothing to clean up"
+            fi
+          else
+            echo "❌ Failed to initialize Terraform for cleanup"
+            echo "⚠️ Manual cleanup may be required for deployment: ${{ inputs.deployment_id }}"
+          fi
+        else
+          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
+        fi
+
+  pr-comment:
+    name: Comment on PR
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: always() && inputs.post_pr_comments == true
+    
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+    - name: Comment on PR
       uses: actions/github-script@v7
       env:
         PR_NUMBER: ${{ inputs.pr_number }}
-        APP_URL: ${{ env.APP_URL }}
-        APP_ID: ${{ env.APP_ID }}
-        MIGRATION_APP_ID: ${{ env.MIGRATION_APP_ID }}
+        APP_URL: ${{ needs.deploy.outputs.app_url }}
+        APP_ID: ${{ needs.deploy.outputs.app_id }}
+        MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
         DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-        TERMINATION_TIME: ${{ env.TERMINATION_TIME }}
+        TERMINATION_TIME: ${{ needs.deploy.outputs.termination_time }}
+        DEPLOYMENT_SUCCESS: ${{ needs.deploy.outputs.deployment_success }}
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
+          const deploymentSuccess = process.env.DEPLOYMENT_SUCCESS === 'true';
           
           if (!issueNumber) {
             console.log('⚠️ Could not determine PR number, skipping comment');
             return;
           }
           
-          const message = [
-            '## ✅ Deployment Successful',
-            '',
-            `🌐 **URL:** ${process.env.APP_URL || 'N/A'}`,
-            `🆔 **App ID:** ${process.env.APP_ID || 'N/A'}`,
-            `🔧 **Migration ID:** ${process.env.MIGRATION_APP_ID || 'N/A'}`,
-            `📦 **Deployment:** ${process.env.DEPLOYMENT_ID || 'N/A'}`,
-            `⏰ **Terminates:** ${process.env.TERMINATION_TIME || 'N/A'}`
-          ].join('\n');
+          let message;
+          
+          if (deploymentSuccess) {
+            message = [
+              '## ✅ Deployment Successful',
+              '',
+              `🌐 **URL:** ${process.env.APP_URL || 'N/A'}`,
+              `🆔 **App ID:** ${process.env.APP_ID || 'N/A'}`,
+              `🔧 **Migration ID:** ${process.env.MIGRATION_APP_ID || 'N/A'}`,
+              `📦 **Deployment:** ${process.env.DEPLOYMENT_ID || 'N/A'}`,
+              `⏰ **Terminates:** ${process.env.TERMINATION_TIME || 'N/A'}`
+            ].join('\n');
+          } else {
+            const workflow = 'Deploy Budget App';
+            let failedStep = 'Unknown';
+            let errorMessage = 'Workflow execution failed';
+
+            if (context.payload.workflow_run && context.payload.workflow_run.conclusion === 'failure') {
+              failedStep = 'Deploy infrastructure (Database → Migration → Application)';
+              errorMessage = 'Terraform deployment failed. This could be:\\n' +
+                            '• Database cluster creation failure\\n' +
+                            '• Migration container failure (check migration logs in DigitalOcean App Platform)\\n' +
+                            '• Application container deployment failure\\n' +
+                            '• Database firewall configuration failure\\n' +
+                            'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
+            } else {
+              failedStep = 'Post-deployment verification';
+              errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
+            }
+            
+            message = [
+              '## ❌ Deployment Failed',
+              '',
+              `**Workflow:** ${workflow}`,
+              `**Step:** ${failedStep}`,
+              '**Error:**',
+              '```',
+              errorMessage,
+              '```',
+              '**Cleanup:** Partial deployment cleaned up automatically'
+            ].join('\n');
+          }
 
           await github.rest.issues.createComment({
             issue_number: parseInt(issueNumber),
@@ -590,9 +895,19 @@ jobs:
             repo: context.repo.repo,
             body: message
           });
+
+  slack-notification:
+    name: Send Slack Notification
+    needs: [check-builds, deploy]
+    runs-on: ubuntu-latest
+    if: always()
     
+    permissions:
+      contents: read
+    
+    steps:
     - name: Send success notification to Slack (PR)
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
+      if: needs.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook
@@ -606,7 +921,7 @@ jobs:
                 "fields": [
                   {
                     "title": "Application URL",
-                    "value": "${{ env.APP_URL }}",
+                    "value": "${{ needs.deploy.outputs.app_url }}",
                     "short": true
                   },
                   {
@@ -630,7 +945,7 @@ jobs:
           }
     
     - name: Send success notification to Slack (Production)
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment != 'pr'
+      if: needs.deploy.outputs.deployment_success == 'true' && inputs.environment != 'pr'
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook
@@ -644,7 +959,7 @@ jobs:
                 "fields": [
                   {
                     "title": "Application URL",
-                    "value": "${{ env.APP_URL }}",
+                    "value": "${{ needs.deploy.outputs.app_url }}",
                     "short": true
                   },
                   {
@@ -654,7 +969,7 @@ jobs:
                   },
                   {
                     "title": "Image Tag",
-                    "value": "${{ inputs.image_tag }}",
+                    "value": "${{ needs.check-builds.outputs.image_tag }}",
                     "short": true
                   },
                   {
@@ -667,60 +982,8 @@ jobs:
             ]
           }
     
-    - name: Comment on PR with failure
-      if: failure() && inputs.post_pr_comments == true
-      uses: actions/github-script@v7
-      env:
-        PR_NUMBER: ${{ inputs.pr_number }}
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
-          
-          if (!issueNumber) {
-            console.log('⚠️ Could not determine PR number, skipping comment');
-            return;
-          }
-          
-          const workflow = 'Deploy Budget App';
-          let failedStep = 'Unknown';
-          let errorMessage = 'Workflow execution failed';
-
-          // Determine the failed step based on the workflow context
-          if (context.payload.workflow_run && context.payload.workflow_run.conclusion === 'failure') {
-            failedStep = 'Deploy infrastructure (Database → Migration → Application)';
-            errorMessage = 'Terraform deployment failed. This could be:\\n' +
-                          '• Database cluster creation failure\\n' +
-                          '• Migration container failure (check migration logs in DigitalOcean App Platform)\\n' +
-                          '• Application container deployment failure\\n' +
-                          '• Database firewall configuration failure\\n' +
-                          'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
-          } else {
-            failedStep = 'Post-deployment verification';
-            errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
-          }
-          
-          const message = [
-            '## ❌ Deployment Failed',
-            '',
-            `**Workflow:** ${workflow}`,
-            `**Step:** ${failedStep}`,
-            '**Error:**',
-            '```',
-            errorMessage,
-            '```',
-            '**Cleanup:** Partial deployment cleaned up automatically'
-          ].join('\n');
-
-          await github.rest.issues.createComment({
-            issue_number: parseInt(issueNumber),
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: message
-          });
-    
     - name: Send failure notification to Slack (PR)
-      if: failure() && inputs.environment == 'pr'
+      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment == 'pr'
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook
@@ -758,7 +1021,7 @@ jobs:
           }
     
     - name: Send failure notification to Slack (Production)
-      if: failure() && inputs.environment != 'pr'
+      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment != 'pr'
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook
@@ -777,7 +1040,7 @@ jobs:
                   },
                   {
                     "title": "Image Tag",
-                    "value": "${{ inputs.image_tag }}",
+                    "value": "${{ needs.check-builds.outputs.image_tag }}",
                     "short": true
                   },
                   {
@@ -794,51 +1057,3 @@ jobs:
               }
             ]
           }
-    
-    - name: Cleanup on failure
-      if: failure() && inputs.environment == 'pr'
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-      run: |
-        echo "🧹 Cleaning up failed deployment..."
-        
-        cd ${{ inputs.terraform_dir }}
-        
-        if [ -f terraform.tfvars ]; then
-          echo "🗑️ Destroying failed deployment resources..."
-          
-          # Initialize Terraform to access state
-          if terraform init -backend-config="key=${{ inputs.backend_key }}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
-            echo "✅ Terraform initialized for cleanup"
-            
-            # Check if there are any resources to destroy
-            if terraform state list | grep -q .; then
-              echo "🗑️ Found resources in state - destroying..."
-              
-              if terraform destroy -auto-approve; then
-                echo "✅ Cleanup completed successfully"
-                
-                # Remove state file from S3 after successful destroy
-                echo "🗑️ Removing state file from S3..."
-                if aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}"; then
-                  echo "✅ State file removed from S3"
-                else
-                  echo "⚠️ Failed to remove state file from S3"
-                fi
-              else
-                echo "⚠️ Cleanup failed - manual intervention may be required"
-              fi
-            else
-              echo "ℹ️ No resources found in state - nothing to clean up"
-            fi
-          else
-            echo "❌ Failed to initialize Terraform for cleanup"
-            echo "⚠️ Manual cleanup may be required for deployment: ${{ inputs.deployment_id }}"
-          fi
-        else
-          echo "ℹ️ No terraform.tfvars found - skipping cleanup"
-        fi
-
