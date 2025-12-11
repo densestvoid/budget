@@ -95,6 +95,7 @@ jobs:
       id: check
       env:
         DO_TOKEN: ${{ secrets.DO_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "🔍 Analyzing build requirements..."
         
@@ -109,6 +110,10 @@ jobs:
         echo "📦 Image tag: ${{ inputs.image_tag }}"
         echo "🔑 Go cache key: ${GO_HASH}"
         echo "🔑 Docker cache key: ${DOCKER_HASH}"
+        
+        # Login to GHCR to check image (required for private images)
+        echo "🔐 Logging into GHCR to check image..."
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
         
         # Check if Docker image already exists
         echo "🔍 Checking if Docker image exists..."
