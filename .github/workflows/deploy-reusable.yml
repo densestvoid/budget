@@ -152,9 +152,12 @@ jobs:
         # Check Docker image existence with proper error handling
         # Capture stderr (errors) while suppressing stdout (manifest JSON)
         # Use a temp file to capture stderr since command substitution captures stdout
+        # Note: Must handle exit codes carefully because set -e is enabled
         TEMP_ERROR=$(mktemp)
+        set +e  # Temporarily disable exit on error to capture exit code
         docker manifest inspect "${IMAGE_TO_CHECK}" >/dev/null 2>"$TEMP_ERROR"
         EXIT_CODE=$?
+        set -e  # Re-enable exit on error
         ERROR_OUTPUT=$(cat "$TEMP_ERROR" 2>/dev/null || echo "")
         rm -f "$TEMP_ERROR"
         
