@@ -199,13 +199,25 @@ jobs:
       id: set_docker_build
       run: |
         # Use the value from either the Go build requirement or Docker image check
-        if [ "${{ steps.set_need_go_build.outputs.need_go_build }}" = "true" ]; then
+        NEED_GO_BUILD="${{ steps.set_need_go_build.outputs.need_go_build }}"
+        DOCKER_CHECK_RESULT="${{ steps.check_docker_image.outputs.need_docker_build }}"
+        
+        echo "🔍 Determining need_docker_build..."
+        echo "📦 need_go_build: ${NEED_GO_BUILD}"
+        echo "📦 check_docker_image result: ${DOCKER_CHECK_RESULT}"
+        
+        if [ "${NEED_GO_BUILD}" = "true" ]; then
           # Go needs building, so Docker must be rebuilt
           echo "✅ Go binary needs rebuilding - Docker image must be rebuilt"
           echo "need_docker_build=true" >> $GITHUB_OUTPUT
-        else
+        elif [ -n "${DOCKER_CHECK_RESULT}" ]; then
           # Go doesn't need building, use result from Docker image check
-          echo "need_docker_build=${{ steps.check_docker_image.outputs.need_docker_build }}" >> $GITHUB_OUTPUT
+          echo "✅ Using Docker image check result: ${DOCKER_CHECK_RESULT}"
+          echo "need_docker_build=${DOCKER_CHECK_RESULT}" >> $GITHUB_OUTPUT
+        else
+          # Fallback: if Docker check didn't run or didn't set output, default to true
+          echo "⚠️ Docker image check result not available - defaulting to need_docker_build=true"
+          echo "need_docker_build=true" >> $GITHUB_OUTPUT
         fi
 
   go-checks:
@@ -320,7 +332,15 @@ jobs:
     name: Build Docker Image
     needs: [check-builds, build-go]
     runs-on: ubuntu-latest
-    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && (needs.build-go.result == 'success' || needs.build-go.result == 'skipped')
+    if: |
+      always() &&
+      needs.check-builds.result == 'success' &&
+      needs.check-builds.outputs.need_docker_build == 'true' &&
+      (
+        needs.check-builds.outputs.need_go_build == 'false' ||
+        needs.build-go.result == 'success' ||
+        needs.build-go.result == 'skipped'
+      )
     outputs:
       image_built: ${{ steps.build.outputs.image_built }}
       docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
