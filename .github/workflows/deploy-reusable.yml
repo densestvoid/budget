@@ -116,12 +116,19 @@ jobs:
         echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
         
         # Check if Docker image already exists
+        IMAGE_TO_CHECK="ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }}"
         echo "🔍 Checking if Docker image exists..."
-        if docker manifest inspect ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }} >/dev/null 2>&1; then
-          echo "✅ Docker image exists - skipping Docker build"
+        echo "📦 Image to check: ${IMAGE_TO_CHECK}"
+        echo "📦 Repository: ${{ github.repository }}"
+        echo "📦 Tag: ${{ inputs.image_tag }}"
+        
+        if docker manifest inspect "${IMAGE_TO_CHECK}" >/dev/null 2>&1; then
+          echo "✅ Docker image exists: ${IMAGE_TO_CHECK}"
+          echo "✅ Skipping Docker build"
           echo "need_docker_build=false" >> $GITHUB_OUTPUT
         else
-          echo "❌ Docker image not found - Docker build required"
+          echo "❌ Docker image not found: ${IMAGE_TO_CHECK}"
+          echo "❌ Docker build required"
           echo "need_docker_build=true" >> $GITHUB_OUTPUT
         fi
     
@@ -380,6 +387,41 @@ jobs:
         echo "app_id=" >> $GITHUB_OUTPUT
         echo "migration_app_id=" >> $GITHUB_OUTPUT
         echo "termination_time=" >> $GITHUB_OUTPUT
+    
+    - name: Verify Docker image exists
+      id: verify_image
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        IMAGE_TAG="${{ needs.check-builds.outputs.image_tag }}"
+        IMAGE="ghcr.io/${{ github.repository }}/budget-app:${IMAGE_TAG}"
+        
+        echo "🔍 Verifying Docker image exists before deployment..."
+        echo "📦 Image to verify: ${IMAGE}"
+        echo "📦 Repository: ${{ github.repository }}"
+        echo "📦 Tag: ${IMAGE_TAG}"
+        echo "📦 Build-docker result: ${{ needs.build-docker.result }}"
+        
+        # Login to GHCR
+        echo "🔐 Logging into GHCR..."
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Check if image exists
+        if docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
+          echo "✅ Docker image verified: ${IMAGE}"
+          echo "image_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Docker image not found: ${IMAGE}"
+          echo "❌ This should not happen - build-docker should have run or image should exist"
+          if [ "${{ needs.build-docker.result }}" = "skipped" ]; then
+            echo "❌ Build-docker was skipped, but image doesn't exist. This indicates a bug in the image check."
+            echo "❌ Please check the check-builds job logs to see why it incorrectly detected the image."
+          else
+            echo "❌ Build-docker result: ${{ needs.build-docker.result }}"
+          fi
+          echo "image_exists=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
     
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
