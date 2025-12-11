@@ -124,15 +124,22 @@ jobs:
       id: setup
       run: |
         echo "🔧 Setting up Terraform configuration for destroy..."
-        cd terraform
         
         DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
+        
+        # Determine terraform directory based on deployment ID
+        if [[ "$DEPLOYMENT_ID" == pr-* ]]; then
+          TERRAFORM_DIR="terraform/pr"
+        else
+          TERRAFORM_DIR="terraform/production"
+        fi
+        
+        echo "Using Terraform directory: $TERRAFORM_DIR"
+        cd "$TERRAFORM_DIR"
         
         # Create terraform.tfvars for destroy operation
         cat > terraform.tfvars << EOF
         do_token = "${{ env.DO_TOKEN }}"
-        spaces_access_key = "${{ secrets.DO_SPACES_ACCESS_KEY }}"
-        spaces_secret_key = "${{ secrets.DO_SPACES_SECRET_KEY }}"
         region = "nyc1"
         deployment_id = "$DEPLOYMENT_ID"
         github_repo = "${{ github.repository }}"
@@ -142,21 +149,46 @@ jobs:
         EOF
         
         echo "✅ Terraform configuration created for deployment: $DEPLOYMENT_ID"
+        echo "terraform_dir=$TERRAFORM_DIR" >> $GITHUB_OUTPUT
         echo "setup_success=true" >> $GITHUB_OUTPUT
     
-    - name: Initialize Terraform with DigitalOcean Spaces backend
+    - name: Initialize Terraform with AWS S3 backend
       id: init
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
-        cd terraform
+        DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         
-        echo "🔧 Initializing Terraform with DigitalOcean Spaces backend..."
+        # Determine terraform directory based on deployment ID
+        if [[ "$DEPLOYMENT_ID" == pr-* ]]; then
+          TERRAFORM_DIR="terraform/pr"
+        else
+          TERRAFORM_DIR="terraform/production"
+        fi
+        
+        echo "Using Terraform directory: $TERRAFORM_DIR"
+        cd "$TERRAFORM_DIR"
+        
+        echo "🔧 Initializing Terraform with AWS S3 backend..."
         echo "Deployment ID: ${{ steps.validate.outputs.deployment_id }}"
         
+        # Determine backend key based on deployment type
+        if [[ "$DEPLOYMENT_ID" == pr-* ]]; then
+          BACKEND_KEY="pr/$DEPLOYMENT_ID.tfstate"
+        else
+          BACKEND_KEY="production/$DEPLOYMENT_ID.tfstate"
+        fi
+        
+        echo "Backend key: $BACKEND_KEY"
+        
+        # Set AWS region from secret
+        AWS_REGION="${{ secrets.TERRAFORM_AWS_S3_REGION }}"
+        echo "AWS Region: '$AWS_REGION'"
+        
         # Initialize with deployment-specific state file
-        if terraform init -backend-config="key=deployments/${{ steps.validate.outputs.deployment_id }}.tfstate"; then
+        if terraform init -backend-config="key=$BACKEND_KEY" -backend-config="region=$AWS_REGION"; then
           echo "✅ Terraform initialized successfully"
           echo "init_success=true" >> $GITHUB_OUTPUT
           
@@ -184,8 +216,9 @@ jobs:
       if: steps.health_check.outputs.should_terminate == 'true' && steps.init.outputs.init_success == 'true' && steps.init.outputs.already_terminated == 'false'
       id: destroy
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
+        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
         DEPLOYMENT_ID="${{ steps.validate.outputs.deployment_id }}"
         
@@ -193,7 +226,10 @@ jobs:
         echo "Termination time: $(date -u)"
         echo "Note: Shared project 'budget-develop' will be preserved"
         
-        cd terraform
+        # Use the same terraform directory from setup step
+        TERRAFORM_DIR="${{ steps.setup.outputs.terraform_dir }}"
+        echo "Using Terraform directory: $TERRAFORM_DIR"
+        cd "$TERRAFORM_DIR"
         
         # Show what will be destroyed
         echo "📋 Resources in state:"
@@ -206,17 +242,23 @@ jobs:
           echo "🧹 All resources cleaned up"
           echo "destroy_success=true" >> $GITHUB_OUTPUT
           
-          # Remove state file from DigitalOcean Spaces bucket
-          echo "🗑️ Removing state file from DigitalOcean Spaces..."
-          STATE_FILE_KEY="deployments/$DEPLOYMENT_ID.tfstate"
+          # Remove state file from AWS S3 bucket
+          echo "🗑️ Removing state file from AWS S3..."
           
-          # Use AWS CLI syntax for DigitalOcean Spaces
-          if aws s3 rm "s3://budget-develop-terraform-states/$STATE_FILE_KEY" \
-               --endpoint-url="https://nyc3.digitaloceanspaces.com" \
-               --region=us-east-1; then
-            echo "✅ State file removed from DigitalOcean Spaces"
+          # Determine backend key based on deployment type
+          if [[ "$DEPLOYMENT_ID" == pr-* ]]; then
+            STATE_FILE_KEY="pr/$DEPLOYMENT_ID.tfstate"
           else
-            echo "⚠️ Failed to remove state file (may not exist)"
+            STATE_FILE_KEY="production/$DEPLOYMENT_ID.tfstate"
+          fi
+          
+          echo "Removing state file: $STATE_FILE_KEY"
+          
+          # Use AWS CLI to remove state file (AWS CLI is pre-installed in GitHub Actions)
+          if aws s3 rm "s3://densestvoid-terraform/$STATE_FILE_KEY"; then
+            echo "✅ State file removed from AWS S3"
+          else
+            echo "⚠️ Failed to remove state file (may not exist or already deleted)"
           fi
         else
           echo "❌ Terraform destroy failed"
@@ -270,6 +312,44 @@ jobs:
             repo: context.repo.repo,
             body: message
           });
+    
+    - name: Send termination notification to Slack
+      if: always() && steps.validate.outputs.pr_number != ''
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
+          {
+            "text": "${{ steps.init.outputs.already_terminated == 'true' && 'ℹ️ PR Deployment Already Terminated' || steps.destroy.outputs.destroy_success == 'true' && '✅ PR Deployment Auto-Terminated' || '❌ PR Deployment Termination Failed' }}",
+            "attachments": [
+              {
+                "color": "${{ steps.init.outputs.already_terminated == 'true' && 'warning' || steps.destroy.outputs.destroy_success == 'true' && 'good' || 'danger' }}",
+                "fields": [
+                  {
+                    "title": "PR Number",
+                    "value": "${{ steps.validate.outputs.pr_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Deployment ID",
+                    "value": "${{ steps.validate.outputs.deployment_id }}",
+                    "short": true
+                  },
+                  {
+                    "title": "App URL",
+                    "value": "${{ steps.validate.outputs.app_url }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Status",
+                    "value": "${{ steps.init.outputs.already_terminated == 'true' && 'Already terminated' || steps.destroy.outputs.destroy_success == 'true' && 'Successfully destroyed' || 'Termination failed' }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
     
     - name: Update workflow summary
       run: |
