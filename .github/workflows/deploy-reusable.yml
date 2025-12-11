@@ -320,7 +320,7 @@ jobs:
     name: Build Docker Image
     needs: [check-builds, build-go]
     runs-on: ubuntu-latest
-    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && (needs.build-go.result == 'success' || (needs.build-go.result == 'skipped' && needs.check-builds.outputs.need_go_build == 'false'))
+    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && (needs.build-go.result == 'success' || needs.build-go.result == 'skipped')
     outputs:
       image_built: ${{ steps.build.outputs.image_built }}
       docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
