@@ -76,7 +76,7 @@ jobs:
     name: Check Build Requirements
     runs-on: ubuntu-latest
     outputs:
-      need_docker_build: ${{ steps.check.outputs.need_docker_build }}
+      need_docker_build: ${{ steps.set_docker_build.outputs.need_docker_build }}
       need_go_build: ${{ steps.set_need_go_build.outputs.need_go_build }}
       go_hash: ${{ steps.check.outputs.go_hash }}
       docker_hash: ${{ steps.check.outputs.docker_hash }}
@@ -93,9 +93,6 @@ jobs:
     
     - name: Check build requirements
       id: check
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "🔍 Analyzing build requirements..."
         
@@ -110,27 +107,6 @@ jobs:
         echo "📦 Image tag: ${{ inputs.image_tag }}"
         echo "🔑 Go cache key: ${GO_HASH}"
         echo "🔑 Docker cache key: ${DOCKER_HASH}"
-        
-        # Login to GHCR to check image (required for private images)
-        echo "🔐 Logging into GHCR to check image..."
-        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-        
-        # Check if Docker image already exists
-        IMAGE_TO_CHECK="ghcr.io/${{ github.repository }}/budget-app:${{ inputs.image_tag }}"
-        echo "🔍 Checking if Docker image exists..."
-        echo "📦 Image to check: ${IMAGE_TO_CHECK}"
-        echo "📦 Repository: ${{ github.repository }}"
-        echo "📦 Tag: ${{ inputs.image_tag }}"
-        
-        if docker manifest inspect "${IMAGE_TO_CHECK}" >/dev/null 2>&1; then
-          echo "✅ Docker image exists: ${IMAGE_TO_CHECK}"
-          echo "✅ Skipping Docker build"
-          echo "need_docker_build=false" >> $GITHUB_OUTPUT
-        else
-          echo "❌ Docker image not found: ${IMAGE_TO_CHECK}"
-          echo "❌ Docker build required"
-          echo "need_docker_build=true" >> $GITHUB_OUTPUT
-        fi
     
     - name: Check Go binary cache
       id: go_binary_cache_check
@@ -151,6 +127,60 @@ jobs:
         else
           echo "❌ Go binary not in cache - build needed"
           echo "need_go_build=true" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Set up Docker Buildx
+      if: steps.set_need_go_build.outputs.need_go_build == 'false'
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Check Docker image
+      id: check_docker_image
+      if: steps.set_need_go_build.outputs.need_go_build == 'false'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        IMAGE_TO_CHECK="ghcr.io/${{ github.repository }}/budget-app:${{ steps.check.outputs.image_tag }}"
+        echo "🔍 Checking if Docker image exists..."
+        echo "📦 Image to check: ${IMAGE_TO_CHECK}"
+        echo "📦 Repository: ${{ github.repository }}"
+        echo "📦 Tag: ${{ steps.check.outputs.image_tag }}"
+        
+        # Login to GHCR to check image (required for private images)
+        echo "🔐 Logging into GHCR to check image..."
+        echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Check Docker image existence with proper error handling
+        docker manifest inspect "${IMAGE_TO_CHECK}" >/dev/null 2>&1
+        EXIT_CODE=$?
+        
+        if [ $EXIT_CODE -eq 0 ]; then
+          # Image exists
+          echo "✅ Docker image exists: ${IMAGE_TO_CHECK}"
+          echo "✅ Skipping Docker build"
+          echo "need_docker_build=false" >> $GITHUB_OUTPUT
+        elif [ $EXIT_CODE -eq 1 ]; then
+          # Image not found (expected)
+          echo "❌ Docker image not found: ${IMAGE_TO_CHECK}"
+          echo "❌ Docker build required"
+          echo "need_docker_build=true" >> $GITHUB_OUTPUT
+        else
+          # Actual error (auth, network, etc.)
+          echo "❌ Docker manifest inspect failed with exit code $EXIT_CODE"
+          echo "❌ This indicates an error (authentication, network, etc.), not just image not found"
+          exit 1
+        fi
+    
+    - name: Set need_docker_build output
+      id: set_docker_build
+      run: |
+        # Use the value from either the Go build requirement or Docker image check
+        if [ "${{ steps.set_need_go_build.outputs.need_go_build }}" = "true" ]; then
+          # Go needs building, so Docker must be rebuilt
+          echo "✅ Go binary needs rebuilding - Docker image must be rebuilt"
+          echo "need_docker_build=true" >> $GITHUB_OUTPUT
+        else
+          # Go doesn't need building, use result from Docker image check
+          echo "need_docker_build=${{ steps.check_docker_image.outputs.need_docker_build }}" >> $GITHUB_OUTPUT
         fi
 
   go-checks:
