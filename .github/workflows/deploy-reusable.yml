@@ -150,8 +150,13 @@ jobs:
         echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
         
         # Check Docker image existence with proper error handling
-        docker manifest inspect "${IMAGE_TO_CHECK}" >/dev/null 2>&1
+        # Capture stderr (errors) while suppressing stdout (manifest JSON)
+        # Use a temp file to capture stderr since command substitution captures stdout
+        TEMP_ERROR=$(mktemp)
+        docker manifest inspect "${IMAGE_TO_CHECK}" >/dev/null 2>"$TEMP_ERROR"
         EXIT_CODE=$?
+        ERROR_OUTPUT=$(cat "$TEMP_ERROR" 2>/dev/null || echo "")
+        rm -f "$TEMP_ERROR"
         
         if [ $EXIT_CODE -eq 0 ]; then
           # Image exists
@@ -159,13 +164,30 @@ jobs:
           echo "✅ Skipping Docker build"
           echo "need_docker_build=false" >> $GITHUB_OUTPUT
         elif [ $EXIT_CODE -eq 1 ]; then
-          # Image not found (expected)
-          echo "❌ Docker image not found: ${IMAGE_TO_CHECK}"
-          echo "❌ Docker build required"
-          echo "need_docker_build=true" >> $GITHUB_OUTPUT
+          # Image not found (expected) - check if it's a "not found" error
+          if [ -n "$ERROR_OUTPUT" ] && echo "$ERROR_OUTPUT" | grep -qiE "manifest unknown|not found|404|no such manifest"; then
+            echo "❌ Docker image not found: ${IMAGE_TO_CHECK}"
+            echo "❌ Docker build required"
+            echo "need_docker_build=true" >> $GITHUB_OUTPUT
+          else
+            # Exit code 1 but not a "not found" error - might be a different issue
+            echo "❌ Docker manifest inspect failed with exit code $EXIT_CODE"
+            if [ -n "$ERROR_OUTPUT" ]; then
+              echo "❌ Error output: $ERROR_OUTPUT"
+            else
+              echo "❌ No error output captured (this is unusual)"
+            fi
+            echo "❌ This might indicate an authentication or permission issue"
+            exit 1
+          fi
         else
           # Actual error (auth, network, etc.)
           echo "❌ Docker manifest inspect failed with exit code $EXIT_CODE"
+          if [ -n "$ERROR_OUTPUT" ]; then
+            echo "❌ Error output: $ERROR_OUTPUT"
+          else
+            echo "❌ No error output captured"
+          fi
           echo "❌ This indicates an error (authentication, network, etc.), not just image not found"
           exit 1
         fi
