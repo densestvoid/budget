@@ -35,6 +35,7 @@ RUN --mount=type=bind,source=.,target=/build-context \
     if [ "$USE_PREBUILT_BINARY" = "true" ]; then \
       if [ -f /build-context/budget ]; then \
         cp /build-context/budget /app/budget && \
+        chmod +x /app/budget && \
         echo "Using pre-built binary from build context"; \
       else \
         echo "ERROR: USE_PREBUILT_BINARY=true but budget not found in build context" && exit 1; \
@@ -55,6 +56,7 @@ RUN --mount=from=builder,source=/app/budget,target=/tmp/builder-budget \
     if [ "$USE_PREBUILT_BINARY" != "true" ]; then \
       if [ -f /tmp/builder-budget ]; then \
         cp /tmp/builder-budget /app/budget && \
+        chmod +x /app/budget && \
         echo "Using binary from builder stage"; \
       else \
         echo "ERROR: USE_PREBUILT_BINARY=false but builder binary not found" && exit 1; \

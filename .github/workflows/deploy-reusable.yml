@@ -81,7 +81,7 @@ jobs:
       go_hash: ${{ steps.check.outputs.go_hash }}
       docker_hash: ${{ steps.check.outputs.docker_hash }}
       image_tag: ${{ inputs.image_tag }}
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -307,16 +307,16 @@ jobs:
         # Use --target production with USE_PREBUILT_BINARY=true if binary is provided, otherwise build from source
         if [ -f "budget" ]; then
           echo "📦 Using pre-built binary, targeting production stage"
-          docker buildx build \
-            --platform linux/amd64 \
+        docker buildx build \
+          --platform linux/amd64 \
             --target production \
             --build-arg USE_PREBUILT_BINARY=true \
             --tag ghcr.io/${{ github.repository }}/budget-app:${{ needs.check-builds.outputs.image_tag }} \
-            --tag ghcr.io/${{ github.repository }}/budget-app:${ADDITIONAL_TAG} \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
-            --push \
-            .
+          --tag ghcr.io/${{ github.repository }}/budget-app:${ADDITIONAL_TAG} \
+          --cache-from type=local,src=/tmp/.buildx-cache \
+          --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+          --push \
+          .
         else
           echo "🔨 Building from source (no binary provided)"
           docker buildx build \
@@ -654,7 +654,7 @@ jobs:
             echo "✅ Application is healthy and responding"
           else
             echo "⚠️ Application health check returned: $HTTP_CODE"
-            echo "This may be normal if the health endpoint is not implemented"
+              echo "This may be normal if the health endpoint is not implemented"
           fi
         else
           echo "⚠️ No application URL available for health check"
@@ -722,10 +722,10 @@ jobs:
                 console.log(`Using PR head branch: ${branchRef}`);
               } catch (e) {
                 console.log(`⚠️ Could not determine PR head branch, falling back to default branch`);
-                const repo = await github.rest.repos.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo
-                });
+              const repo = await github.rest.repos.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
                 branchRef = `refs/heads/${repo.data.default_branch}`;
               }
             } else if (!branchRef.startsWith('refs/heads/')) {
@@ -754,7 +754,7 @@ jobs:
             console.error('❌ Failed to trigger auto-termination workflow:', error);
             throw error;
           }
-
+    
   cleanup:
     name: Cleanup Failed Deployment
     needs: deploy
@@ -852,14 +852,14 @@ jobs:
           
           if (deploymentSuccess) {
             message = [
-              '## ✅ Deployment Successful',
-              '',
-              `🌐 **URL:** ${process.env.APP_URL || 'N/A'}`,
-              `🆔 **App ID:** ${process.env.APP_ID || 'N/A'}`,
-              `🔧 **Migration ID:** ${process.env.MIGRATION_APP_ID || 'N/A'}`,
-              `📦 **Deployment:** ${process.env.DEPLOYMENT_ID || 'N/A'}`,
-              `⏰ **Terminates:** ${process.env.TERMINATION_TIME || 'N/A'}`
-            ].join('\n');
+            '## ✅ Deployment Successful',
+            '',
+            `🌐 **URL:** ${process.env.APP_URL || 'N/A'}`,
+            `🆔 **App ID:** ${process.env.APP_ID || 'N/A'}`,
+            `🔧 **Migration ID:** ${process.env.MIGRATION_APP_ID || 'N/A'}`,
+            `📦 **Deployment:** ${process.env.DEPLOYMENT_ID || 'N/A'}`,
+            `⏰ **Terminates:** ${process.env.TERMINATION_TIME || 'N/A'}`
+          ].join('\n');
           } else {
             const workflow = 'Deploy Budget App';
             let failedStep = 'Unknown';
@@ -897,7 +897,7 @@ jobs:
             repo: context.repo.repo,
             body: message
           });
-
+    
   slack-notification:
     name: Send Slack Notification
     needs: [check-builds, deploy]
