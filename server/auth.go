@@ -1,13 +1,15 @@
 package server
 
 import (
-	"github.com/densestvoid/budget/data"
-	"github.com/densestvoid/budget/templates"
 	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/densestvoid/budget/data"
+	"github.com/densestvoid/budget/templates"
 )
 
 // AuthHandler handles authentication-related requests
@@ -259,6 +261,78 @@ func (h *AuthHandler) AuthRequiredMiddleware(next http.Handler) http.Handler {
 		// Add account to request context
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, "account", account)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// BudgetPlanSelectionMiddleware adds the selected budget plan to context
+// Checks query param first, then cookie, then defaults to active plan
+func (h *AuthHandler) BudgetPlanSelectionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		account, ok := r.Context().Value("account").(*data.Account)
+		if !ok || account == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		var budgetPlanID int
+
+		// Check query parameter first
+		if planIDStr := r.URL.Query().Get("budget_plan_id"); planIDStr != "" {
+			if planID, err := strconv.Atoi(planIDStr); err == nil {
+				// Verify plan belongs to account
+				plan, err := h.store.GetBudgetPlan(account.ID, planID)
+				if err == nil && plan != nil {
+					budgetPlanID = planID
+					// Set cookie to persist selection
+					http.SetCookie(w, &http.Cookie{
+						Name:     "selected_budget_plan_id",
+						Value:    planIDStr,
+						Path:     "/",
+						HttpOnly: false, // Allow JS to read it
+						Secure:   false,
+						SameSite: http.SameSiteStrictMode,
+						MaxAge:   int(30 * 24 * time.Hour.Seconds()), // 30 days
+					})
+				}
+			}
+		}
+
+		// If not in query param, check cookie
+		if budgetPlanID == 0 {
+			if cookie, err := r.Cookie("selected_budget_plan_id"); err == nil && cookie.Value != "" {
+				if planID, err := strconv.Atoi(cookie.Value); err == nil {
+					// Verify plan belongs to account
+					plan, err := h.store.GetBudgetPlan(account.ID, planID)
+					if err == nil && plan != nil {
+						budgetPlanID = planID
+					}
+					// If plan not found or doesn't belong to account, fall through to active plan
+				}
+			}
+		}
+
+		// Always fall back to active plan if no plan selected or if selected plan not found
+		if budgetPlanID == 0 {
+			activePlan, err := h.store.GetActiveBudgetPlan(account.ID)
+			if err == nil && activePlan != nil {
+				budgetPlanID = activePlan.ID
+				// Update cookie to reflect active plan
+				http.SetCookie(w, &http.Cookie{
+					Name:     "selected_budget_plan_id",
+					Value:    strconv.Itoa(activePlan.ID),
+					Path:     "/",
+					HttpOnly: false,
+					Secure:   false,
+					SameSite: http.SameSiteStrictMode,
+					MaxAge:   int(30 * 24 * time.Hour.Seconds()),
+				})
+			}
+		}
+
+		// Add budget plan ID to context
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, "budget_plan_id", budgetPlanID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

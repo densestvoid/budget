@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    financial_account_id INTEGER NOT NULL REFERENCES financial_accounts(id) ON DELETE CASCADE,
     date DATE NOT NULL,
     original_payee VARCHAR(255) NOT NULL, -- value from import, used for deduplication
     payee VARCHAR(255) NOT NULL,          -- user-override, can be edited for clarity
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_financial_account_id ON transactions(financial_account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_category_id ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 
@@ -34,6 +36,7 @@ END $$;
 DROP TRIGGER IF EXISTS update_transactions_updated_at ON transactions;
 DROP INDEX IF EXISTS idx_transactions_date;
 DROP INDEX IF EXISTS idx_transactions_category_id;
+DROP INDEX IF EXISTS idx_transactions_financial_account_id;
 DROP INDEX IF EXISTS idx_transactions_account_id;
 DROP TABLE IF EXISTS transactions;
 -- +goose StatementEnd 

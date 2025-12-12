@@ -1,12 +1,21 @@
 package templates
 
 import (
+	"strconv"
+
+	"github.com/densestvoid/budget/data"
+
 	g "github.com/maragudk/gomponents"
 	"github.com/maragudk/gomponents/html"
 )
 
 // BaseLayoutWithAuth creates the base layout with authentication-aware content
 func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g.Node {
+	return BaseLayoutWithAuthAndBudgetPlan(title, isAuthenticated, nil, 0, content...)
+}
+
+// BaseLayoutWithAuthAndBudgetPlan creates the base layout with authentication-aware content and budget plan selector
+func BaseLayoutWithAuthAndBudgetPlan(title string, isAuthenticated bool, budgetPlans []data.BudgetPlan, selectedBudgetPlanID int, content ...g.Node) g.Node {
 	return html.Doctype(
 		html.HTML(
 			html.Lang("en"),
@@ -82,6 +91,45 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 								html.Div(
 									html.Class("p-3"),
 
+									// Budget plan selector (if authenticated and plans available)
+									func() g.Node {
+										if isAuthenticated && len(budgetPlans) > 0 {
+											return html.Div(
+												html.Class("mb-4"),
+												html.Label(
+													html.Class("form-label text-muted"),
+													g.Attr("style", "font-size: 0.875rem;"),
+													g.Text("Budget Plan"),
+												),
+												html.Select(
+													html.Class("form-select form-select-sm"),
+													g.Attr("onchange", "const url = new URL(window.location.href); url.searchParams.set('budget_plan_id', this.value); window.location.href = url.toString();"),
+													func() g.Node {
+														var options []g.Node
+														for _, plan := range budgetPlans {
+															planName := plan.Name
+															if plan.IsActive {
+																planName = plan.Name + " (Active)"
+															}
+															opt := html.Option(
+																html.Value(strconv.Itoa(plan.ID)),
+																func() g.Node {
+																	if plan.ID == selectedBudgetPlanID {
+																		return html.Selected()
+																	}
+																	return nil
+																}(),
+																g.Text(planName),
+															)
+															options = append(options, opt)
+														}
+														return g.Group(options)
+													}(),
+												),
+											)
+										}
+										return nil
+									}(),
 									// Navigation section
 									html.Div(
 										html.Class("mb-4"),
@@ -130,6 +178,14 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 															html.Class("nav-item"),
 															html.A(
 																html.Class("nav-link"),
+																html.Href("/financial-accounts/"),
+																g.Text("🏦 Financial Accounts"),
+															),
+														),
+														html.Li(
+															html.Class("nav-item"),
+															html.A(
+																html.Class("nav-link"),
 																html.Href("/rules/"),
 																g.Text("🧩 Rules"),
 															),
@@ -138,8 +194,32 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 															html.Class("nav-item"),
 															html.A(
 																html.Class("nav-link"),
+																html.Href("/budget-plans"),
+																g.Text("📊 Budget Plans"),
+															),
+														),
+														html.Li(
+															html.Class("nav-item"),
+															html.A(
+																html.Class("nav-link"),
 																html.Href("/bills/"),
 																g.Text("📄 Bills"),
+															),
+														),
+														html.Li(
+															html.Class("nav-item"),
+															html.A(
+																html.Class("nav-link"),
+																html.Href("/budgets"),
+																g.Text("💰 Budgets"),
+															),
+														),
+														html.Li(
+															html.Class("nav-item"),
+															html.A(
+																html.Class("nav-link"),
+																html.Href("/paycheck-summary"),
+																g.Text("💰 Paycheck Summary"),
 															),
 														),
 													}
@@ -231,6 +311,45 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 					html.Div(
 						html.Class("offcanvas-body"),
 
+						// Budget plan selector (if authenticated and plans available)
+						func() g.Node {
+							if isAuthenticated && len(budgetPlans) > 0 {
+								return html.Div(
+									html.Class("mb-4"),
+									html.Label(
+										html.Class("form-label text-muted"),
+										g.Attr("style", "font-size: 0.875rem;"),
+										g.Text("Budget Plan"),
+									),
+									html.Select(
+										html.Class("form-select form-select-sm"),
+										g.Attr("onchange", "const url = new URL(window.location.href); url.searchParams.set('budget_plan_id', this.value); window.location.href = url.toString();"),
+										func() g.Node {
+											var options []g.Node
+											for _, plan := range budgetPlans {
+												planName := plan.Name
+												if plan.IsActive {
+													planName = plan.Name + " (Active)"
+												}
+												opt := html.Option(
+													html.Value(strconv.Itoa(plan.ID)),
+													func() g.Node {
+														if plan.ID == selectedBudgetPlanID {
+															return html.Selected()
+														}
+														return nil
+													}(),
+													g.Text(planName),
+												)
+												options = append(options, opt)
+											}
+											return g.Group(options)
+										}(),
+									),
+								)
+							}
+							return nil
+						}(),
 						// Navigation section
 						html.Div(
 							html.Class("mb-4"),
@@ -279,6 +398,14 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 												html.Class("nav-item"),
 												html.A(
 													html.Class("nav-link"),
+													html.Href("/financial-accounts/"),
+													g.Text("🏦 Financial Accounts"),
+												),
+											),
+											html.Li(
+												html.Class("nav-item"),
+												html.A(
+													html.Class("nav-link"),
 													html.Href("/rules/"),
 													g.Text("🧩 Rules"),
 												),
@@ -287,8 +414,32 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 												html.Class("nav-item"),
 												html.A(
 													html.Class("nav-link"),
+													html.Href("/budget-plans"),
+													g.Text("📊 Budget Plans"),
+												),
+											),
+											html.Li(
+												html.Class("nav-item"),
+												html.A(
+													html.Class("nav-link"),
 													html.Href("/bills/"),
 													g.Text("📄 Bills"),
+												),
+											),
+											html.Li(
+												html.Class("nav-item"),
+												html.A(
+													html.Class("nav-link"),
+													html.Href("/budgets"),
+													g.Text("💰 Budgets"),
+												),
+											),
+											html.Li(
+												html.Class("nav-item"),
+												html.A(
+													html.Class("nav-link"),
+													html.Href("/paycheck-summary"),
+													g.Text("💰 Paycheck Summary"),
 												),
 											),
 										}

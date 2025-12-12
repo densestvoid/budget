@@ -14,13 +14,35 @@ import (
 	"github.com/maragudk/gomponents/html"
 )
 
-func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string, allOccurrences []data.Occurrence, includeUpcoming bool) g.Node {
+func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string, allOccurrences []data.Occurrence, includeUpcoming bool, year, month, prevYear, prevMonth, nextYear, nextMonth int, budgetPlans []data.BudgetPlan, selectedBudgetPlanID int, budgetSummaries []data.BudgetSummary, yearlyIncome int) g.Node {
 	return g.Group([]g.Node{
+		// Pagination controls
+		html.Div(
+			html.Class("row mb-3"),
+			html.Div(
+				html.Class("col-6"),
+				html.A(
+					html.Class("btn btn-outline-primary"),
+					html.Href(fmt.Sprintf("/?year=%d&month=%d&include_upcoming=%v&budget_plan_id=%d", prevYear, prevMonth, includeUpcoming, selectedBudgetPlanID)),
+					g.Raw(`<i class="bi bi-chevron-left"></i> `),
+					g.Text("Previous"),
+				),
+			),
+			html.Div(
+				html.Class("col-6 text-end"),
+				html.A(
+					html.Class("btn btn-outline-primary"),
+					html.Href(fmt.Sprintf("/?year=%d&month=%d&include_upcoming=%v&budget_plan_id=%d", nextYear, nextMonth, includeUpcoming, selectedBudgetPlanID)),
+					g.Text("Next "),
+					g.Raw(`<i class="bi bi-chevron-right"></i>`),
+				),
+			),
+		),
 		html.Div(
 			html.Class("row"),
 			html.Div(
 				html.Class("col-12"),
-				html.H1(html.Class("display-4 mb-4 text-center"), g.Text("Summary")),
+				html.H1(html.Class("display-4 mb-4 text-center"), g.Text("Monthly Summary")),
 				html.P(html.Class("lead text-center"), g.Text(fmt.Sprintf("Financial Overview for %s", monthName))),
 			),
 		),
@@ -223,13 +245,13 @@ func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string, allOccur
 											for _, occ := range allOccurrences {
 												rt := occ.RecurringTransaction
 												var displayDate time.Time
-												
+
 												if occ.IsMatched && occ.TransactionDate != nil {
 													displayDate = *occ.TransactionDate
 												} else {
 													displayDate = occ.ExpectedDate
 												}
-												
+
 												dateText := displayDate.Format("Jan 2")
 
 												// Determine status: matched, overdue, or upcoming
@@ -274,7 +296,7 @@ func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string, allOccur
 												amount := float64(rt.ExpectedAmount) / 100.0
 												if rt.IsExpense() {
 													amountText = fmt.Sprintf("-$%.2f", -amount) // Show as negative
-													amountClass = "text-danger" // Red text for expenses
+													amountClass = "text-danger"                 // Red text for expenses
 												} else {
 													amountText = fmt.Sprintf("$%.2f", amount)
 													amountClass = "text-success" // Green text for income
@@ -300,6 +322,29 @@ func SummaryPage(moneyIn, moneyOut, netMoney float64, monthName string, allOccur
 				),
 			),
 		),
+		// Budgets table
+		func() g.Node {
+			if len(budgetSummaries) > 0 {
+				return html.Div(
+					html.Class("row mt-5 justify-content-center"),
+					html.Div(
+						html.Class("col-12 col-lg-10"),
+						html.Div(
+							html.Class("card"),
+							html.Div(
+								html.Class("card-header"),
+								html.H5(html.Class("card-title mb-0"), g.Text("Budgets")),
+							),
+							html.Div(
+								html.Class("card-body"),
+								BudgetSummaryTable(budgetSummaries),
+							),
+						),
+					),
+				)
+			}
+			return nil
+		}(),
 	})
 }
 
@@ -688,7 +733,7 @@ func CategoriesPage(categories []data.Category) g.Node {
 }
 
 // TransactionsPage renders the transactions management page
-func TransactionsPage(transactions []data.Transaction, categories []data.Category, errMsg ...string) g.Node {
+func TransactionsPage(transactions []data.Transaction, categories []data.Category, financialAccounts []data.FinancialAccount, errMsg string, successMsg string) g.Node {
 	categoryMap := map[int]string{}
 	for _, c := range categories {
 		categoryMap[c.ID] = c.Name
@@ -729,10 +774,29 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 						),
 					),
 				),
+				// Success banner if present
+				g.Group(func() []g.Node {
+					if successMsg != "" {
+						return []g.Node{
+							html.Div(
+								html.Class("alert alert-success alert-dismissible fade show"),
+								html.Role("alert"),
+								g.Text(successMsg),
+								html.Button(
+									html.Type("button"),
+									html.Class("btn-close"),
+									html.DataAttr("bs-dismiss", "alert"),
+									html.DataAttr("aria-label", "Close"),
+								),
+							),
+						}
+					}
+					return nil
+				}()),
 				// Error banner if present
 				g.Group(func() []g.Node {
-					if len(errMsg) > 0 && errMsg[0] != "" {
-						return []g.Node{html.Div(html.Class("alert alert-danger"), g.Text(errMsg[0]))}
+					if errMsg != "" {
+						return []g.Node{html.Div(html.Class("alert alert-danger"), g.Text(errMsg))}
 					}
 					return nil
 				}()),
@@ -778,8 +842,31 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 							html.Method("POST"),
 							g.Attr("enctype", "multipart/form-data"),
 							html.Div(
-								html.Class("input-group mb-3"),
-								html.Input(html.Type("file"), html.Name("csv"), html.Class("form-control"), html.Required()),
+								html.Class("mb-3"),
+								html.Label(html.Class("form-label"), html.For("financial_account_id"), g.Text("Financial Account")),
+								html.Select(
+									html.Name("financial_account_id"),
+									html.ID("financial_account_id"),
+									html.Class("form-select"),
+									html.Required(),
+									g.Group(func() []g.Node {
+										var options []g.Node
+										options = append(options, html.Option(html.Value(""), g.Text("Select an account...")))
+										for _, fa := range financialAccounts {
+											options = append(options, html.Option(html.Value(strconv.Itoa(fa.ID)), g.Text(fa.Name+" ("+fa.Type+")")))
+										}
+										return options
+									}()),
+								),
+							),
+							html.Div(
+								html.Class("mb-3"),
+								html.Label(html.Class("form-label"), html.For("csv"), g.Text("CSV File")),
+								html.Input(html.Type("file"), html.Name("csv"), html.ID("csv"), html.Class("form-control"), html.Required()),
+							),
+							html.Div(
+								html.Class("d-flex justify-content-end gap-2"),
+								html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
 								html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Upload CSV")),
 							),
 						),
@@ -2179,7 +2266,7 @@ func CategoryBootstrapDropdown(categories []data.Category, selectName, selectID 
 }
 
 // RecurringTransactionsPage renders the recurring transactions management page
-func RecurringTransactionsPage(rts []data.RecurringTransaction, categories []data.Category) g.Node {
+func RecurringTransactionsPage(rts []data.RecurringTransaction, categories []data.Category, financialAccounts []data.FinancialAccount, budgetPlans []data.BudgetPlan, selectedBudgetPlanID int) g.Node {
 	return html.Div(
 		html.Class("row"),
 		html.Div(
@@ -2213,7 +2300,7 @@ func RecurringTransactionsPage(rts []data.RecurringTransaction, categories []dat
 			),
 		),
 		// Add Recurring Transaction Modal
-		AddRecurringTransactionModal(categories),
+		AddRecurringTransactionModal(categories, financialAccounts, budgetPlans, selectedBudgetPlanID),
 		// Edit Recurring Transaction Modal
 		EditRecurringTransactionModal(categories),
 		// JavaScript functions for recurring transaction actions
@@ -2403,7 +2490,7 @@ func RecurringTransactionCard(rt data.RecurringTransaction, categories []data.Ca
 }
 
 // AddRecurringTransactionModal renders the modal for adding a new recurring transaction
-func AddRecurringTransactionModal(categories []data.Category) g.Node {
+func AddRecurringTransactionModal(categories []data.Category, financialAccounts []data.FinancialAccount, budgetPlans []data.BudgetPlan, selectedBudgetPlanID int) g.Node {
 	return html.Div(
 		html.Class("modal fade"),
 		html.ID("addRecurringTransactionModal"),
@@ -2433,7 +2520,7 @@ func AddRecurringTransactionModal(categories []data.Category) g.Node {
 						g.Attr("hx-target", "#recurring-transactions-list"),
 						g.Attr("hx-swap", "outerHTML"),
 						g.Attr("hx-on::after-request", "if (event.target === this) { bootstrap.Modal.getInstance(document.getElementById('addRecurringTransactionModal')).hide(); }"),
-						RecurringTransactionFormFields(categories, nil),
+						RecurringTransactionFormFields(categories, financialAccounts, budgetPlans, selectedBudgetPlanID, nil),
 						html.Div(
 							html.Class("d-flex justify-content-end gap-2"),
 							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
@@ -2486,8 +2573,67 @@ func EditRecurringTransactionModal(categories []data.Category) g.Node {
 }
 
 // RecurringTransactionFormFields renders the form fields for a recurring transaction
-func RecurringTransactionFormFields(categories []data.Category, rt *data.RecurringTransaction) g.Node {
+func RecurringTransactionFormFields(categories []data.Category, financialAccounts []data.FinancialAccount, budgetPlans []data.BudgetPlan, selectedBudgetPlanID int, rt *data.RecurringTransaction) g.Node {
 	return g.Group([]g.Node{
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-budget-plan"), g.Text("Budget Plan")),
+			html.Select(
+				html.Name("budget_plan_id"),
+				html.ID("rt-budget-plan"),
+				html.Class("form-select"),
+				html.Required(),
+				g.Group(func() []g.Node {
+					var options []g.Node
+					for _, plan := range budgetPlans {
+						selected := (rt != nil && rt.BudgetPlanID == plan.ID) || (rt == nil && plan.ID == selectedBudgetPlanID)
+						activeText := ""
+						if plan.IsActive {
+							activeText = " (Active)"
+						}
+						options = append(options, html.Option(
+							html.Value(strconv.Itoa(plan.ID)),
+							func() g.Node {
+								if selected {
+									return html.Selected()
+								}
+								return nil
+							}(),
+							g.Text(plan.Name+activeText),
+						))
+					}
+					return options
+				}()),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("rt-financial-account"), g.Text("Financial Account")),
+			html.Select(
+				html.Name("financial_account_id"),
+				html.ID("rt-financial-account"),
+				html.Class("form-select"),
+				html.Required(),
+				g.Group(func() []g.Node {
+					var options []g.Node
+					options = append(options, html.Option(html.Value(""), g.Text("Select an account...")))
+					for _, fa := range financialAccounts {
+						selected := rt != nil && rt.FinancialAccountID == fa.ID
+						options = append(options, html.Option(
+							html.Value(strconv.Itoa(fa.ID)),
+							func() g.Node {
+								if selected {
+									return html.Selected()
+								}
+								return nil
+							}(),
+							g.Text(fa.Name+" ("+fa.Type+")"),
+						))
+					}
+					return options
+				}()),
+			),
+		),
 		html.Div(
 			html.Class("mb-3"),
 			html.Label(html.Class("form-label"), html.For("rt-name"), g.Text("Name")),
@@ -2652,4 +2798,1523 @@ func RenderRecurringTransactionsList(w io.Writer, rts []data.RecurringTransactio
 			return rows
 		}()),
 	).Render(w)
+}
+
+// PaycheckSummaryPage renders the paycheck summary page
+func PaycheckSummaryPage(
+	lastIncomeDate *time.Time,
+	nextIncomeDate *time.Time,
+	transactions []data.Transaction,
+	expenseOccurrences []data.Occurrence,
+	financialAccounts []data.FinancialAccount,
+	selectedFinancialAccount *data.FinancialAccount,
+	balanceCents *int,
+	totalExpensesCents int64,
+	expectedRemainingCents *int64,
+	prevLastIncomeDate *time.Time,
+	nextLastIncomeDate *time.Time,
+	currentOffset int,
+	budgetPlans []data.BudgetPlan,
+	selectedBudgetPlanID int,
+) g.Node {
+	// Build pagination URLs using offset
+	var prevURL, nextURL string
+	baseURL := "/paycheck-summary"
+	params := []string{}
+	if selectedFinancialAccount != nil {
+		params = append(params, "financial_account_id="+strconv.Itoa(selectedFinancialAccount.ID))
+	}
+
+	// Previous period: go back towards offset 0 (only if currentOffset > 0)
+	// Next period: go forward to offset + 1
+	nextOffset := currentOffset + 1
+
+	// Previous button: only show if currentOffset > 0 (not at current period)
+	// We don't need prevLastIncomeDate to be non-nil - we can always go back if offset > 0
+	if currentOffset > 0 {
+		prevOffset := currentOffset - 1
+		prevParams := append([]string{}, params...)
+		if prevOffset == 0 {
+			// For offset 0, omit the offset parameter (it's the default)
+			if len(prevParams) > 0 {
+				prevURL = baseURL + "?" + strings.Join(prevParams, "&")
+			} else {
+				prevURL = baseURL
+			}
+		} else {
+			prevParams = append(prevParams, fmt.Sprintf("offset=%d", prevOffset))
+			prevURL = baseURL + "?" + strings.Join(prevParams, "&")
+		}
+	}
+
+	if nextLastIncomeDate != nil {
+		nextParams := append([]string{}, params...)
+		nextParams = append(nextParams, fmt.Sprintf("offset=%d", nextOffset))
+		if len(nextParams) > 0 {
+			nextURL = baseURL + "?" + strings.Join(nextParams, "&")
+		} else {
+			nextURL = baseURL + fmt.Sprintf("?offset=%d", nextOffset)
+		}
+	}
+
+	return g.Group([]g.Node{
+		// Pagination controls
+		html.Div(
+			html.Class("row mb-3"),
+			html.Div(
+				html.Class("col-6"),
+				func() g.Node {
+					// Only show previous button if currentOffset > 0 (not at current period)
+					if currentOffset > 0 && prevURL != "" {
+						return html.A(
+							html.Class("btn btn-outline-primary"),
+							html.Href(prevURL),
+							g.Raw(`<i class="bi bi-chevron-left"></i> `),
+							g.Text("Previous"),
+						)
+					}
+					// At offset 0 (current period), don't show previous button
+					return nil
+				}(),
+			),
+			html.Div(
+				html.Class("col-6 text-end"),
+				func() g.Node {
+					if nextLastIncomeDate != nil && nextURL != "" {
+						return html.A(
+							html.Class("btn btn-outline-primary"),
+							html.Href(nextURL),
+							g.Text("Next "),
+							g.Raw(`<i class="bi bi-chevron-right"></i>`),
+						)
+					}
+					return html.Button(
+						html.Class("btn btn-outline-primary"),
+						html.Disabled(),
+						g.Text("Next "),
+						g.Raw(`<i class="bi bi-chevron-right"></i>`),
+					)
+				}(),
+			),
+		),
+		html.Div(
+			html.Class("row"),
+			html.Div(
+				html.Class("col-12"),
+				html.H1(html.Class("display-4 mb-4 text-center"), g.Text("Paycheck Summary")),
+				html.P(html.Class("lead text-center"), g.Text("Expenses between paychecks")),
+			),
+		),
+		// Balance input and period info
+		html.Div(
+			html.Class("row mt-5 justify-content-center"),
+			html.Div(
+				html.Class("col-12 col-lg-10"),
+				html.Div(
+					html.Class("card"),
+					html.Div(
+						html.Class("card-body"),
+						g.El("form",
+							html.Method("GET"),
+							html.Action("/paycheck-summary"),
+							html.Div(
+								html.Class("row align-items-end"),
+								html.Div(
+									html.Class("col-md-3 mb-3"),
+									html.Label(
+										html.Class("form-label"),
+										html.For("financial_account_id"),
+										g.Text("Financial Account"),
+									),
+									html.Select(
+										html.Name("financial_account_id"),
+										html.ID("financial_account_id"),
+										html.Class("form-select"),
+										g.Attr("onchange", "this.form.submit()"),
+										g.Group(func() []g.Node {
+											var options []g.Node
+											if len(financialAccounts) == 0 {
+												options = append(options, html.Option(html.Value(""), g.Text("No accounts available")))
+											} else {
+												for _, fa := range financialAccounts {
+													selected := selectedFinancialAccount != nil && fa.ID == selectedFinancialAccount.ID
+													options = append(options, html.Option(
+														html.Value(strconv.Itoa(fa.ID)),
+														func() g.Node {
+															if selected {
+																return html.Selected()
+															}
+															return nil
+														}(),
+														g.Text(fa.Name+" ("+fa.Type+")"),
+													))
+												}
+											}
+											return options
+										}()),
+									),
+								),
+								html.Div(
+									html.Class("col-md-3 mb-3"),
+									html.Label(
+										html.Class("form-label"),
+										html.For("balance-display"),
+										g.Text("Account Balance"),
+									),
+									html.Input(
+										html.Type("text"),
+										html.Class("form-control"),
+										html.ID("balance-display"),
+										html.ReadOnly(),
+										html.Disabled(),
+										func() g.Node {
+											if balanceCents != nil {
+												balance := float64(*balanceCents) / 100.0
+												return html.Value(fmt.Sprintf("$%.2f", balance))
+											}
+											return html.Value("$0.00")
+										}(),
+									),
+								),
+								html.Div(
+									html.Class("col-md-4 mb-3"),
+									html.Label(
+										html.Class("form-label"),
+										g.Text("Period"),
+									),
+									html.Div(
+										html.Class("form-control-plaintext"),
+										func() g.Node {
+											if lastIncomeDate != nil && nextIncomeDate != nil {
+												return g.Text(fmt.Sprintf("%s to %s",
+													lastIncomeDate.Format("Jan 2, 2006"),
+													nextIncomeDate.Format("Jan 2, 2006")))
+											}
+											return g.Text("No income data available")
+										}(),
+									),
+								),
+								html.Div(
+									html.Class("col-md-2 mb-3"),
+									html.Button(
+										html.Type("submit"),
+										html.Class("btn btn-primary w-100"),
+										g.Text("Update"),
+									),
+								),
+							),
+						),
+					),
+				),
+			),
+		),
+		// Money Flow card (similar to monthly summary)
+		func() g.Node {
+			if balanceCents != nil && expectedRemainingCents != nil {
+				balanceFloat := float64(*balanceCents) / 100.0
+				expensesFloat := float64(totalExpensesCents) / 100.0
+				remainingFloat := float64(*expectedRemainingCents) / 100.0
+
+				return html.Div(
+					html.Class("row mt-5 justify-content-center"),
+					html.Div(
+						html.Class("col-12 col-lg-10"),
+						html.Div(
+							html.Class("card"),
+							html.Div(
+								html.Class("card-header"),
+								html.H5(html.Class("card-title mb-0"), g.Text("Money Flow")),
+							),
+							html.Div(
+								html.Class("card-body p-4"),
+								// Desktop view: horizontal layout with large text
+								html.Div(
+									html.Class("d-none d-md-flex align-items-center justify-content-center flex-wrap gap-3"),
+									// Starting Balance Card
+									html.Div(
+										html.Class("card flex-fill"),
+										g.Attr("style", "min-width: 200px; max-width: 300px;"),
+										html.Div(
+											html.Class("card-body text-center"),
+											html.H6(html.Class("card-subtitle mb-2 text-muted"), g.Text("Starting")),
+											html.Div(
+												html.Class("display-6 fw-bold"),
+												g.Text(fmt.Sprintf("$%.2f", balanceFloat)),
+											),
+										),
+									),
+									// Minus Sign
+									html.Div(
+										html.Class("d-flex align-items-center"),
+										g.Attr("style", "font-size: 3rem; font-weight: bold; color: #6c757d;"),
+										g.Text("−"),
+									),
+									// Expenses Card
+									html.Div(
+										html.Class("card flex-fill"),
+										g.Attr("style", "min-width: 200px; max-width: 300px;"),
+										html.Div(
+											html.Class("card-body text-center"),
+											html.H6(html.Class("card-subtitle mb-2 text-muted"), g.Text("Expenses")),
+											html.Div(
+												html.Class("display-6 fw-bold text-danger"),
+												g.Text(fmt.Sprintf("$%.2f", expensesFloat)),
+											),
+										),
+									),
+									// Equals Sign
+									html.Div(
+										html.Class("d-flex align-items-center"),
+										g.Attr("style", "font-size: 3rem; font-weight: bold; color: #6c757d;"),
+										g.Text("="),
+									),
+									// Remaining Balance Card
+									html.Div(
+										html.Class("card flex-fill"),
+										g.Attr("style", "min-width: 200px; max-width: 300px;"),
+										html.Div(
+											html.Class("card-body text-center"),
+											html.H6(html.Class("card-subtitle mb-2 text-muted"), g.Text("Remaining")),
+											html.Div(
+												func() g.Node {
+													if remainingFloat >= 0 {
+														return html.Class("display-6 fw-bold text-success")
+													}
+													return html.Class("display-6 fw-bold text-danger")
+												}(),
+												g.Text(fmt.Sprintf("$%.2f", remainingFloat)),
+											),
+										),
+									),
+								),
+								// Mobile view: inline with smaller text
+								html.Div(
+									html.Class("d-md-none"),
+									html.Div(
+										html.Class("d-flex align-items-center justify-content-center gap-1"),
+										g.Attr("style", "flex-wrap: nowrap; overflow-x: auto;"),
+										// Starting Balance Card
+										html.Div(
+											html.Class("card"),
+											g.Attr("style", "min-width: 80px; flex-shrink: 0;"),
+											html.Div(
+												html.Class("card-body text-center p-2"),
+												html.H6(html.Class("card-subtitle mb-1 text-muted"), g.Attr("style", "font-size: 0.75rem;"), g.Text("Start")),
+												html.Div(
+													html.Class("fw-bold"),
+													g.Attr("style", "font-size: 1.5rem; white-space: nowrap;"),
+													g.Text(fmt.Sprintf("$%.0f", balanceFloat)),
+												),
+											),
+										),
+										// Minus Sign
+										html.Div(
+											html.Class("d-flex align-items-center"),
+											g.Attr("style", "font-size: 1.8rem; font-weight: bold; color: #6c757d; flex-shrink: 0;"),
+											g.Text("−"),
+										),
+										// Expenses Card
+										html.Div(
+											html.Class("card"),
+											g.Attr("style", "min-width: 80px; flex-shrink: 0;"),
+											html.Div(
+												html.Class("card-body text-center p-2"),
+												html.H6(html.Class("card-subtitle mb-1 text-muted"), g.Attr("style", "font-size: 0.75rem;"), g.Text("Exp")),
+												html.Div(
+													html.Class("fw-bold text-danger"),
+													g.Attr("style", "font-size: 1.5rem; white-space: nowrap;"),
+													g.Text(fmt.Sprintf("$%.0f", expensesFloat)),
+												),
+											),
+										),
+										// Equals Sign
+										html.Div(
+											html.Class("d-flex align-items-center"),
+											g.Attr("style", "font-size: 1.8rem; font-weight: bold; color: #6c757d; flex-shrink: 0;"),
+											g.Text("="),
+										),
+										// Remaining Balance Card
+										html.Div(
+											html.Class("card"),
+											g.Attr("style", "min-width: 80px; flex-shrink: 0;"),
+											html.Div(
+												html.Class("card-body text-center p-2"),
+												html.H6(html.Class("card-subtitle mb-1 text-muted"), g.Attr("style", "font-size: 0.75rem;"), g.Text("Remain")),
+												html.Div(
+													func() g.Node {
+														if remainingFloat >= 0 {
+															return html.Class("fw-bold text-success")
+														}
+														return html.Class("fw-bold text-danger")
+													}(),
+													g.Attr("style", "font-size: 1.5rem; white-space: nowrap;"),
+													g.Text(fmt.Sprintf("$%.0f", remainingFloat)),
+												),
+											),
+										),
+									),
+								),
+							),
+						),
+					),
+				)
+			}
+			return nil
+		}(),
+		// Expenses list
+		func() g.Node {
+			if lastIncomeDate != nil && nextIncomeDate != nil {
+				return html.Div(
+					html.Class("row mt-5 justify-content-center"),
+					html.Div(
+						html.Class("col-12 col-lg-10"),
+						html.Div(
+							html.Class("card"),
+							html.Div(
+								html.Class("card-header"),
+								html.H5(html.Class("card-title mb-0"), g.Text("Expenses in Period")),
+							),
+							html.Div(
+								html.Class("card-body"),
+								func() g.Node {
+									if len(transactions) == 0 && len(expenseOccurrences) == 0 {
+										return html.P(html.Class("text-muted mb-0"), g.Text("No expenses in this period."))
+									}
+									return html.Div(
+										html.Class("table-responsive"),
+										html.Table(
+											html.Class("table table-hover"),
+											g.El("thead",
+												html.Tr(
+													html.Th(g.Text("Date")),
+													html.Th(g.Text("Name")),
+													html.Th(html.Class("text-end"), g.Text("Amount")),
+												),
+											),
+											g.El("tbody",
+												g.Group(func() []g.Node {
+													var rows []g.Node
+													// Add transactions
+													for _, tx := range transactions {
+														if tx.Amount < 0 {
+															rows = append(rows, html.Tr(
+																html.Td(g.Text(tx.Date.Format("Jan 2, 2006"))),
+																html.Td(g.Text(tx.Payee)),
+																html.Td(
+																	html.Class("text-end fw-bold text-danger"),
+																	g.Text(fmt.Sprintf("$%.2f", float64(-tx.Amount)/100.0)),
+																),
+															))
+														}
+													}
+													// Add expense occurrences (only unmatched ones - matched ones are already shown as transactions)
+													for _, occ := range expenseOccurrences {
+														// Skip matched occurrences - they're already displayed as actual transactions
+														if occ.IsMatched {
+															continue
+														}
+														rt := occ.RecurringTransaction
+														dateText := occ.ExpectedDate.Format("Jan 2, 2006")
+														amount := float64(-rt.ExpectedAmount) / 100.0
+														rows = append(rows, html.Tr(
+															html.Td(g.Text(dateText)),
+															html.Td(g.Text(rt.Name)),
+															html.Td(
+																html.Class("text-end fw-bold text-danger"),
+																g.Text(fmt.Sprintf("$%.2f", amount)),
+															),
+														))
+													}
+													return rows
+												}()),
+											),
+										),
+									)
+								}(),
+							),
+						),
+					),
+				)
+			}
+			return nil
+		}(),
+	})
+}
+
+// Budget plan templates
+
+type PlanWithCount struct {
+	data.BudgetPlan
+	TransactionCount int
+}
+
+// BudgetPlansPage renders the budget plans management page
+func BudgetPlansPage(plans []PlanWithCount) g.Node {
+	return html.Div(
+		html.Class("row"),
+		html.Div(
+			html.Class("col-12 col-md-8 px-2"),
+			html.H1(html.Class("display-6 my-2 text-center"), g.Text("Budget Plans")),
+			// Toolbar
+			html.Div(
+				html.Class("card p-2 mb-3 bg-body-tertiary border"),
+				html.Button(
+					html.Class("btn btn-primary"),
+					html.DataAttr("bs-toggle", "modal"),
+					html.DataAttr("bs-target", "#createBudgetPlanModal"),
+					g.Text("Create Budget Plan"),
+				),
+			),
+			// Hidden refresh trigger
+			html.Div(
+				html.ID("refresh-budget-plans-list"),
+				g.Attr("hx-get", "/budget-plans/list"),
+				g.Attr("hx-target", "#budget-plans-list"),
+				g.Attr("hx-swap", "innerHTML"),
+				g.Attr("hx-trigger", "refresh"),
+				g.Attr("style", "display: none;"),
+			),
+			// Budget plans list
+			html.Div(
+				html.ID("budget-plans-list"),
+				html.Class("row g-3"),
+				func() g.Node {
+					if len(plans) == 0 {
+						return html.Div(
+							html.Class("alert alert-info"),
+							g.Text("No budget plans yet. Create your first budget plan to get started."),
+						)
+					}
+					return g.Group(func() []g.Node {
+						var nodes []g.Node
+						for _, plan := range plans {
+							nodes = append(nodes, BudgetPlanCard(plan))
+						}
+						return nodes
+					}())
+				}(),
+			),
+		),
+		// Create modal
+		html.Div(
+			html.Class("modal fade"),
+			html.ID("createBudgetPlanModal"),
+			g.Attr("tabindex", "-1"),
+			g.Attr("aria-labelledby", "createBudgetPlanModalLabel"),
+			html.Div(
+				html.Class("modal-dialog"),
+				html.Div(
+					html.Class("modal-content"),
+					html.Div(
+						html.Class("modal-header"),
+						html.H5(html.Class("modal-title"), html.ID("createBudgetPlanModalLabel"), g.Text("Create Budget Plan")),
+						html.Button(
+							html.Type("button"),
+							html.Class("btn-close"),
+							html.DataAttr("bs-dismiss", "modal"),
+							g.Attr("aria-label", "Close"),
+						),
+					),
+					g.El("form",
+						html.Action("/budget-plans/"),
+						html.Method("POST"),
+						g.Attr("hx-post", "/budget-plans/"),
+						g.Attr("hx-target", "#budget-plans-list"),
+						g.Attr("hx-swap", "innerHTML"),
+						g.Attr("hx-on::after-request", `if (event.detail.successful) { const modal = bootstrap.Modal.getInstance(document.querySelector('#createBudgetPlanModal')); if (modal) modal.hide(); }`),
+						html.Div(
+							html.Class("modal-body"),
+							html.Div(
+								html.Class("mb-3"),
+								html.Label(html.Class("form-label"), html.For("create-plan-name"), g.Text("Name")),
+								html.Input(
+									html.Type("text"),
+									html.Class("form-control"),
+									html.ID("create-plan-name"),
+									html.Name("name"),
+									html.Required(),
+								),
+							),
+						),
+						html.Div(
+							html.Class("modal-footer"),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Create")),
+						),
+					),
+				),
+			),
+		),
+	)
+}
+
+// BudgetPlanCard renders a single budget plan card
+func BudgetPlanCard(plan PlanWithCount) g.Node {
+	var activeBadge g.Node
+	if plan.IsActive {
+		activeBadge = html.Span(
+			html.Class("badge bg-success ms-2"),
+			g.Text("Active"),
+		)
+	}
+	return html.Div(
+		html.Class("card mb-3"),
+		html.Div(
+			html.Class("card-body"),
+			html.Div(
+				html.Class("d-flex justify-content-between align-items-start"),
+				html.Div(
+					html.Class("flex-grow-1"),
+					html.H5(
+						html.Class("card-title mb-1"),
+						g.Text(plan.Name),
+						activeBadge,
+					),
+					html.P(html.Class("text-muted mb-0"), g.Text(fmt.Sprintf("%d recurring transaction(s)", plan.TransactionCount))),
+				),
+				html.Div(
+					html.Class("btn-group"),
+					func() g.Node {
+						if !plan.IsActive {
+							return html.Button(
+								html.Class("btn btn-sm btn-outline-primary"),
+								g.Attr("hx-post", fmt.Sprintf("/budget-plans/%d/activate", plan.ID)),
+								g.Attr("hx-target", "#budget-plans-list"),
+								g.Attr("hx-swap", "innerHTML"),
+								g.Text("Activate"),
+							)
+						}
+						return nil
+					}(),
+					html.Button(
+						html.Class("btn btn-sm btn-outline-secondary"),
+						html.DataAttr("bs-toggle", "modal"),
+						html.DataAttr("bs-target", fmt.Sprintf("#copyBudgetPlanModal%d", plan.ID)),
+						g.Text("Copy"),
+					),
+					html.Button(
+						html.Class("btn btn-sm btn-outline-secondary"),
+						html.DataAttr("bs-toggle", "modal"),
+						html.DataAttr("bs-target", fmt.Sprintf("#editBudgetPlanModal%d", plan.ID)),
+						g.Text("Edit"),
+					),
+					func() g.Node {
+						if !plan.IsActive && plan.TransactionCount == 0 {
+							return html.Button(
+								html.Class("btn btn-sm btn-outline-danger"),
+								g.Attr("hx-delete", fmt.Sprintf("/budget-plans/%d", plan.ID)),
+								g.Attr("hx-target", "#budget-plans-list"),
+								g.Attr("hx-swap", "innerHTML"),
+								g.Attr("hx-confirm", "Are you sure you want to delete this budget plan?"),
+								g.Text("Delete"),
+							)
+						}
+						return nil
+					}(),
+				),
+			),
+		),
+		// Edit modal
+		html.Div(
+			html.Class("modal fade"),
+			html.ID(fmt.Sprintf("editBudgetPlanModal%d", plan.ID)),
+			g.Attr("tabindex", "-1"),
+			html.Div(
+				html.Class("modal-dialog"),
+				html.Div(
+					html.Class("modal-content"),
+					html.Div(
+						html.Class("modal-header"),
+						html.H5(html.Class("modal-title"), g.Text("Edit Budget Plan")),
+						html.Button(html.Type("button"), html.Class("btn-close"), html.DataAttr("bs-dismiss", "modal")),
+					),
+					g.El("form",
+						g.Attr("hx-put", fmt.Sprintf("/budget-plans/%d", plan.ID)),
+						g.Attr("hx-swap", "none"),
+						g.Attr("hx-on::after-request", fmt.Sprintf(`if (event.detail.successful) { const modal = bootstrap.Modal.getInstance(document.getElementById('editBudgetPlanModal%d')); if (modal) modal.hide(); htmx.trigger('#refresh-budget-plans-list', 'refresh'); }`, plan.ID)),
+						html.Div(
+							html.Class("modal-body"),
+							html.Div(
+								html.Class("mb-3"),
+								html.Label(html.Class("form-label"), g.Text("Name")),
+								html.Input(
+									html.Type("text"),
+									html.Class("form-control"),
+									html.Name("name"),
+									html.Value(plan.Name),
+									html.Required(),
+								),
+							),
+						),
+						html.Div(
+							html.Class("modal-footer"),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save")),
+						),
+					),
+				),
+			),
+		),
+		// Copy modal
+		html.Div(
+			html.Class("modal fade"),
+			html.ID(fmt.Sprintf("copyBudgetPlanModal%d", plan.ID)),
+			g.Attr("tabindex", "-1"),
+			html.Div(
+				html.Class("modal-dialog"),
+				html.Div(
+					html.Class("modal-content"),
+					html.Div(
+						html.Class("modal-header"),
+						html.H5(html.Class("modal-title"), g.Text("Copy Budget Plan")),
+						html.Button(html.Type("button"), html.Class("btn-close"), html.DataAttr("bs-dismiss", "modal")),
+					),
+					g.El("form",
+						g.Attr("hx-post", fmt.Sprintf("/budget-plans/%d/copy", plan.ID)),
+						g.Attr("hx-swap", "none"),
+						g.Attr("hx-on::after-request", fmt.Sprintf(`if (event.detail.successful) { const modal = bootstrap.Modal.getInstance(document.getElementById('copyBudgetPlanModal%d')); if (modal) modal.hide(); htmx.trigger('#refresh-budget-plans-list', 'refresh'); }`, plan.ID)),
+						html.Div(
+							html.Class("modal-body"),
+							html.Div(
+								html.Class("mb-3"),
+								html.Label(html.Class("form-label"), g.Text("New Plan Name")),
+								html.Input(
+									html.Type("text"),
+									html.Class("form-control"),
+									html.Name("name"),
+									html.Value(fmt.Sprintf("%s (Copy)", plan.Name)),
+									html.Required(),
+								),
+							),
+						),
+						html.Div(
+							html.Class("modal-footer"),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Copy")),
+						),
+					),
+				),
+			),
+		),
+	)
+}
+
+// RenderBudgetPlansList renders the budget plans list for HTMX updates
+func RenderBudgetPlansList(w io.Writer, plans []PlanWithCount) error {
+	if len(plans) == 0 {
+		_, err := w.Write([]byte(`<div class="alert alert-info">No budget plans yet. Create your first budget plan to get started.</div>`))
+		return err
+	}
+	var nodes []g.Node
+	for _, plan := range plans {
+		nodes = append(nodes, BudgetPlanCard(plan))
+	}
+	// Return just the cards wrapped in a div (not the row wrapper, since that's in the page template)
+	return html.Div(
+		g.Group(nodes),
+	).Render(w)
+}
+
+// BudgetPlanSelector renders a dropdown to select budget plan
+func BudgetPlanSelector(plans []data.BudgetPlan, selectedPlanID int, currentURL string) g.Node {
+	return html.Div(
+		html.Class("mb-3"),
+		html.Label(html.Class("form-label"), g.Text("Budget Plan")),
+		html.Select(
+			html.Class("form-select"),
+			g.Attr("onchange", fmt.Sprintf("window.location.href = '%s?budget_plan_id=' + this.value", currentURL)),
+			func() g.Node {
+				var options []g.Node
+				for _, plan := range plans {
+					selected := ""
+					if plan.ID == selectedPlanID {
+						selected = " selected"
+					}
+					activeText := ""
+					if plan.IsActive {
+						activeText = " (Active)"
+					}
+					options = append(options, html.Option(
+						html.Value(strconv.Itoa(plan.ID)),
+						g.Attr("selected", selected),
+						g.Text(plan.Name+activeText),
+					))
+				}
+				return g.Group(options)
+			}(),
+		),
+	)
+}
+
+// Financial accounts templates
+
+// FinancialAccountsPage renders the financial accounts management page
+func FinancialAccountsPage(accounts []data.FinancialAccount) g.Node {
+	return html.Div(
+		html.Class("row"),
+		html.Div(
+			html.Class("col-12 col-md-8 px-2"),
+			html.H1(html.Class("display-6 my-2 text-center"), g.Text("Financial Accounts")),
+			// Toolbar
+			html.Div(
+				html.Class("card p-2 mb-3 bg-body-tertiary border"),
+				html.Div(
+					html.Class("d-flex align-items-center gap-2"),
+					html.Button(
+						html.Class("btn btn-primary"),
+						html.Type("button"),
+						html.DataAttr("bs-toggle", "modal"),
+						html.DataAttr("bs-target", "#addFinancialAccountModal"),
+						g.Text("Add Financial Account"),
+					),
+				),
+			),
+			// Financial accounts list
+			html.Div(
+				html.ID("financial-accounts-list"),
+				html.Class("list-group"),
+				g.Group(func() []g.Node {
+					var rows []g.Node
+					for _, fa := range accounts {
+						rows = append(rows, FinancialAccountCard(fa))
+					}
+					return rows
+				}()),
+			),
+		),
+		// Add Financial Account Modal
+		AddFinancialAccountModal(),
+		// Edit Financial Account Modal
+		EditFinancialAccountModal(),
+		// JavaScript functions for financial account actions
+		html.Script(g.Raw(`
+			function openEditFinancialAccountModal(faId) {
+				const modal = document.getElementById('editFinancialAccountModal');
+				if (!modal) return;
+				
+				// Load the edit form via HTMX
+				fetch('/financial-accounts/' + faId + '/edit')
+					.then(response => response.text())
+					.then(html => {
+						document.getElementById('editFinancialAccountModalBody').innerHTML = html;
+						// Process HTMX attributes on the newly loaded content
+						if (typeof htmx !== 'undefined') {
+							htmx.process(document.getElementById('editFinancialAccountModalBody'));
+						}
+						const bsModal = bootstrap.Modal.getOrCreateInstance(modal);
+						bsModal.show();
+					})
+					.catch(error => console.error('Error loading edit form:', error));
+			}
+			
+			function deleteFinancialAccount(faId) {
+				if (confirm('Are you sure you want to delete this financial account? This will also delete all associated transactions. This action cannot be undone.')) {
+					fetch('/financial-accounts/' + faId, {
+						method: 'DELETE',
+						headers: {
+							'HX-Request': 'true',
+						},
+					})
+					.then(response => response.text())
+					.then(html => {
+						document.getElementById('financial-accounts-list').outerHTML = html;
+					})
+					.catch(error => console.error('Error deleting financial account:', error));
+				}
+			}
+		`)),
+	)
+}
+
+// RenderFinancialAccountsList renders just the financial accounts list (for HTMX updates)
+func RenderFinancialAccountsList(w io.Writer, accounts []data.FinancialAccount) error {
+	list := html.Div(
+		html.ID("financial-accounts-list"),
+		html.Class("list-group"),
+		g.Group(func() []g.Node {
+			var rows []g.Node
+			for _, fa := range accounts {
+				rows = append(rows, FinancialAccountCard(fa))
+			}
+			return rows
+		}()),
+	)
+	return list.Render(w)
+}
+
+// FinancialAccountCard renders a single financial account card
+func FinancialAccountCard(fa data.FinancialAccount) g.Node {
+	return html.Div(
+		html.Class("list-group-item"),
+		g.Attr("data-financial-account-id", strconv.Itoa(fa.ID)),
+		html.Div(
+			html.Class("d-flex justify-content-between align-items-start"),
+			html.Div(
+				html.Class("flex-grow-1"),
+				html.H5(html.Class("mb-1"), g.Text(fa.Name)),
+				html.P(
+					html.Class("mb-1 text-muted"),
+					g.Text(strings.Title(fa.Type)),
+				),
+				html.Small(
+					html.Class("text-muted"),
+					g.Text("Balance: $"+fa.BalanceDecimal()),
+				),
+			),
+			html.Div(
+				html.Class("btn-group"),
+				html.Button(
+					html.Class("btn btn-sm btn-outline-primary"),
+					g.Attr("onclick", "openEditFinancialAccountModal("+strconv.Itoa(fa.ID)+")"),
+					g.Text("Edit"),
+				),
+				html.Button(
+					html.Class("btn btn-sm btn-outline-danger"),
+					g.Attr("onclick", "deleteFinancialAccount("+strconv.Itoa(fa.ID)+")"),
+					g.Text("Delete"),
+				),
+			),
+		),
+	)
+}
+
+// FinancialAccountFormFields renders form fields for creating/editing a financial account
+func FinancialAccountFormFields(fa *data.FinancialAccount, mode string) g.Node {
+	var action string
+	var method string
+	if mode == "edit" && fa != nil {
+		action = "/financial-accounts/" + strconv.Itoa(fa.ID)
+		method = "PUT"
+	} else {
+		action = "/financial-accounts"
+		method = "POST"
+	}
+
+	var name, accountType, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField string
+	var csvCategoryField, csvBalanceField string
+	var balanceValue string
+	if fa != nil {
+		name = fa.Name
+		accountType = fa.Type
+		balanceValue = fa.BalanceDecimal()
+		csvDateField = fa.CSVDateField
+		csvPayeeField = fa.CSVPayeeField
+		csvExpenseField = fa.CSVExpenseField
+		csvIncomeField = fa.CSVIncomeField
+		if fa.CSVCategoryField != nil {
+			csvCategoryField = *fa.CSVCategoryField
+		}
+		if fa.CSVBalanceField != nil {
+			csvBalanceField = *fa.CSVBalanceField
+		}
+	}
+
+	return g.El("form",
+		g.Attr("hx-"+strings.ToLower(method), action),
+		g.Attr("hx-target", "#financial-accounts-list"),
+		g.Attr("hx-swap", "outerHTML"),
+		g.Attr("hx-on::after-request", `if (event.target === this) { bootstrap.Modal.getInstance(this.closest('.modal')).hide(); }`),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("name"), g.Text("Name")),
+			html.Input(
+				html.Type("text"),
+				html.Name("name"),
+				html.ID("name"),
+				html.Class("form-control"),
+				html.Value(name),
+				html.Required(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("type"), g.Text("Type")),
+			html.Select(
+				html.Name("type"),
+				html.ID("type"),
+				html.Class("form-select"),
+				html.Required(),
+				html.Option(html.Value("checking"), func() g.Node {
+					if accountType == "checking" {
+						return html.Selected()
+					}
+					return nil
+				}(), g.Text("Checking")),
+				html.Option(html.Value("savings"), func() g.Node {
+					if accountType == "savings" {
+						return html.Selected()
+					}
+					return nil
+				}(), g.Text("Savings")),
+				html.Option(html.Value("credit_card"), func() g.Node {
+					if accountType == "credit_card" {
+						return html.Selected()
+					}
+					return nil
+				}(), g.Text("Credit Card")),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("balance"), g.Text("Balance")),
+			html.Input(
+				html.Type("number"),
+				html.Name("balance"),
+				html.ID("balance"),
+				html.Class("form-control"),
+				html.Step("0.01"),
+				html.Value(balanceValue),
+			),
+			html.Small(html.Class("form-text text-muted"), g.Text("Current account balance. Can be manually updated.")),
+		),
+		html.Hr(),
+		html.H6(g.Text("CSV Field Mappings")),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("csv_date_field"), g.Text("Date Field")),
+			html.Input(
+				html.Type("text"),
+				html.Name("csv_date_field"),
+				html.ID("csv_date_field"),
+				html.Class("form-control"),
+				html.Value(csvDateField),
+				html.Required(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("csv_payee_field"), g.Text("Payee Field")),
+			html.Input(
+				html.Type("text"),
+				html.Name("csv_payee_field"),
+				html.ID("csv_payee_field"),
+				html.Class("form-control"),
+				html.Value(csvPayeeField),
+				html.Required(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("csv_expense_field"), g.Text("Expense Field")),
+			html.Input(
+				html.Type("text"),
+				html.Name("csv_expense_field"),
+				html.ID("csv_expense_field"),
+				html.Class("form-control"),
+				html.Value(csvExpenseField),
+				html.Required(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("csv_income_field"), g.Text("Income Field")),
+			html.Input(
+				html.Type("text"),
+				html.Name("csv_income_field"),
+				html.ID("csv_income_field"),
+				html.Class("form-control"),
+				html.Value(csvIncomeField),
+				html.Required(),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("csv_category_field"), g.Text("Category Field (Optional)")),
+			html.Input(
+				html.Type("text"),
+				html.Name("csv_category_field"),
+				html.ID("csv_category_field"),
+				html.Class("form-control"),
+				html.Value(csvCategoryField),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(html.Class("form-label"), html.For("csv_balance_field"), g.Text("Balance Field (Optional)")),
+			html.Input(
+				html.Type("text"),
+				html.Name("csv_balance_field"),
+				html.ID("csv_balance_field"),
+				html.Class("form-control"),
+				html.Value(csvBalanceField),
+			),
+		),
+		html.Div(
+			html.Class("d-flex justify-content-end gap-2"),
+			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save")),
+		),
+	)
+}
+
+// AddFinancialAccountModal renders the modal for adding a financial account
+func AddFinancialAccountModal() g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("addFinancialAccountModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "addFinancialAccountModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("addFinancialAccountModalLabel"), g.Text("Add Financial Account")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					html.ID("addFinancialAccountModalBody"),
+					FinancialAccountFormFields(nil, "create"),
+				),
+			),
+		),
+	)
+}
+
+// EditFinancialAccountModal renders the modal for editing a financial account
+func EditFinancialAccountModal() g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("editFinancialAccountModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "editFinancialAccountModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("editFinancialAccountModalLabel"), g.Text("Edit Financial Account")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					html.ID("editFinancialAccountModalBody"),
+				),
+			),
+		),
+	)
+}
+
+// Budget templates
+
+func BudgetsPage(budgetSummaries []data.BudgetSummary, categories []data.Category, yearlyIncome int, year, month int) g.Node {
+	return g.Group([]g.Node{
+		html.Div(
+			html.Class("row mb-3"),
+			html.Div(
+				html.Class("col-12"),
+				html.H1(html.Class("display-4 mb-4"), g.Text("Budgets")),
+				html.P(html.Class("lead"), g.Text(fmt.Sprintf("Manage your budgets for %s", time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("January 2006")))),
+			),
+		),
+		html.Div(
+			html.Class("row mb-3"),
+			html.Div(
+				html.Class("col-12"),
+				html.Button(
+					html.Class("btn btn-primary"),
+					html.DataAttr("bs-toggle", "modal"),
+					html.DataAttr("bs-target", "#addBudgetModal"),
+					g.Text("Add Budget"),
+				),
+			),
+		),
+		func() g.Node {
+			if yearlyIncome > 0 {
+				return html.Div(
+					html.Class("row mb-3"),
+					html.Div(
+						html.Class("col-12"),
+						html.Div(
+							html.Class("alert alert-info"),
+							g.Text(fmt.Sprintf("Expected Yearly Income: $%.2f", float64(yearlyIncome)/100.0)),
+						),
+					),
+				)
+			}
+			return nil
+		}(),
+		html.Div(
+			html.Class("row"),
+			html.Div(
+				html.Class("col-12"),
+				html.Div(
+					html.Class("card"),
+					html.Div(
+						html.Class("card-body"),
+						html.ID("budgets-table"),
+						BudgetTable(budgetSummaries, yearlyIncome),
+					),
+				),
+			),
+		),
+		AddBudgetModal(categories, yearlyIncome),
+		EditBudgetModal(),
+	})
+}
+
+// BudgetSummaryTable renders a simplified read-only budget table for the home page
+func BudgetSummaryTable(budgetSummaries []data.BudgetSummary) g.Node {
+	if len(budgetSummaries) == 0 {
+		return html.P(html.Class("text-muted mb-0"), g.Text("No budgets configured."))
+	}
+
+	return html.Div(
+		html.Class("table-responsive"),
+		html.Table(
+			html.Class("table table-hover"),
+			g.El("thead",
+				html.Tr(
+					html.Th(g.Text("Category")),
+					html.Th(html.Class("text-end"), g.Text("Monthly Budget")),
+					html.Th(html.Class("text-end"), g.Text("Spent")),
+					html.Th(html.Class("text-end"), g.Text("Expected")),
+					html.Th(html.Class("text-end"), g.Text("Remaining")),
+				),
+			),
+			g.El("tbody",
+				g.Group(func() []g.Node {
+					var rows []g.Node
+					for _, bs := range budgetSummaries {
+						// Determine status class
+						var statusClass string
+						if bs.Remaining < 0 {
+							statusClass = "text-danger"
+						} else if bs.Remaining < bs.MonthlyAmount/10 {
+							statusClass = "text-warning"
+						} else {
+							statusClass = "text-success"
+						}
+
+						rows = append(rows, html.Tr(
+							html.Td(g.Text(bs.CategoryName)),
+							html.Td(
+								html.Class("text-end fw-bold"),
+								g.Text(fmt.Sprintf("$%s", bs.MonthlyAmountDecimal())),
+							),
+							html.Td(
+								html.Class("text-end"),
+								g.Text(fmt.Sprintf("$%s", bs.SpentAmountDecimal())),
+							),
+							html.Td(
+								html.Class("text-end"),
+								g.Text(fmt.Sprintf("$%s", bs.ExpectedAmountDecimal())),
+							),
+							html.Td(
+								html.Class(fmt.Sprintf("text-end fw-bold %s", statusClass)),
+								g.Text(fmt.Sprintf("$%s", bs.RemainingDecimal())),
+							),
+						))
+					}
+					return rows
+				}()),
+			),
+		),
+	)
+}
+
+func BudgetTable(budgetSummaries []data.BudgetSummary, yearlyIncome int) g.Node {
+	if len(budgetSummaries) == 0 {
+		return html.P(html.Class("text-muted mb-0"), g.Text("No budgets configured. Click 'Add Budget' to create one."))
+	}
+
+	return html.Div(
+		html.Class("table-responsive"),
+		html.Table(
+			html.Class("table table-hover"),
+			g.El("thead",
+				html.Tr(
+					html.Th(g.Text("Category")),
+					html.Th(html.Class("text-end"), g.Text("Monthly Budget")),
+					html.Th(html.Class("text-center"), g.Text("Actions")),
+				),
+			),
+			g.El("tbody",
+				g.Group(func() []g.Node {
+					var rows []g.Node
+					for _, bs := range budgetSummaries {
+						rows = append(rows, html.Tr(
+							html.Td(g.Text(bs.CategoryName)),
+							html.Td(
+								html.Class("text-end fw-bold"),
+								g.Text(fmt.Sprintf("$%s", bs.MonthlyAmountDecimal())),
+							),
+							html.Td(
+								html.Class("text-center"),
+								html.Div(
+									html.Class("btn-group btn-group-sm"),
+									html.Button(
+										html.Class("btn btn-outline-primary"),
+										html.DataAttr("hx-get", fmt.Sprintf("/budgets/%d/edit", bs.Budget.ID)),
+										html.DataAttr("hx-target", "#editBudgetModalBody"),
+										html.DataAttr("hx-swap", "innerHTML"),
+										html.DataAttr("bs-toggle", "modal"),
+										html.DataAttr("bs-target", "#editBudgetModal"),
+										g.Text("Edit"),
+									),
+									html.Button(
+										html.Class("btn btn-outline-danger"),
+										html.DataAttr("hx-delete", fmt.Sprintf("/budgets/%d", bs.Budget.ID)),
+										html.DataAttr("hx-target", "#budgets-table"),
+										html.DataAttr("hx-swap", "innerHTML"),
+										html.DataAttr("hx-confirm", "Are you sure you want to delete this budget?"),
+										g.Text("Delete"),
+									),
+								),
+							),
+						))
+					}
+					return rows
+				}()),
+			),
+		),
+	)
+}
+
+func BudgetForm(budget *data.Budget, categories []data.Category, yearlyIncome int, isEdit bool) g.Node {
+	var categoryID int
+	var amountType string = "fixed"
+	var amountValue string
+
+	if budget != nil {
+		if budget.CategoryID != nil {
+			categoryID = *budget.CategoryID
+		}
+		amountType = budget.AmountType
+		if budget.AmountType == "fixed" {
+			amountValue = fmt.Sprintf("%.2f", float64(budget.Amount)/100.0)
+		} else {
+			amountValue = fmt.Sprintf("%.2f", float64(budget.Amount)/100.0)
+		}
+	}
+
+	formAction := "/budgets"
+	if isEdit && budget != nil {
+		formAction = fmt.Sprintf("/budgets/%d", budget.ID)
+	}
+
+	return g.El("form",
+		html.Action(formAction),
+		html.Method("POST"),
+		func() g.Node {
+			if isEdit {
+				return html.DataAttr("hx-put", formAction)
+			}
+			return html.DataAttr("hx-post", formAction)
+		}(),
+		html.DataAttr("hx-target", "#budgets-table"),
+		html.DataAttr("hx-swap", "innerHTML"),
+		html.DataAttr("hx-on::after-request", "if(event.detail.successful) { const modal = bootstrap.Modal.getInstance(document.getElementById('addBudgetModal') || document.getElementById('editBudgetModal')); if(modal) modal.hide(); }"),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(
+				html.Class("form-label"),
+				html.For("budget-category"),
+				g.Text("Category"),
+			),
+			html.Select(
+				html.Class("form-select"),
+				html.ID("budget-category"),
+				html.Name("category_id"),
+				html.Option(
+					html.Value("0"),
+					g.Text("Uncategorized"),
+				),
+				g.Group(func() []g.Node {
+					var options []g.Node
+					for _, cat := range categories {
+						opt := html.Option(
+							html.Value(strconv.Itoa(cat.ID)),
+							g.Text(cat.Name),
+						)
+						if cat.ID == categoryID {
+							opt = html.Option(
+								html.Value(strconv.Itoa(cat.ID)),
+								html.Selected(),
+								g.Text(cat.Name),
+							)
+						}
+						options = append(options, opt)
+					}
+					return options
+				}()),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(
+				html.Class("form-label"),
+				html.For("budget-amount-type"),
+				g.Text("Amount Type"),
+			),
+			html.Select(
+				html.Class("form-select"),
+				html.ID("budget-amount-type"),
+				html.Name("amount_type"),
+				html.DataAttr("x-data", "{ amountType: '"+amountType+"' }"),
+				html.DataAttr("x-model", "amountType"),
+				html.Option(
+					html.Value("fixed"),
+					func() g.Node {
+						if amountType == "fixed" {
+							return html.Selected()
+						}
+						return nil
+					}(),
+					g.Text("Fixed Amount"),
+				),
+				html.Option(
+					html.Value("percentage"),
+					func() g.Node {
+						if amountType == "percentage" {
+							return html.Selected()
+						}
+						return nil
+					}(),
+					g.Text("Percentage of Income"),
+				),
+			),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Label(
+				html.Class("form-label"),
+				html.For("budget-amount"),
+				html.DataAttr("x-show", "amountType === 'fixed'"),
+				g.Text("Monthly Amount ($)"),
+			),
+			html.Label(
+				html.Class("form-label"),
+				html.For("budget-amount"),
+				html.DataAttr("x-show", "amountType === 'percentage'"),
+				g.Text("Percentage (%)"),
+			),
+			html.Input(
+				html.Class("form-control"),
+				html.Type("number"),
+				html.ID("budget-amount"),
+				html.Name("amount"),
+				html.Step("0.01"),
+				html.Value(amountValue),
+				html.Required(),
+				html.Placeholder(func() string {
+					if amountType == "percentage" {
+						return "e.g., 10.5 for 10.5%"
+					}
+					return "e.g., 100.50"
+				}()),
+			),
+			func() g.Node {
+				if amountType == "percentage" && yearlyIncome > 0 {
+					percentage := 0.0
+					if amountValue != "" {
+						if p, err := strconv.ParseFloat(amountValue, 64); err == nil {
+							percentage = p
+						}
+					}
+					monthlyAmount := (float64(yearlyIncome) * (percentage / 100.0)) / 12.0
+					return html.Small(
+						html.Class("form-text text-muted"),
+						g.Text(fmt.Sprintf("Monthly budget: $%.2f", monthlyAmount)),
+					)
+				}
+				return nil
+			}(),
+		),
+		html.Div(
+			html.Class("mb-3"),
+			html.Button(
+				html.Class("btn btn-primary"),
+				html.Type("submit"),
+				func() g.Node {
+					if isEdit {
+						return g.Text("Update Budget")
+					}
+					return g.Text("Create Budget")
+				}(),
+			),
+			html.Button(
+				html.Class("btn btn-secondary ms-2"),
+				html.Type("button"),
+				html.DataAttr("bs-dismiss", "modal"),
+				g.Text("Cancel"),
+			),
+		),
+	)
+}
+
+func AddBudgetModal(categories []data.Category, yearlyIncome int) g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("addBudgetModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "addBudgetModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("addBudgetModalLabel"), g.Text("Add Budget")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					html.ID("addBudgetModalBody"),
+					BudgetForm(nil, categories, yearlyIncome, false),
+				),
+			),
+		),
+	)
+}
+
+func EditBudgetModal() g.Node {
+	return html.Div(
+		html.Class("modal fade"),
+		html.ID("editBudgetModal"),
+		html.DataAttr("tabindex", "-1"),
+		html.DataAttr("aria-labelledby", "editBudgetModalLabel"),
+		html.DataAttr("aria-hidden", "true"),
+		html.Div(
+			html.Class("modal-dialog"),
+			html.Div(
+				html.Class("modal-content"),
+				html.Div(
+					html.Class("modal-header"),
+					html.H5(html.Class("modal-title"), html.ID("editBudgetModalLabel"), g.Text("Edit Budget")),
+					html.Button(
+						html.Class("btn-close"),
+						html.Type("button"),
+						html.DataAttr("bs-dismiss", "modal"),
+						html.DataAttr("aria-label", "Close"),
+					),
+				),
+				html.Div(
+					html.Class("modal-body"),
+					html.ID("editBudgetModalBody"),
+				),
+			),
+		),
+	)
 }

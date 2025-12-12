@@ -16,6 +16,7 @@ WITH candidate_matches AS (
         t.amount AS transaction_amount
     FROM recurring_transactions rt
     INNER JOIN transactions t ON rt.account_id = t.account_id
+        AND rt.financial_account_id = t.financial_account_id
     WHERE 
         -- Counterparty match (case-insensitive contains)
         LOWER(t.payee) LIKE '%' || LOWER(rt.counterparty) || '%'
@@ -188,3 +189,6 @@ DROP VIEW IF EXISTS recurring_income_view CASCADE;
 DROP VIEW IF EXISTS recurring_expenses_view CASCADE;
 DROP VIEW IF EXISTS recurring_transactions_view CASCADE;
 -- +goose StatementEnd
+
+
+

@@ -7,6 +7,8 @@ CREATE TYPE transaction_type_enum AS ENUM ('expense', 'income');
 CREATE TABLE IF NOT EXISTS recurring_transactions (
     id SERIAL PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    budget_plan_id INTEGER NOT NULL REFERENCES budget_plans(id) ON DELETE CASCADE,
+    financial_account_id INTEGER NOT NULL REFERENCES financial_accounts(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     counterparty VARCHAR(255) NOT NULL,
     category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
@@ -27,6 +29,8 @@ CREATE TABLE IF NOT EXISTS recurring_transactions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recurring_transactions_account_id ON recurring_transactions(account_id);
+CREATE INDEX IF NOT EXISTS idx_recurring_transactions_budget_plan_id ON recurring_transactions(budget_plan_id);
+CREATE INDEX IF NOT EXISTS idx_recurring_transactions_financial_account_id ON recurring_transactions(financial_account_id);
 CREATE INDEX IF NOT EXISTS idx_recurring_transactions_counterparty ON recurring_transactions(counterparty);
 CREATE INDEX IF NOT EXISTS idx_recurring_transactions_type ON recurring_transactions(type);
 
@@ -41,7 +45,7 @@ BEGIN
     END IF;
 END $$;
 
--- Note: Views are created in migration 000006_create_recurring_transaction_views.sql
+-- Note: Views are created in migration 000008_create_recurring_transaction_views.sql
 -- +goose StatementEnd
 
 -- +goose Down
@@ -49,8 +53,13 @@ END $$;
 DROP TRIGGER IF EXISTS update_recurring_transactions_updated_at ON recurring_transactions;
 DROP INDEX IF EXISTS idx_recurring_transactions_type;
 DROP INDEX IF EXISTS idx_recurring_transactions_counterparty;
+DROP INDEX IF EXISTS idx_recurring_transactions_financial_account_id;
+DROP INDEX IF EXISTS idx_recurring_transactions_budget_plan_id;
 DROP INDEX IF EXISTS idx_recurring_transactions_account_id;
 DROP TABLE IF EXISTS recurring_transactions;
 DROP TYPE IF EXISTS transaction_type_enum;
 DROP TYPE IF EXISTS recurrence_unit_enum;
 -- +goose StatementEnd
+
+
+

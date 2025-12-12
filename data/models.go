@@ -42,18 +42,36 @@ type Category struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// FinancialAccount represents a financial account (checking, savings, credit card)
+type FinancialAccount struct {
+	ID              int       `json:"id"`
+	AccountID       int       `json:"account_id"` // user account
+	Name            string    `json:"name"`
+	Type            string    `json:"type"` // 'checking', 'savings', 'credit_card'
+	Balance         int       `json:"balance"` // cents
+	CSVDateField    string    `json:"csv_date_field"`
+	CSVPayeeField   string    `json:"csv_payee_field"`
+	CSVExpenseField string    `json:"csv_expense_field"`
+	CSVIncomeField  string    `json:"csv_income_field"`
+	CSVCategoryField *string  `json:"csv_category_field,omitempty"`
+	CSVBalanceField  *string  `json:"csv_balance_field,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
 // Transaction represents a financial transaction
 type Transaction struct {
-	ID            int       `json:"id"`
-	AccountID     int       `json:"account_id"`
-	Date          time.Time `json:"date"`
-	OriginalPayee string    `json:"original_payee"`
-	Payee         string    `json:"payee"`
-	CategoryID    *int      `json:"category_id"`
-	Amount        int       `json:"amount"` // cents
-	Reviewed      bool      `json:"reviewed"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                int       `json:"id"`
+	AccountID         int       `json:"account_id"`
+	FinancialAccountID int      `json:"financial_account_id"`
+	Date              time.Time `json:"date"`
+	OriginalPayee     string    `json:"original_payee"`
+	Payee             string    `json:"payee"`
+	CategoryID        *int      `json:"category_id"`
+	Amount            int       `json:"amount"` // cents
+	Reviewed          bool      `json:"reviewed"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // RuleCondition represents a condition for a transaction processing rule
@@ -79,23 +97,62 @@ type Rule struct {
 	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
+// BudgetPlan represents a budgeting plan
+type BudgetPlan struct {
+	ID        int       `json:"id"`
+	AccountID int       `json:"account_id"`
+	Name      string    `json:"name"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Budget represents a budget for a category within a budget plan
+type Budget struct {
+	ID           int       `json:"id"`
+	AccountID    int       `json:"account_id"`
+	BudgetPlanID int       `json:"budget_plan_id"`
+	CategoryID   *int      `json:"category_id"`
+	AmountType   string    `json:"amount_type"` // 'fixed' or 'percentage'
+	Amount       int       `json:"amount"`      // cents if fixed, percentage (0-10000 for 0.00-100.00%) if percentage
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// BudgetSummary represents a budget with calculated spent and expected amounts
+type BudgetSummary struct {
+	Budget         Budget  `json:"budget"`
+	CategoryName   string  `json:"category_name"`
+	MonthlyAmount  int     `json:"monthly_amount"`  // calculated monthly budget amount in cents
+	SpentAmount    int     `json:"spent_amount"`    // actual spent in cents
+	ExpectedAmount int     `json:"expected_amount"` // expected (not yet matched) recurring transactions in cents
+	Remaining      int     `json:"remaining"`       // monthly_amount - spent_amount - expected_amount
+}
+
 // RecurringTransaction represents a recurring expense or income
 type RecurringTransaction struct {
-	ID              int        `json:"id"`
-	AccountID       int        `json:"account_id"`
-	Name            string     `json:"name"`
-	Counterparty    string     `json:"counterparty"` // payee for expenses, payer for income
-	CategoryID      *int       `json:"category_id"`
-	ExpectedAmount  int        `json:"expected_amount"` // cents, negative for expenses, positive for income
-	Tolerance       int        `json:"tolerance"`       // cents
-	StartDate       time.Time  `json:"start_date"`
-	RecurrenceUnit  string     `json:"recurrence_unit"` // 'week', 'month', 'year'
-	RecurrenceValue int        `json:"recurrence_value"`
-	EndDate         *time.Time `json:"end_date"` // nullable, NULL = active
-	Type            string     `json:"type"`     // 'expense' or 'income' (generated column)
-	Archived        bool       `json:"archived"` // computed: end_date IS NOT NULL
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                int        `json:"id"`
+	AccountID         int        `json:"account_id"`
+	BudgetPlanID      int        `json:"budget_plan_id"`
+	FinancialAccountID int        `json:"financial_account_id"`
+	Name              string     `json:"name"`
+	Counterparty      string     `json:"counterparty"` // payee for expenses, payer for income
+	CategoryID        *int       `json:"category_id"`
+	ExpectedAmount    int        `json:"expected_amount"` // cents, negative for expenses, positive for income
+	Tolerance         int        `json:"tolerance"`       // cents
+	StartDate         time.Time  `json:"start_date"`
+	RecurrenceUnit    string     `json:"recurrence_unit"` // 'week', 'month', 'year'
+	RecurrenceValue   int        `json:"recurrence_value"`
+	EndDate           *time.Time `json:"end_date"` // nullable, NULL = active
+	Type              string     `json:"type"`     // 'expense' or 'income' (generated column)
+	Archived          bool       `json:"archived"` // computed: end_date IS NOT NULL
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+// BalanceDecimal returns the balance as a decimal string (e.g., 1234 -> "12.34")
+func (fa FinancialAccount) BalanceDecimal() string {
+	return fmt.Sprintf("%.2f", float64(fa.Balance)/100.0)
 }
 
 // AmountDecimal returns the amount as a decimal string (e.g., 1234 -> "12.34")
@@ -115,6 +172,48 @@ func (rt RecurringTransaction) ExpectedAmountDecimal() string {
 // ToleranceDecimal returns the tolerance as a decimal string
 func (rt RecurringTransaction) ToleranceDecimal() string {
 	return fmt.Sprintf("%.2f", float64(rt.Tolerance)/100.0)
+}
+
+// MonthlyAmount calculates the monthly budget amount based on yearly income
+func (b Budget) MonthlyAmount(yearlyIncome int) int {
+	if b.AmountType == "percentage" {
+		// Amount is stored as percentage * 100 (e.g., 10.5% = 1050)
+		// Calculate: (yearlyIncome * percentage) / 12
+		percentage := float64(b.Amount) / 100.0 // Convert to actual percentage (10.5)
+		yearlyBudget := float64(yearlyIncome) * (percentage / 100.0)
+		return int(yearlyBudget / 12.0)
+	}
+	// Fixed amount
+	return b.Amount
+}
+
+// AmountDecimal returns the amount as a decimal string for display
+func (b Budget) AmountDecimal() string {
+	if b.AmountType == "percentage" {
+		// Amount is stored as percentage * 100 (e.g., 10.5% = 1050)
+		return fmt.Sprintf("%.2f%%", float64(b.Amount)/100.0)
+	}
+	return fmt.Sprintf("%.2f", float64(b.Amount)/100.0)
+}
+
+// MonthlyAmountDecimal returns the monthly amount as a decimal string
+func (bs BudgetSummary) MonthlyAmountDecimal() string {
+	return fmt.Sprintf("%.2f", float64(bs.MonthlyAmount)/100.0)
+}
+
+// SpentAmountDecimal returns the spent amount as a decimal string
+func (bs BudgetSummary) SpentAmountDecimal() string {
+	return fmt.Sprintf("%.2f", float64(bs.SpentAmount)/100.0)
+}
+
+// ExpectedAmountDecimal returns the expected amount as a decimal string
+func (bs BudgetSummary) ExpectedAmountDecimal() string {
+	return fmt.Sprintf("%.2f", float64(bs.ExpectedAmount)/100.0)
+}
+
+// RemainingDecimal returns the remaining amount as a decimal string
+func (bs BudgetSummary) RemainingDecimal() string {
+	return fmt.Sprintf("%.2f", float64(bs.Remaining)/100.0)
 }
 
 // RecurrenceDisplay returns a human-readable string for the recurrence
@@ -549,16 +648,144 @@ func (s *Storage) DeleteCategory(accountID, categoryID int) error {
 	return nil
 }
 
+// FinancialAccount management methods
+
+// CreateFinancialAccount creates a new financial account
+func (s *Storage) CreateFinancialAccount(accountID int, name, accountType string, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField string, csvCategoryField, csvBalanceField *string) (*FinancialAccount, error) {
+	var fa FinancialAccount
+	query := `
+		INSERT INTO financial_accounts (account_id, name, type, csv_date_field, csv_payee_field, csv_expense_field, csv_income_field, csv_category_field, csv_balance_field)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, account_id, name, type, balance, csv_date_field, csv_payee_field, csv_expense_field, csv_income_field, csv_category_field, csv_balance_field, created_at, updated_at
+	`
+	err := s.db.QueryRow(query, accountID, name, accountType, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField, csvCategoryField, csvBalanceField).Scan(
+		&fa.ID, &fa.AccountID, &fa.Name, &fa.Type, &fa.Balance,
+		&fa.CSVDateField, &fa.CSVPayeeField, &fa.CSVExpenseField, &fa.CSVIncomeField,
+		&fa.CSVCategoryField, &fa.CSVBalanceField, &fa.CreatedAt, &fa.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create financial account: %w", err)
+	}
+	return &fa, nil
+}
+
+// GetFinancialAccountsByAccount retrieves all financial accounts for a user account
+func (s *Storage) GetFinancialAccountsByAccount(accountID int) ([]FinancialAccount, error) {
+	query := `
+		SELECT id, account_id, name, type, balance, csv_date_field, csv_payee_field, csv_expense_field, csv_income_field, csv_category_field, csv_balance_field, created_at, updated_at
+		FROM financial_accounts
+		WHERE account_id = $1
+		ORDER BY name ASC
+	`
+	rows, err := s.db.Query(query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get financial accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var accounts []FinancialAccount
+	for rows.Next() {
+		var fa FinancialAccount
+		if err := rows.Scan(&fa.ID, &fa.AccountID, &fa.Name, &fa.Type, &fa.Balance,
+			&fa.CSVDateField, &fa.CSVPayeeField, &fa.CSVExpenseField, &fa.CSVIncomeField,
+			&fa.CSVCategoryField, &fa.CSVBalanceField, &fa.CreatedAt, &fa.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan financial account: %w", err)
+		}
+		accounts = append(accounts, fa)
+	}
+	return accounts, nil
+}
+
+// GetFinancialAccount retrieves a single financial account by ID
+func (s *Storage) GetFinancialAccount(accountID, financialAccountID int) (*FinancialAccount, error) {
+	var fa FinancialAccount
+	query := `
+		SELECT id, account_id, name, type, balance, csv_date_field, csv_payee_field, csv_expense_field, csv_income_field, csv_category_field, csv_balance_field, created_at, updated_at
+		FROM financial_accounts
+		WHERE id = $1 AND account_id = $2
+	`
+	err := s.db.QueryRow(query, financialAccountID, accountID).Scan(
+		&fa.ID, &fa.AccountID, &fa.Name, &fa.Type, &fa.Balance,
+		&fa.CSVDateField, &fa.CSVPayeeField, &fa.CSVExpenseField, &fa.CSVIncomeField,
+		&fa.CSVCategoryField, &fa.CSVBalanceField, &fa.CreatedAt, &fa.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get financial account: %w", err)
+	}
+	return &fa, nil
+}
+
+// UpdateFinancialAccount updates a financial account
+func (s *Storage) UpdateFinancialAccount(accountID, financialAccountID int, name, accountType string, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField string, csvCategoryField, csvBalanceField *string, balance *int) error {
+	query := `
+		UPDATE financial_accounts
+		SET name = $1, type = $2, csv_date_field = $3, csv_payee_field = $4, csv_expense_field = $5, csv_income_field = $6, csv_category_field = $7, csv_balance_field = $8, balance = COALESCE($9, balance), updated_at = CURRENT_TIMESTAMP
+		WHERE id = $10 AND account_id = $11
+	`
+	result, err := s.db.Exec(query, name, accountType, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField, csvCategoryField, csvBalanceField, balance, financialAccountID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update financial account: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("financial account not found or not owned by account")
+	}
+	return nil
+}
+
+// UpdateFinancialAccountBalance updates the balance of a financial account
+func (s *Storage) UpdateFinancialAccountBalance(accountID, financialAccountID int, balance int) error {
+	query := `
+		UPDATE financial_accounts
+		SET balance = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND account_id = $3
+	`
+	result, err := s.db.Exec(query, balance, financialAccountID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update financial account balance: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("financial account not found or not owned by account")
+	}
+	return nil
+}
+
+// DeleteFinancialAccount deletes a financial account
+func (s *Storage) DeleteFinancialAccount(accountID, financialAccountID int) error {
+	result, err := s.db.Exec("DELETE FROM financial_accounts WHERE id = $1 AND account_id = $2", financialAccountID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to delete financial account: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("financial account not found or not owned by account")
+	}
+	return nil
+}
+
 // CreateTransaction creates a new transaction
-func (s *Storage) CreateTransaction(accountID int, date time.Time, originalPayee, payee string, categoryID *int, amount int) (*Transaction, error) {
+func (s *Storage) CreateTransaction(accountID, financialAccountID int, date time.Time, originalPayee, payee string, categoryID *int, amount int) (*Transaction, error) {
 	var t Transaction
 	query := `
-		INSERT INTO transactions (account_id, date, original_payee, payee, category_id, amount)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, account_id, date, original_payee, payee, category_id, amount, created_at, updated_at
+		INSERT INTO transactions (account_id, financial_account_id, date, original_payee, payee, category_id, amount)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, account_id, financial_account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
 	`
-	err := s.db.QueryRow(query, accountID, date, originalPayee, payee, categoryID, amount).Scan(
-		&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.CreatedAt, &t.UpdatedAt,
+	err := s.db.QueryRow(query, accountID, financialAccountID, date, originalPayee, payee, categoryID, amount).Scan(
+		&t.ID, &t.AccountID, &t.FinancialAccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -569,7 +796,7 @@ func (s *Storage) CreateTransaction(accountID int, date time.Time, originalPayee
 // GetTransactionsByAccount retrieves all unreviewed transactions for an account
 func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error) {
 	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+		SELECT id, account_id, financial_account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
 		FROM transactions
 		WHERE account_id = $1 AND reviewed = FALSE
 		ORDER BY date DESC, id DESC
@@ -583,7 +810,7 @@ func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error)
 	var txs []Transaction
 	for rows.Next() {
 		var t Transaction
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.FinancialAccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		txs = append(txs, t)
@@ -594,7 +821,7 @@ func (s *Storage) GetTransactionsByAccount(accountID int) ([]Transaction, error)
 // GetAllTransactionsByAccount retrieves all transactions (both reviewed and unreviewed) for an account
 func (s *Storage) GetAllTransactionsByAccount(accountID int) ([]Transaction, error) {
 	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+		SELECT id, account_id, financial_account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
 		FROM transactions
 		WHERE account_id = $1
 		ORDER BY date DESC, id DESC
@@ -608,7 +835,7 @@ func (s *Storage) GetAllTransactionsByAccount(accountID int) ([]Transaction, err
 	var txs []Transaction
 	for rows.Next() {
 		var t Transaction
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.FinancialAccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		txs = append(txs, t)
@@ -619,7 +846,7 @@ func (s *Storage) GetAllTransactionsByAccount(accountID int) ([]Transaction, err
 // GetTransactionsByMonth retrieves all transactions for a specific month
 func (s *Storage) GetTransactionsByMonth(accountID int, year int, month int) ([]Transaction, error) {
 	query := `
-		SELECT id, account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+		SELECT id, account_id, financial_account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
 		FROM transactions
 		WHERE account_id = $1
 		AND EXTRACT(YEAR FROM date) = $2
@@ -635,7 +862,7 @@ func (s *Storage) GetTransactionsByMonth(accountID int, year int, month int) ([]
 	var txs []Transaction
 	for rows.Next() {
 		var t Transaction
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.FinancialAccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		txs = append(txs, t)
@@ -655,7 +882,7 @@ func (s *Storage) UpdateTransactionPayeeCategory(accountID, transactionID int, p
 }
 
 // BulkInsertTransactions inserts multiple transactions (for CSV upload)
-func (s *Storage) BulkInsertTransactions(accountID int, txs []Transaction) error {
+func (s *Storage) BulkInsertTransactions(accountID, financialAccountID int, txs []Transaction) error {
 	for _, t := range txs {
 		// Apply rules to the transaction
 		modifiedTx, err := s.ApplyRulesToTransaction(accountID, t)
@@ -669,7 +896,7 @@ func (s *Storage) BulkInsertTransactions(accountID int, txs []Transaction) error
 		}
 		// Create the transaction
 		// Bill matching is now handled dynamically by the view, so no explicit matching needed
-		if _, err = s.CreateTransaction(accountID, modifiedTx.Date, modifiedTx.OriginalPayee, payee, modifiedTx.CategoryID, modifiedTx.Amount); err != nil {
+		if _, err = s.CreateTransaction(accountID, financialAccountID, modifiedTx.Date, modifiedTx.OriginalPayee, payee, modifiedTx.CategoryID, modifiedTx.Amount); err != nil {
 			return err
 		}
 	}
@@ -1105,19 +1332,275 @@ func (s *Storage) ApplyRuleToAllTransactions(accountID int, rule Rule) (int, err
 	return updated, nil
 }
 
+// BudgetPlan management methods
+
+// CreateBudgetPlan creates a new budget plan
+func (s *Storage) CreateBudgetPlan(accountID int, name string) (*BudgetPlan, error) {
+	var plan BudgetPlan
+	query := `
+		INSERT INTO budget_plans (account_id, name)
+		VALUES ($1, $2)
+		RETURNING id, account_id, name, is_active, created_at, updated_at
+	`
+	err := s.db.QueryRow(query, accountID, name).Scan(
+		&plan.ID, &plan.AccountID, &plan.Name, &plan.IsActive, &plan.CreatedAt, &plan.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create budget plan: %w", err)
+	}
+	return &plan, nil
+}
+
+// GetBudgetPlansByAccount retrieves all budget plans for an account
+func (s *Storage) GetBudgetPlansByAccount(accountID int) ([]BudgetPlan, error) {
+	query := `
+		SELECT id, account_id, name, is_active, created_at, updated_at
+		FROM budget_plans
+		WHERE account_id = $1
+		ORDER BY is_active DESC, name ASC
+	`
+	rows, err := s.db.Query(query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get budget plans: %w", err)
+	}
+	defer rows.Close()
+
+	var plans []BudgetPlan
+	for rows.Next() {
+		var plan BudgetPlan
+		if err := rows.Scan(&plan.ID, &plan.AccountID, &plan.Name, &plan.IsActive, &plan.CreatedAt, &plan.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan budget plan: %w", err)
+		}
+		plans = append(plans, plan)
+	}
+	return plans, nil
+}
+
+// GetBudgetPlan retrieves a single budget plan by ID
+func (s *Storage) GetBudgetPlan(accountID, planID int) (*BudgetPlan, error) {
+	var plan BudgetPlan
+	query := `
+		SELECT id, account_id, name, is_active, created_at, updated_at
+		FROM budget_plans
+		WHERE id = $1 AND account_id = $2
+	`
+	err := s.db.QueryRow(query, planID, accountID).Scan(
+		&plan.ID, &plan.AccountID, &plan.Name, &plan.IsActive, &plan.CreatedAt, &plan.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get budget plan: %w", err)
+	}
+	return &plan, nil
+}
+
+// GetActiveBudgetPlan retrieves the active budget plan for an account
+func (s *Storage) GetActiveBudgetPlan(accountID int) (*BudgetPlan, error) {
+	var plan BudgetPlan
+	query := `
+		SELECT id, account_id, name, is_active, created_at, updated_at
+		FROM budget_plans
+		WHERE account_id = $1 AND is_active = TRUE
+		LIMIT 1
+	`
+	err := s.db.QueryRow(query, accountID).Scan(
+		&plan.ID, &plan.AccountID, &plan.Name, &plan.IsActive, &plan.CreatedAt, &plan.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get active budget plan: %w", err)
+	}
+	return &plan, nil
+}
+
+// UpdateBudgetPlan updates a budget plan's name
+func (s *Storage) UpdateBudgetPlan(accountID, planID int, name string) error {
+	query := `
+		UPDATE budget_plans
+		SET name = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND account_id = $3
+	`
+	result, err := s.db.Exec(query, name, planID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update budget plan: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("budget plan not found or not owned by account")
+	}
+	return nil
+}
+
+// SetActiveBudgetPlan sets a budget plan as active and deactivates all others for the account
+func (s *Storage) SetActiveBudgetPlan(accountID, planID int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// First, deactivate all plans for this account
+	_, err = tx.Exec(`
+		UPDATE budget_plans
+		SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+		WHERE account_id = $1
+	`, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate budget plans: %w", err)
+	}
+
+	// Then, activate the specified plan
+	result, err := tx.Exec(`
+		UPDATE budget_plans
+		SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1 AND account_id = $2
+	`, planID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to activate budget plan: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("budget plan not found or not owned by account")
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteBudgetPlan deletes a budget plan
+func (s *Storage) DeleteBudgetPlan(accountID, planID int) error {
+	// Check if plan is active - prevent deletion of active plan
+	plan, err := s.GetBudgetPlan(accountID, planID)
+	if err != nil {
+		return fmt.Errorf("failed to get budget plan: %w", err)
+	}
+	if plan == nil {
+		return fmt.Errorf("budget plan not found")
+	}
+	if plan.IsActive {
+		return fmt.Errorf("cannot delete active budget plan")
+	}
+
+	// Check if plan has recurring transactions
+	var count int
+	query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+	err = s.db.QueryRow(query, planID).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check recurring transactions: %w", err)
+	}
+	if count > 0 {
+		return fmt.Errorf("cannot delete budget plan with recurring transactions")
+	}
+
+	// Delete the plan
+	result, err := s.db.Exec("DELETE FROM budget_plans WHERE id = $1 AND account_id = $2", planID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to delete budget plan: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("budget plan not found or not owned by account")
+	}
+	return nil
+}
+
+// CopyBudgetPlan copies a budget plan and all its recurring transactions
+func (s *Storage) CopyBudgetPlan(accountID, sourcePlanID int, newName string) (*BudgetPlan, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Verify source plan exists and belongs to account
+	var sourcePlan BudgetPlan
+	query := `
+		SELECT id, account_id, name, is_active, created_at, updated_at
+		FROM budget_plans
+		WHERE id = $1 AND account_id = $2
+	`
+	err = tx.QueryRow(query, sourcePlanID, accountID).Scan(
+		&sourcePlan.ID, &sourcePlan.AccountID, &sourcePlan.Name, &sourcePlan.IsActive,
+		&sourcePlan.CreatedAt, &sourcePlan.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("source budget plan not found")
+		}
+		return nil, fmt.Errorf("failed to get source budget plan: %w", err)
+	}
+
+	// Create new plan
+	var newPlan BudgetPlan
+	insertQuery := `
+		INSERT INTO budget_plans (account_id, name, is_active)
+		VALUES ($1, $2, FALSE)
+		RETURNING id, account_id, name, is_active, created_at, updated_at
+	`
+	err = tx.QueryRow(insertQuery, accountID, newName).Scan(
+		&newPlan.ID, &newPlan.AccountID, &newPlan.Name, &newPlan.IsActive,
+		&newPlan.CreatedAt, &newPlan.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create budget plan copy: %w", err)
+	}
+
+	// Copy all recurring transactions
+	copyQuery := `
+		INSERT INTO recurring_transactions (
+			account_id, budget_plan_id, financial_account_id, name, counterparty,
+			category_id, expected_amount, tolerance, start_date, recurrence_unit,
+			recurrence_value, end_date
+		)
+		SELECT 
+			account_id, $1, financial_account_id, name, counterparty,
+			category_id, expected_amount, tolerance, start_date, recurrence_unit,
+			recurrence_value, end_date
+		FROM recurring_transactions
+		WHERE budget_plan_id = $2
+	`
+	_, err = tx.Exec(copyQuery, newPlan.ID, sourcePlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy recurring transactions: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return &newPlan, nil
+}
+
 // RecurringTransaction management methods
 
 // CreateRecurringTransaction creates a new recurring transaction (expense or income)
-func (s *Storage) CreateRecurringTransaction(accountID int, name, counterparty string, categoryID *int, expectedAmount, tolerance int, startDate time.Time, recurrenceUnit string, recurrenceValue int) (*RecurringTransaction, error) {
+func (s *Storage) CreateRecurringTransaction(accountID, budgetPlanID, financialAccountID int, name, counterparty string, categoryID *int, expectedAmount, tolerance int, startDate time.Time, recurrenceUnit string, recurrenceValue int) (*RecurringTransaction, error) {
 	var rt RecurringTransaction
 	var endDate sql.NullTime
 	query := `
-		INSERT INTO recurring_transactions (account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		INSERT INTO recurring_transactions (account_id, budget_plan_id, financial_account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id, account_id, budget_plan_id, financial_account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
 	`
-	err := s.db.QueryRow(query, accountID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue, nil).Scan(
-		&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+	err := s.db.QueryRow(query, accountID, budgetPlanID, financialAccountID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue, nil).Scan(
+		&rt.ID, &rt.AccountID, &rt.BudgetPlanID, &rt.FinancialAccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
 		&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
 		&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt,
 	)
@@ -1131,15 +1614,15 @@ func (s *Storage) CreateRecurringTransaction(accountID int, name, counterparty s
 	return &rt, nil
 }
 
-// GetRecurringTransactionsByAccount retrieves all recurring transactions for an account
-func (s *Storage) GetRecurringTransactionsByAccount(accountID int) ([]RecurringTransaction, error) {
+// GetRecurringTransactionsByAccount retrieves all recurring transactions for an account and budget plan
+func (s *Storage) GetRecurringTransactionsByAccount(accountID, budgetPlanID int) ([]RecurringTransaction, error) {
 	query := `
-		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		SELECT id, account_id, budget_plan_id, financial_account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
 		FROM recurring_transactions
-		WHERE account_id = $1
+		WHERE account_id = $1 AND budget_plan_id = $2
 		ORDER BY name ASC
 	`
-	rows, err := s.db.Query(query, accountID)
+	rows, err := s.db.Query(query, accountID, budgetPlanID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recurring transactions: %w", err)
 	}
@@ -1149,7 +1632,7 @@ func (s *Storage) GetRecurringTransactionsByAccount(accountID int) ([]RecurringT
 	for rows.Next() {
 		var rt RecurringTransaction
 		var endDate sql.NullTime
-		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.BudgetPlanID, &rt.FinancialAccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
 			&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
 			&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan recurring transaction: %w", err)
@@ -1162,15 +1645,15 @@ func (s *Storage) GetRecurringTransactionsByAccount(accountID int) ([]RecurringT
 	return rts, nil
 }
 
-// GetRecurringExpensesByAccount retrieves all recurring expenses for an account
-func (s *Storage) GetRecurringExpensesByAccount(accountID int) ([]RecurringTransaction, error) {
+// GetRecurringExpensesByAccount retrieves all recurring expenses for an account and budget plan
+func (s *Storage) GetRecurringExpensesByAccount(accountID, budgetPlanID int) ([]RecurringTransaction, error) {
 	query := `
-		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		SELECT id, account_id, budget_plan_id, financial_account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
 		FROM recurring_transactions
-		WHERE account_id = $1 AND type = 'expense'
+		WHERE account_id = $1 AND budget_plan_id = $2 AND type = 'expense'
 		ORDER BY name ASC
 	`
-	rows, err := s.db.Query(query, accountID)
+	rows, err := s.db.Query(query, accountID, budgetPlanID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recurring expenses: %w", err)
 	}
@@ -1180,7 +1663,7 @@ func (s *Storage) GetRecurringExpensesByAccount(accountID int) ([]RecurringTrans
 	for rows.Next() {
 		var rt RecurringTransaction
 		var endDate sql.NullTime
-		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.BudgetPlanID, &rt.FinancialAccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
 			&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
 			&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan recurring expense: %w", err)
@@ -1193,15 +1676,15 @@ func (s *Storage) GetRecurringExpensesByAccount(accountID int) ([]RecurringTrans
 	return rts, nil
 }
 
-// GetRecurringIncomeByAccount retrieves all recurring income for an account
-func (s *Storage) GetRecurringIncomeByAccount(accountID int) ([]RecurringTransaction, error) {
+// GetRecurringIncomeByAccount retrieves all recurring income for an account and budget plan
+func (s *Storage) GetRecurringIncomeByAccount(accountID, budgetPlanID int) ([]RecurringTransaction, error) {
 	query := `
-		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		SELECT id, account_id, budget_plan_id, financial_account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
 		FROM recurring_transactions
-		WHERE account_id = $1 AND type = 'income'
+		WHERE account_id = $1 AND budget_plan_id = $2 AND type = 'income'
 		ORDER BY name ASC
 	`
-	rows, err := s.db.Query(query, accountID)
+	rows, err := s.db.Query(query, accountID, budgetPlanID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recurring income: %w", err)
 	}
@@ -1211,7 +1694,7 @@ func (s *Storage) GetRecurringIncomeByAccount(accountID int) ([]RecurringTransac
 	for rows.Next() {
 		var rt RecurringTransaction
 		var endDate sql.NullTime
-		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+		if err := rows.Scan(&rt.ID, &rt.AccountID, &rt.BudgetPlanID, &rt.FinancialAccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
 			&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
 			&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan recurring income: %w", err)
@@ -1229,12 +1712,12 @@ func (s *Storage) GetRecurringTransaction(accountID, rtID int) (*RecurringTransa
 	var rt RecurringTransaction
 	var endDate sql.NullTime
 	query := `
-		SELECT id, account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
+		SELECT id, account_id, budget_plan_id, financial_account_id, name, counterparty, category_id, expected_amount, tolerance, start_date, recurrence_unit, recurrence_value, end_date, type, archived, created_at, updated_at
 		FROM recurring_transactions
 		WHERE id = $1 AND account_id = $2
 	`
 	err := s.db.QueryRow(query, rtID, accountID).Scan(
-		&rt.ID, &rt.AccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
+		&rt.ID, &rt.AccountID, &rt.BudgetPlanID, &rt.FinancialAccountID, &rt.Name, &rt.Counterparty, &rt.CategoryID,
 		&rt.ExpectedAmount, &rt.Tolerance, &rt.StartDate, &rt.RecurrenceUnit, &rt.RecurrenceValue,
 		&endDate, &rt.Type, &rt.Archived, &rt.CreatedAt, &rt.UpdatedAt,
 	)
@@ -1251,13 +1734,13 @@ func (s *Storage) GetRecurringTransaction(accountID, rtID int) (*RecurringTransa
 }
 
 // UpdateRecurringTransaction updates a recurring transaction
-func (s *Storage) UpdateRecurringTransaction(accountID, rtID int, name, counterparty string, categoryID *int, expectedAmount, tolerance int, startDate time.Time, recurrenceUnit string, recurrenceValue int) error {
+func (s *Storage) UpdateRecurringTransaction(accountID, rtID, budgetPlanID, financialAccountID int, name, counterparty string, categoryID *int, expectedAmount, tolerance int, startDate time.Time, recurrenceUnit string, recurrenceValue int) error {
 	query := `
 		UPDATE recurring_transactions
-		SET name = $1, counterparty = $2, category_id = $3, expected_amount = $4, tolerance = $5, start_date = $6, recurrence_unit = $7, recurrence_value = $8, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $9 AND account_id = $10
+		SET budget_plan_id = $1, financial_account_id = $2, name = $3, counterparty = $4, category_id = $5, expected_amount = $6, tolerance = $7, start_date = $8, recurrence_unit = $9, recurrence_value = $10, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $11 AND account_id = $12
 	`
-	result, err := s.db.Exec(query, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue, rtID, accountID)
+	result, err := s.db.Exec(query, budgetPlanID, financialAccountID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue, rtID, accountID)
 	if err != nil {
 		return fmt.Errorf("failed to update recurring transaction: %w", err)
 	}
@@ -1309,17 +1792,20 @@ func (s *Storage) DeleteRecurringTransaction(accountID, rtID int) error {
 }
 
 // GetMatchedTransactionsForRecurring returns all transaction dates matched to a recurring transaction in a given month
-func (s *Storage) GetMatchedTransactionsForRecurring(rtID int, year, month int) ([]time.Time, error) {
+// Filters by budget_plan_id to ensure only matches from the selected budget plan are returned
+func (s *Storage) GetMatchedTransactionsForRecurring(rtID, budgetPlanID int, year, month int) ([]time.Time, error) {
 	query := `
-		SELECT transaction_date
-		FROM recurring_transactions_view
-		WHERE recurring_transaction_id = $1
-		AND year = $2
-		AND month = $3
-		ORDER BY transaction_date
+		SELECT rtv.transaction_date
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		WHERE rtv.recurring_transaction_id = $1
+		AND rt.budget_plan_id = $2
+		AND rtv.year = $3
+		AND rtv.month = $4
+		ORDER BY rtv.transaction_date
 	`
 	
-	rows, err := s.db.Query(query, rtID, year, month)
+	rows, err := s.db.Query(query, rtID, budgetPlanID, year, month)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get matched transactions: %w", err)
 	}
@@ -1338,14 +1824,19 @@ func (s *Storage) GetMatchedTransactionsForRecurring(rtID int, year, month int) 
 }
 
 // IsRecurringTransactionMatchedForMonth checks if a recurring transaction has a matching transaction for a given month/year using the view
-func (s *Storage) IsRecurringTransactionMatchedForMonth(rtID int, year, month int) (bool, error) {
+// Filters by budget_plan_id to ensure only matches from the selected budget plan are returned
+func (s *Storage) IsRecurringTransactionMatchedForMonth(rtID, budgetPlanID int, year, month int) (bool, error) {
 	var count int
 	query := `
 		SELECT COUNT(*)
-		FROM recurring_transactions_view
-		WHERE recurring_transaction_id = $1 AND year = $2 AND month = $3
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		WHERE rtv.recurring_transaction_id = $1 
+		AND rt.budget_plan_id = $2
+		AND rtv.year = $3 
+		AND rtv.month = $4
 	`
-	err := s.db.QueryRow(query, rtID, year, month).Scan(&count)
+	err := s.db.QueryRow(query, rtID, budgetPlanID, year, month).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("failed to check if recurring transaction is matched: %w", err)
 	}
@@ -1353,15 +1844,20 @@ func (s *Storage) IsRecurringTransactionMatchedForMonth(rtID int, year, month in
 }
 
 // GetRecurringTransactionDate gets the transaction date for a matched recurring transaction in a given month/year
-func (s *Storage) GetRecurringTransactionDate(rtID int, year, month int) (*time.Time, error) {
+// Filters by budget_plan_id to ensure only matches from the selected budget plan are returned
+func (s *Storage) GetRecurringTransactionDate(rtID, budgetPlanID int, year, month int) (*time.Time, error) {
 	var transactionDate time.Time
 	query := `
-		SELECT transaction_date
-		FROM recurring_transactions_view
-		WHERE recurring_transaction_id = $1 AND year = $2 AND month = $3
+		SELECT rtv.transaction_date
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		WHERE rtv.recurring_transaction_id = $1 
+		AND rt.budget_plan_id = $2
+		AND rtv.year = $3 
+		AND rtv.month = $4
 		LIMIT 1
 	`
-	err := s.db.QueryRow(query, rtID, year, month).Scan(&transactionDate)
+	err := s.db.QueryRow(query, rtID, budgetPlanID, year, month).Scan(&transactionDate)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1371,22 +1867,27 @@ func (s *Storage) GetRecurringTransactionDate(rtID int, year, month int) (*time.
 	return &transactionDate, nil
 }
 
-// MatchRecurringTransactionsToTransaction checks if a transaction matches any recurring transactions for an account
+// MatchRecurringTransactionsToTransaction checks if a transaction matches any recurring transactions for an account and budget plan
 // Returns the matched recurring transaction if found, nil otherwise
 // Note: This is now read-only - matches are determined dynamically by the view
-func (s *Storage) MatchRecurringTransactionsToTransaction(accountID int, tx *Transaction) (*RecurringTransaction, error) {
+// Filters by budget_plan_id to ensure only matches from the selected budget plan are returned
+func (s *Storage) MatchRecurringTransactionsToTransaction(accountID, budgetPlanID int, tx *Transaction) (*RecurringTransaction, error) {
 	// Check the view to see if this transaction matches any recurring transaction
 	var rtID int
 	year := tx.Date.Year()
 	month := int(tx.Date.Month())
 
 	query := `
-		SELECT recurring_transaction_id
-		FROM recurring_transactions_view
-		WHERE transaction_id = $1 AND year = $2 AND month = $3
+		SELECT rtv.recurring_transaction_id
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		WHERE rtv.transaction_id = $1 
+		AND rt.budget_plan_id = $2
+		AND rtv.year = $3 
+		AND rtv.month = $4
 		LIMIT 1
 	`
-	err := s.db.QueryRow(query, tx.ID, year, month).Scan(&rtID)
+	err := s.db.QueryRow(query, tx.ID, budgetPlanID, year, month).Scan(&rtID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // No match found
@@ -1400,4 +1901,519 @@ func (s *Storage) MatchRecurringTransactionsToTransaction(accountID int, tx *Tra
 		return nil, fmt.Errorf("failed to get matched recurring transaction: %w", err)
 	}
 	return rt, nil
+}
+
+// GetLastReceivedIncomeOccurrence finds the most recent income transaction date from recurring_transactions_view
+func (s *Storage) GetLastReceivedIncomeOccurrence(accountID, budgetPlanID int) (*time.Time, error) {
+	query := `
+		SELECT rtv.transaction_date
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		WHERE rt.account_id = $1 AND rt.budget_plan_id = $2 AND rt.type = 'income'
+		ORDER BY rtv.transaction_date DESC
+		LIMIT 1
+	`
+	var transactionDate time.Time
+	err := s.db.QueryRow(query, accountID, budgetPlanID).Scan(&transactionDate)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No income received yet
+		}
+		return nil, fmt.Errorf("failed to get last received income occurrence: %w", err)
+	}
+	return &transactionDate, nil
+}
+
+// GetLastReceivedIncomeAmount gets the amount of the most recent income transaction
+func (s *Storage) GetLastReceivedIncomeAmount(accountID, budgetPlanID int) (*int, error) {
+	query := `
+		SELECT t.amount
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		INNER JOIN transactions t ON rtv.transaction_id = t.id
+		WHERE rt.account_id = $1 AND rt.budget_plan_id = $2 AND rt.type = 'income'
+		ORDER BY rtv.transaction_date DESC
+		LIMIT 1
+	`
+	var amount int
+	err := s.db.QueryRow(query, accountID, budgetPlanID).Scan(&amount)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No income received yet
+		}
+		return nil, fmt.Errorf("failed to get last received income amount: %w", err)
+	}
+	return &amount, nil
+}
+
+// GetNextUpcomingIncomeOccurrence finds the next recurring income expected date that hasn't been received yet
+func (s *Storage) GetNextUpcomingIncomeOccurrence(accountID, budgetPlanID int) (*time.Time, error) {
+	// Get the last received income date to calculate from there
+	lastIncomeDate, err := s.GetLastReceivedIncomeOccurrence(accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get last received income: %w", err)
+	}
+	
+	// Get all recurring income transactions for this account and budget plan
+	incomeRts, err := s.GetRecurringIncomeByAccount(accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring income: %w", err)
+	}
+	
+	if len(incomeRts) == 0 {
+		return nil, nil // No recurring income configured
+	}
+	
+	var nextOccurrence *time.Time
+	now := time.Now()
+	
+	for _, rt := range incomeRts {
+		var startDate time.Time
+		if lastIncomeDate != nil {
+			// Start from the last received income date to find the next occurrence
+			startDate = *lastIncomeDate
+		} else {
+			// No income received yet, start from now
+			startDate = now
+		}
+		
+		// Calculate next occurrence after the start date
+		// Add 1 day to ensure we get the NEXT occurrence, not the same one
+		next := rt.NextOccurrence(startDate.AddDate(0, 0, 1))
+		if next.IsZero() {
+			// If no next occurrence from last date, try from now
+			if lastIncomeDate != nil {
+				next = rt.NextOccurrence(now)
+			}
+			if next.IsZero() {
+				continue // This recurring transaction has no more occurrences
+			}
+		}
+		
+		// If the calculated next occurrence is the same as the last income date, 
+		// calculate the one after that
+		if lastIncomeDate != nil && next.Equal(*lastIncomeDate) {
+			next = rt.NextOccurrence(next.AddDate(0, 0, 1))
+			if next.IsZero() {
+				continue
+			}
+		}
+		
+		// Only include if it's in the future or today
+		if !next.Before(now) {
+			if nextOccurrence == nil || next.Before(*nextOccurrence) {
+				nextOccurrence = &next
+			}
+		}
+	}
+	
+	return nextOccurrence, nil
+}
+
+// GetPreviousIncomeOccurrenceBefore finds the most recent income occurrence before the given date
+// Filters by budget_plan_id to ensure only matches from the selected budget plan are returned
+func (s *Storage) GetPreviousIncomeOccurrenceBefore(accountID, budgetPlanID int, beforeDate time.Time) (*time.Time, error) {
+	query := `
+		SELECT rtv.transaction_date
+		FROM recurring_transactions_view rtv
+		INNER JOIN recurring_transactions rt ON rtv.recurring_transaction_id = rt.id
+		WHERE rt.account_id = $1 AND rt.budget_plan_id = $2 AND rt.type = 'income' AND rtv.transaction_date < $3
+		ORDER BY rtv.transaction_date DESC
+		LIMIT 1
+	`
+	var transactionDate time.Time
+	err := s.db.QueryRow(query, accountID, budgetPlanID, beforeDate).Scan(&transactionDate)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No previous income found
+		}
+		return nil, fmt.Errorf("failed to get previous income occurrence: %w", err)
+	}
+	return &transactionDate, nil
+}
+
+// GetNextIncomeOccurrenceAfter finds the next income occurrence after the given date
+func (s *Storage) GetNextIncomeOccurrenceAfter(accountID, budgetPlanID int, afterDate time.Time) (*time.Time, error) {
+	// Get all recurring income transactions for this account and budget plan
+	incomeRts, err := s.GetRecurringIncomeByAccount(accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring income: %w", err)
+	}
+	
+	if len(incomeRts) == 0 {
+		return nil, nil // No recurring income configured
+	}
+	
+	var nextOccurrence *time.Time
+	
+	for _, rt := range incomeRts {
+		// Calculate next occurrence after the given date
+		next := rt.NextOccurrence(afterDate.AddDate(0, 0, 1))
+		if next.IsZero() {
+			continue // This recurring transaction has no more occurrences
+		}
+		
+		// Only include if it's after the given date
+		if next.After(afterDate) {
+			if nextOccurrence == nil || next.Before(*nextOccurrence) {
+				nextOccurrence = &next
+			}
+		}
+	}
+	
+	return nextOccurrence, nil
+}
+
+// GetTransactionsBetweenDates gets all transactions for an account between two dates (inclusive)
+func (s *Storage) GetTransactionsBetweenDates(accountID int, startDate, endDate time.Time) ([]Transaction, error) {
+	query := `
+		SELECT id, account_id, financial_account_id, date, original_payee, payee, category_id, amount, reviewed, created_at, updated_at
+		FROM transactions
+		WHERE account_id = $1
+		AND date >= $2
+		AND date <= $3
+		ORDER BY date ASC, id ASC
+	`
+	rows, err := s.db.Query(query, accountID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions between dates: %w", err)
+	}
+	defer rows.Close()
+
+	var txs []Transaction
+	for rows.Next() {
+		var t Transaction
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.FinancialAccountID, &t.Date, &t.OriginalPayee, &t.Payee, &t.CategoryID, &t.Amount, &t.Reviewed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan transaction: %w", err)
+		}
+		txs = append(txs, t)
+	}
+	return txs, nil
+}
+
+// GetUpcomingExpenseOccurrencesBetweenDates gets upcoming recurring expense occurrences between two dates
+func (s *Storage) GetUpcomingExpenseOccurrencesBetweenDates(accountID, budgetPlanID int, startDate, endDate time.Time) ([]Occurrence, error) {
+	// Get all recurring expenses for this account and budget plan
+	expenses, err := s.GetRecurringExpensesByAccount(accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring expenses: %w", err)
+	}
+	
+	var occurrences []Occurrence
+	
+	for _, expense := range expenses {
+		// Get all occurrences for the date range
+		// We need to iterate through months/years that overlap with the date range
+		current := startDate
+		for !current.After(endDate) {
+			year := current.Year()
+			month := int(current.Month())
+			
+			// Get occurrences for this month
+			monthOccurrences := expense.GetOccurrencesInMonth(year, time.Month(month))
+			
+			for _, occ := range monthOccurrences {
+				// Only include occurrences that fall within our date range
+				if !occ.ExpectedDate.Before(startDate) && !occ.ExpectedDate.After(endDate) {
+					// Check if this occurrence has been matched
+					matched, err := s.IsRecurringTransactionMatchedForMonth(expense.ID, budgetPlanID, year, month)
+					if err == nil {
+						if matched {
+							// Get the transaction date if it was matched
+							txDate, err := s.GetRecurringTransactionDate(expense.ID, budgetPlanID, year, month)
+							if err == nil && txDate != nil {
+								occ.IsMatched = true
+								occ.TransactionDate = txDate
+							}
+						}
+						// Include both matched and unmatched expenses in the period
+						occurrences = append(occurrences, occ)
+					}
+				}
+			}
+			
+			// Move to next month
+			current = current.AddDate(0, 1, 0)
+		}
+	}
+	
+	return occurrences, nil
+}
+
+// Budget management methods
+
+// CreateBudget creates a new budget
+func (s *Storage) CreateBudget(accountID, budgetPlanID int, categoryID *int, amountType string, amount int) (*Budget, error) {
+	var budget Budget
+	query := `
+		INSERT INTO budgets (account_id, budget_plan_id, category_id, amount_type, amount)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, account_id, budget_plan_id, category_id, amount_type, amount, created_at, updated_at
+	`
+	err := s.db.QueryRow(query, accountID, budgetPlanID, categoryID, amountType, amount).Scan(
+		&budget.ID, &budget.AccountID, &budget.BudgetPlanID, &budget.CategoryID,
+		&budget.AmountType, &budget.Amount, &budget.CreatedAt, &budget.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create budget: %w", err)
+	}
+	return &budget, nil
+}
+
+// GetBudgetsByBudgetPlan retrieves all budgets for a budget plan
+func (s *Storage) GetBudgetsByBudgetPlan(accountID, budgetPlanID int) ([]Budget, error) {
+	query := `
+		SELECT id, account_id, budget_plan_id, category_id, amount_type, amount, created_at, updated_at
+		FROM budgets
+		WHERE account_id = $1 AND budget_plan_id = $2
+		ORDER BY category_id NULLS LAST
+	`
+	rows, err := s.db.Query(query, accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get budgets: %w", err)
+	}
+	defer rows.Close()
+
+	var budgets []Budget
+	for rows.Next() {
+		var b Budget
+		if err := rows.Scan(&b.ID, &b.AccountID, &b.BudgetPlanID, &b.CategoryID,
+			&b.AmountType, &b.Amount, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan budget: %w", err)
+		}
+		budgets = append(budgets, b)
+	}
+	return budgets, nil
+}
+
+// GetBudget retrieves a single budget by ID
+func (s *Storage) GetBudget(accountID, budgetID int) (*Budget, error) {
+	var budget Budget
+	query := `
+		SELECT id, account_id, budget_plan_id, category_id, amount_type, amount, created_at, updated_at
+		FROM budgets
+		WHERE id = $1 AND account_id = $2
+	`
+	err := s.db.QueryRow(query, budgetID, accountID).Scan(
+		&budget.ID, &budget.AccountID, &budget.BudgetPlanID, &budget.CategoryID,
+		&budget.AmountType, &budget.Amount, &budget.CreatedAt, &budget.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get budget: %w", err)
+	}
+	return &budget, nil
+}
+
+// UpdateBudget updates a budget
+func (s *Storage) UpdateBudget(accountID, budgetID int, categoryID *int, amountType string, amount int) error {
+	query := `
+		UPDATE budgets
+		SET category_id = $1, amount_type = $2, amount = $3, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $4 AND account_id = $5
+	`
+	result, err := s.db.Exec(query, categoryID, amountType, amount, budgetID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update budget: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("budget not found or not owned by account")
+	}
+	return nil
+}
+
+// DeleteBudget deletes a budget
+func (s *Storage) DeleteBudget(accountID, budgetID int) error {
+	result, err := s.db.Exec("DELETE FROM budgets WHERE id = $1 AND account_id = $2", budgetID, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to delete budget: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("budget not found or not owned by account")
+	}
+	return nil
+}
+
+// CalculateExpectedYearlyIncome calculates the expected yearly income from all recurring income transactions
+func (s *Storage) CalculateExpectedYearlyIncome(accountID, budgetPlanID int) (int, error) {
+	// Get all recurring income transactions for this budget plan
+	incomeRts, err := s.GetRecurringIncomeByAccount(accountID, budgetPlanID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get recurring income: %w", err)
+	}
+
+	var totalYearlyIncome int64
+	for _, rt := range incomeRts {
+		// Calculate occurrences per year based on recurrence_unit and recurrence_value
+		var occurrencesPerYear float64
+		switch rt.RecurrenceUnit {
+		case "week":
+			occurrencesPerYear = 52.0 / float64(rt.RecurrenceValue)
+		case "month":
+			occurrencesPerYear = 12.0 / float64(rt.RecurrenceValue)
+		case "year":
+			occurrencesPerYear = 1.0 / float64(rt.RecurrenceValue)
+		default:
+			continue
+		}
+
+		// Multiply expected_amount by occurrences per year
+		yearlyAmount := float64(rt.ExpectedAmount) * occurrencesPerYear
+		totalYearlyIncome += int64(yearlyAmount)
+	}
+
+	return int(totalYearlyIncome), nil
+}
+
+// GetBudgetSpentAmount calculates the total spent amount for a category in a given month
+func (s *Storage) GetBudgetSpentAmount(accountID, budgetPlanID int, categoryID *int, year, month int) (int, error) {
+	var query string
+	var args []interface{}
+	
+	if categoryID == nil {
+		// Query for uncategorized transactions
+		query = `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM transactions
+			WHERE account_id = $1
+			AND EXTRACT(YEAR FROM date) = $2
+			AND EXTRACT(MONTH FROM date) = $3
+			AND category_id IS NULL
+		`
+		args = []interface{}{accountID, year, month}
+	} else {
+		// Query for specific category
+		query = `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM transactions
+			WHERE account_id = $1
+			AND EXTRACT(YEAR FROM date) = $2
+			AND EXTRACT(MONTH FROM date) = $3
+			AND category_id = $4
+		`
+		args = []interface{}{accountID, year, month, *categoryID}
+	}
+	
+	var spent int
+	err := s.db.QueryRow(query, args...).Scan(&spent)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get budget spent amount: %w", err)
+	}
+	return spent, nil
+}
+
+// GetBudgetExpectedAmount calculates the expected amount from recurring transactions not yet matched
+func (s *Storage) GetBudgetExpectedAmount(accountID, budgetPlanID int, categoryID *int, year, month int) (int, error) {
+	// Get all recurring expenses for this budget plan and category
+	expenses, err := s.GetRecurringExpensesByAccount(accountID, budgetPlanID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get recurring expenses: %w", err)
+	}
+
+	var totalExpected int64
+	for _, expense := range expenses {
+		// Check if this expense matches the category
+		if categoryID != nil && expense.CategoryID != nil && *expense.CategoryID != *categoryID {
+			continue
+		}
+		if categoryID == nil && expense.CategoryID != nil {
+			continue
+		}
+		if categoryID != nil && expense.CategoryID == nil {
+			continue
+		}
+
+		// Get occurrences for this month
+		occurrences := expense.GetOccurrencesInMonth(year, time.Month(month))
+		for _, occ := range occurrences {
+			// Only count if not matched
+			if !occ.IsMatched {
+				// Expected amount is negative for expenses, make it positive for budget calculation
+				amount := expense.ExpectedAmount
+				if amount < 0 {
+					amount = -amount
+				}
+				totalExpected += int64(amount)
+			}
+		}
+	}
+
+	return int(totalExpected), nil
+}
+
+// GetBudgetSummaries retrieves budgets with calculated spent and expected amounts
+func (s *Storage) GetBudgetSummaries(accountID, budgetPlanID int, year, month int) ([]BudgetSummary, error) {
+	// Get all budgets for this budget plan
+	budgets, err := s.GetBudgetsByBudgetPlan(accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get budgets: %w", err)
+	}
+
+	// Calculate yearly income
+	yearlyIncome, err := s.CalculateExpectedYearlyIncome(accountID, budgetPlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate yearly income: %w", err)
+	}
+
+	// Get all categories for category name lookup
+	categories, err := s.GetCategoriesByAccount(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get categories: %w", err)
+	}
+	categoryMap := make(map[int]string)
+	for _, cat := range categories {
+		categoryMap[cat.ID] = cat.Name
+	}
+
+	var summaries []BudgetSummary
+	for _, budget := range budgets {
+		summary := BudgetSummary{
+			Budget: budget,
+		}
+
+		// Get category name
+		if budget.CategoryID != nil {
+			if name, ok := categoryMap[*budget.CategoryID]; ok {
+				summary.CategoryName = name
+			} else {
+				summary.CategoryName = "Unknown"
+			}
+		} else {
+			summary.CategoryName = "Uncategorized"
+		}
+
+		// Calculate monthly amount
+		summary.MonthlyAmount = budget.MonthlyAmount(yearlyIncome)
+
+		// Get spent amount
+		spent, err := s.GetBudgetSpentAmount(accountID, budgetPlanID, budget.CategoryID, year, month)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get spent amount: %w", err)
+		}
+		summary.SpentAmount = spent
+
+		// Get expected amount
+		expected, err := s.GetBudgetExpectedAmount(accountID, budgetPlanID, budget.CategoryID, year, month)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get expected amount: %w", err)
+		}
+		summary.ExpectedAmount = expected
+
+		// Calculate remaining
+		summary.Remaining = summary.MonthlyAmount - summary.SpentAmount - summary.ExpectedAmount
+
+		summaries = append(summaries, summary)
+	}
+
+	return summaries, nil
 }

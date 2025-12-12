@@ -84,6 +84,15 @@ func (s *Server) SetupRoutes() {
 		r.Delete("/{id}", s.deleteCategoryHandler)
 	})
 
+	// Financial accounts routes (require authentication)
+	s.router.With(authHandler.AuthRequiredMiddleware).Route("/financial-accounts", func(r chi.Router) {
+		r.Get("/", s.financialAccountsPageHandler)
+		r.Post("/", s.createFinancialAccountHandler)
+		r.Put("/{id}", s.updateFinancialAccountHandler)
+		r.Delete("/{id}", s.deleteFinancialAccountHandler)
+		r.Get("/{id}/edit", s.editFinancialAccountHandler)
+	})
+
 	// Transactions routes (require authentication)
 	s.router.With(authHandler.AuthRequiredMiddleware).Route("/transactions", func(r chi.Router) {
 		r.Get("/", s.transactionsPageHandler)
@@ -107,8 +116,19 @@ func (s *Server) SetupRoutes() {
 		r.Get("/{id}/edit", s.editRuleHandler)
 	})
 
-	// Bills routes (require authentication)
-	s.router.With(authHandler.AuthRequiredMiddleware).Route("/bills", func(r chi.Router) {
+	// Budget plans routes (require authentication)
+	s.router.With(authHandler.AuthRequiredMiddleware).Route("/budget-plans", func(r chi.Router) {
+		r.Get("/", s.budgetPlansPageHandler)
+		r.Get("/list", s.budgetPlansListHandler)
+		r.Post("/", s.createBudgetPlanHandler)
+		r.Put("/{id}", s.updateBudgetPlanHandler)
+		r.Delete("/{id}", s.deleteBudgetPlanHandler)
+		r.Post("/{id}/activate", s.activateBudgetPlanHandler)
+		r.Post("/{id}/copy", s.copyBudgetPlanHandler)
+	})
+
+	// Bills routes (require authentication and budget plan selection)
+	s.router.With(authHandler.AuthRequiredMiddleware, authHandler.BudgetPlanSelectionMiddleware).Route("/bills", func(r chi.Router) {
 		r.Get("/", s.recurringTransactionsPageHandler)
 		r.Post("/", s.createRecurringTransactionHandler)
 		r.Put("/{id}", s.updateRecurringTransactionHandler)
@@ -117,8 +137,21 @@ func (s *Server) SetupRoutes() {
 		r.Get("/{id}/edit", s.editRecurringTransactionHandler)
 	})
 
-	// Web routes with optional authentication
-	s.router.With(authHandler.OptionalAuthMiddleware).Get("/", s.homeHandler)
+	// Budgets routes (require authentication and budget plan selection)
+	s.router.With(authHandler.AuthRequiredMiddleware, authHandler.BudgetPlanSelectionMiddleware).Route("/budgets", func(r chi.Router) {
+		r.Get("/", s.budgetsPageHandler)
+		r.Get("/new", s.newBudgetHandler)
+		r.Post("/", s.createBudgetHandler)
+		r.Get("/{id}/edit", s.editBudgetHandler)
+		r.Put("/{id}", s.updateBudgetHandler)
+		r.Delete("/{id}", s.deleteBudgetHandler)
+	})
+
+	// Paycheck summary route (require authentication and budget plan selection)
+	s.router.With(authHandler.AuthRequiredMiddleware, authHandler.BudgetPlanSelectionMiddleware).Get("/paycheck-summary", s.paycheckSummaryHandler)
+
+	// Web routes with optional authentication and budget plan selection
+	s.router.With(authHandler.OptionalAuthMiddleware, authHandler.BudgetPlanSelectionMiddleware).Get("/", s.homeHandler)
 	s.router.With(authHandler.OptionalAuthMiddleware).Get("/about", s.aboutHandler)
 }
 
@@ -131,6 +164,24 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// requireBudgetPlan checks if a budget plan is available and redirects to budget plans page if not
+func (s *Server) requireBudgetPlan(w http.ResponseWriter, r *http.Request, accountID int) bool {
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		// Check if any budget plans exist
+		plans, err := s.store.GetBudgetPlansByAccount(accountID)
+		if err != nil || len(plans) == 0 {
+			// No budget plans exist, redirect to create one
+			http.Redirect(w, r, "/budget-plans", http.StatusSeeOther)
+			return false
+		}
+		// Budget plans exist but none selected, redirect to select one
+		http.Redirect(w, r, "/budget-plans", http.StatusSeeOther)
+		return false
+	}
+	return true
+}
+
 func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	var isAuthenticated bool
 	var moneyIn, moneyOut, netMoney float64
@@ -140,12 +191,39 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	var allOccurrences []data.Occurrence
 	includeUpcoming := true // Default to including upcoming transactions
 
-	// Get current month
+	// Parse year and month from query parameters (default to current month)
 	now := time.Now()
-	monthName = now.Format("January 2006")
 	year := now.Year()
 	month := int(now.Month())
-	
+
+	if yearStr := r.URL.Query().Get("year"); yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+	if monthStr := r.URL.Query().Get("month"); monthStr != "" {
+		if m, err := strconv.Atoi(monthStr); err == nil && m >= 1 && m <= 12 {
+			month = m
+		}
+	}
+
+	monthName = time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("January 2006")
+
+	// Calculate previous and next months
+	prevMonth := month - 1
+	prevYear := year
+	if prevMonth < 1 {
+		prevMonth = 12
+		prevYear = year - 1
+	}
+
+	nextMonth := month + 1
+	nextYear := year
+	if nextMonth > 12 {
+		nextMonth = 1
+		nextYear = year + 1
+	}
+
 	// Check if user wants to include upcoming transactions (default: true)
 	if includeUpcomingStr := r.URL.Query().Get("include_upcoming"); includeUpcomingStr != "" {
 		includeUpcoming = includeUpcomingStr == "true" || includeUpcomingStr == "1"
@@ -154,6 +232,11 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	if account := r.Context().Value("account"); account != nil {
 		isAuthenticated = true
 		acc := account.(*data.Account)
+
+		// Check if budget plan is required (only if authenticated)
+		if !s.requireBudgetPlan(w, r, acc.ID) {
+			return
+		}
 
 		// Get transactions for current month
 		txs, err := s.store.GetTransactionsByMonth(acc.ID, year, month)
@@ -173,77 +256,192 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Get expenses and expand into occurrences for current month
-		allExpenses, err := s.store.GetRecurringExpensesByAccount(acc.ID)
-		if err != nil {
-			log.Printf("Error fetching expenses: %v", err)
+		// Get budget plan ID from context
+		budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+		if !ok || budgetPlanID == 0 {
+			log.Printf("No budget plan selected for account %d", acc.ID)
 		} else {
-			currentDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
-			// Filter out archived expenses that have passed their end_date
-			for _, expense := range allExpenses {
-				// Skip archived expenses that have passed their end_date
-				if expense.EndDate != nil && expense.EndDate.Before(currentDate) {
-					continue
+			// Get expenses and expand into occurrences for current month
+			allExpenses, err := s.store.GetRecurringExpensesByAccount(acc.ID, budgetPlanID)
+			if err != nil {
+				log.Printf("Error fetching expenses: %v", err)
+			} else {
+				currentDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+				// Filter out archived expenses that have passed their end_date
+				for _, expense := range allExpenses {
+					// Skip archived expenses that have passed their end_date
+					if expense.EndDate != nil && expense.EndDate.Before(currentDate) {
+						continue
+					}
+
+					// Get all occurrences for this month
+					occurrences := expense.GetOccurrencesInMonth(year, time.Month(month))
+
+					// Get all matched transactions for this recurring transaction in this month
+					matchedTransactions, err := s.store.GetMatchedTransactionsForRecurring(expense.ID, budgetPlanID, year, month)
+					if err != nil {
+						log.Printf("Error getting matched transactions: %v", err)
+						matchedTransactions = []time.Time{}
+					}
+
+					// Match transactions to occurrences (each transaction can only match one occurrence)
+					usedTransactions := make(map[time.Time]bool)
+					for i := range occurrences {
+						occ := &occurrences[i]
+						// Find the closest unmatched transaction to this occurrence
+						var bestMatch *time.Time
+						bestDiff := 7 * 24 * time.Hour // Max 7 days difference
+
+						for _, txDate := range matchedTransactions {
+							if usedTransactions[txDate] {
+								continue // This transaction is already matched to another occurrence
+							}
+
+							diff := txDate.Sub(occ.ExpectedDate)
+							if diff < 0 {
+								diff = -diff
+							}
+							if diff <= bestDiff {
+								bestDiff = diff
+								txDateCopy := txDate
+								bestMatch = &txDateCopy
+							}
+						}
+
+						if bestMatch != nil {
+							occ.IsMatched = true
+							occ.TransactionDate = bestMatch
+							usedTransactions[*bestMatch] = true
+						}
+
+						expenseOccurrences = append(expenseOccurrences, *occ)
+					}
 				}
 
-				// Get all occurrences for this month
-				occurrences := expense.GetOccurrencesInMonth(year, time.Month(month))
-				
-				// Get all matched transactions for this recurring transaction in this month
-				matchedTransactions, err := s.store.GetMatchedTransactionsForRecurring(expense.ID, year, month)
-				if err != nil {
-					log.Printf("Error getting matched transactions: %v", err)
-					matchedTransactions = []time.Time{}
-				}
-				
-				// Match transactions to occurrences (each transaction can only match one occurrence)
-				usedTransactions := make(map[time.Time]bool)
-				for i := range occurrences {
-					occ := &occurrences[i]
-					// Find the closest unmatched transaction to this occurrence
-					var bestMatch *time.Time
-					bestDiff := 7 * 24 * time.Hour // Max 7 days difference
-					
-					for _, txDate := range matchedTransactions {
-						if usedTransactions[txDate] {
-							continue // This transaction is already matched to another occurrence
-						}
-						
-						diff := txDate.Sub(occ.ExpectedDate)
-						if diff < 0 {
-							diff = -diff
-						}
-						if diff <= bestDiff {
-							bestDiff = diff
-							txDateCopy := txDate
-							bestMatch = &txDateCopy
-						}
+				// Sort occurrences: paid first (by transaction date), then upcoming (by expected date)
+				sort.Slice(expenseOccurrences, func(i, j int) bool {
+					occI := expenseOccurrences[i]
+					occJ := expenseOccurrences[j]
+
+					// Paid occurrences come first
+					if occI.IsMatched && !occJ.IsMatched {
+						return true
 					}
-					
-					if bestMatch != nil {
-						occ.IsMatched = true
-						occ.TransactionDate = bestMatch
-						usedTransactions[*bestMatch] = true
+					if !occI.IsMatched && occJ.IsMatched {
+						return false
 					}
-					
-					expenseOccurrences = append(expenseOccurrences, *occ)
-				}
+
+					// Within same status, sort by date
+					var dateI, dateJ time.Time
+					if occI.IsMatched && occI.TransactionDate != nil {
+						dateI = *occI.TransactionDate
+					} else {
+						dateI = occI.ExpectedDate
+					}
+					if occJ.IsMatched && occJ.TransactionDate != nil {
+						dateJ = *occJ.TransactionDate
+					} else {
+						dateJ = occJ.ExpectedDate
+					}
+					return dateI.Before(dateJ)
+				})
 			}
 
-			// Sort occurrences: paid first (by transaction date), then upcoming (by expected date)
-			sort.Slice(expenseOccurrences, func(i, j int) bool {
-				occI := expenseOccurrences[i]
-				occJ := expenseOccurrences[j]
+			// Get income and expand into occurrences for current month
+			allIncome, err := s.store.GetRecurringIncomeByAccount(acc.ID, budgetPlanID)
+			if err != nil {
+				log.Printf("Error fetching income: %v", err)
+			} else {
+				currentDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+				// Filter out archived income that has passed their end_date
+				for _, inc := range allIncome {
+					// Skip archived income that has passed their end_date
+					if inc.EndDate != nil && inc.EndDate.Before(currentDate) {
+						continue
+					}
 
-				// Paid occurrences come first
-				if occI.IsMatched && !occJ.IsMatched {
-					return true
-				}
-				if !occI.IsMatched && occJ.IsMatched {
-					return false
+					// Get all occurrences for this month
+					occurrences := inc.GetOccurrencesInMonth(year, time.Month(month))
+
+					// Get all matched transactions for this recurring transaction in this month
+					matchedTransactions, err := s.store.GetMatchedTransactionsForRecurring(inc.ID, budgetPlanID, year, month)
+					if err != nil {
+						log.Printf("Error getting matched transactions: %v", err)
+						matchedTransactions = []time.Time{}
+					}
+
+					// Match transactions to occurrences (each transaction can only match one occurrence)
+					usedTransactions := make(map[time.Time]bool)
+					for i := range occurrences {
+						occ := &occurrences[i]
+						// Find the closest unmatched transaction to this occurrence
+						var bestMatch *time.Time
+						bestDiff := 7 * 24 * time.Hour // Max 7 days difference
+
+						for _, txDate := range matchedTransactions {
+							if usedTransactions[txDate] {
+								continue // This transaction is already matched to another occurrence
+							}
+
+							diff := txDate.Sub(occ.ExpectedDate)
+							if diff < 0 {
+								diff = -diff
+							}
+							if diff <= bestDiff {
+								bestDiff = diff
+								txDateCopy := txDate
+								bestMatch = &txDateCopy
+							}
+						}
+
+						if bestMatch != nil {
+							occ.IsMatched = true
+							occ.TransactionDate = bestMatch
+							usedTransactions[*bestMatch] = true
+						}
+
+						incomeOccurrences = append(incomeOccurrences, *occ)
+					}
 				}
 
-				// Within same status, sort by date
+				// Sort occurrences: matched first (by transaction date), then upcoming (by expected date)
+				sort.Slice(incomeOccurrences, func(i, j int) bool {
+					occI := incomeOccurrences[i]
+					occJ := incomeOccurrences[j]
+
+					// Matched occurrences come first
+					if occI.IsMatched && !occJ.IsMatched {
+						return true
+					}
+					if !occI.IsMatched && occJ.IsMatched {
+						return false
+					}
+
+					// Within same status, sort by date
+					var dateI, dateJ time.Time
+					if occI.IsMatched && occI.TransactionDate != nil {
+						dateI = *occI.TransactionDate
+					} else {
+						dateI = occI.ExpectedDate
+					}
+					if occJ.IsMatched && occJ.TransactionDate != nil {
+						dateJ = *occJ.TransactionDate
+					} else {
+						dateJ = occJ.ExpectedDate
+					}
+					return dateI.Before(dateJ)
+				})
+			}
+
+			// Combine all occurrences and sort by date
+			allOccurrences = append(allOccurrences, expenseOccurrences...)
+			allOccurrences = append(allOccurrences, incomeOccurrences...)
+
+			// Sort all occurrences by date (use transaction date if matched, expected date if not)
+			sort.Slice(allOccurrences, func(i, j int) bool {
+				occI := allOccurrences[i]
+				occJ := allOccurrences[j]
+
 				var dateI, dateJ time.Time
 				if occI.IsMatched && occI.TransactionDate != nil {
 					dateI = *occI.TransactionDate
@@ -257,150 +455,70 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				return dateI.Before(dateJ)
 			})
-		}
 
-		// Get income and expand into occurrences for current month
-		allIncome, err := s.store.GetRecurringIncomeByAccount(acc.ID)
-		if err != nil {
-			log.Printf("Error fetching income: %v", err)
-		} else {
-			currentDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
-			// Filter out archived income that has passed their end_date
-			for _, inc := range allIncome {
-				// Skip archived income that has passed their end_date
-				if inc.EndDate != nil && inc.EndDate.Before(currentDate) {
-					continue
-				}
-
-				// Get all occurrences for this month
-				occurrences := inc.GetOccurrencesInMonth(year, time.Month(month))
-				
-				// Get all matched transactions for this recurring transaction in this month
-				matchedTransactions, err := s.store.GetMatchedTransactionsForRecurring(inc.ID, year, month)
-				if err != nil {
-					log.Printf("Error getting matched transactions: %v", err)
-					matchedTransactions = []time.Time{}
-				}
-				
-				// Match transactions to occurrences (each transaction can only match one occurrence)
-				usedTransactions := make(map[time.Time]bool)
-				for i := range occurrences {
-					occ := &occurrences[i]
-					// Find the closest unmatched transaction to this occurrence
-					var bestMatch *time.Time
-					bestDiff := 7 * 24 * time.Hour // Max 7 days difference
-					
-					for _, txDate := range matchedTransactions {
-						if usedTransactions[txDate] {
-							continue // This transaction is already matched to another occurrence
+			// If including upcoming transactions, add them to the totals
+			if includeUpcoming {
+				// Add upcoming expense occurrences
+				for _, occ := range expenseOccurrences {
+					if !occ.IsMatched {
+						amount := float64(occ.RecurringTransaction.ExpectedAmount) / 100.0
+						if amount < 0 {
+							moneyOut += -amount // Make positive for display
 						}
-						
-						diff := txDate.Sub(occ.ExpectedDate)
-						if diff < 0 {
-							diff = -diff
+						netMoney += amount
+					}
+				}
+				// Add upcoming income occurrences
+				for _, occ := range incomeOccurrences {
+					if !occ.IsMatched {
+						amount := float64(occ.RecurringTransaction.ExpectedAmount) / 100.0
+						if amount > 0 {
+							moneyIn += amount
 						}
-						if diff <= bestDiff {
-							bestDiff = diff
-							txDateCopy := txDate
-							bestMatch = &txDateCopy
-						}
+						netMoney += amount
 					}
-					
-					if bestMatch != nil {
-						occ.IsMatched = true
-						occ.TransactionDate = bestMatch
-						usedTransactions[*bestMatch] = true
-					}
-					
-					incomeOccurrences = append(incomeOccurrences, *occ)
-				}
-			}
-
-			// Sort occurrences: matched first (by transaction date), then upcoming (by expected date)
-			sort.Slice(incomeOccurrences, func(i, j int) bool {
-				occI := incomeOccurrences[i]
-				occJ := incomeOccurrences[j]
-
-				// Matched occurrences come first
-				if occI.IsMatched && !occJ.IsMatched {
-					return true
-				}
-				if !occI.IsMatched && occJ.IsMatched {
-					return false
-				}
-
-				// Within same status, sort by date
-				var dateI, dateJ time.Time
-				if occI.IsMatched && occI.TransactionDate != nil {
-					dateI = *occI.TransactionDate
-				} else {
-					dateI = occI.ExpectedDate
-				}
-				if occJ.IsMatched && occJ.TransactionDate != nil {
-					dateJ = *occJ.TransactionDate
-				} else {
-					dateJ = occJ.ExpectedDate
-				}
-				return dateI.Before(dateJ)
-			})
-		}
-
-		// Combine all occurrences and sort by date
-		allOccurrences = append(allOccurrences, expenseOccurrences...)
-		allOccurrences = append(allOccurrences, incomeOccurrences...)
-		
-		// Sort all occurrences by date (use transaction date if matched, expected date if not)
-		sort.Slice(allOccurrences, func(i, j int) bool {
-			occI := allOccurrences[i]
-			occJ := allOccurrences[j]
-			
-			var dateI, dateJ time.Time
-			if occI.IsMatched && occI.TransactionDate != nil {
-				dateI = *occI.TransactionDate
-			} else {
-				dateI = occI.ExpectedDate
-			}
-			if occJ.IsMatched && occJ.TransactionDate != nil {
-				dateJ = *occJ.TransactionDate
-			} else {
-				dateJ = occJ.ExpectedDate
-			}
-			return dateI.Before(dateJ)
-		})
-
-		// If including upcoming transactions, add them to the totals
-		if includeUpcoming {
-			// Add upcoming expense occurrences
-			for _, occ := range expenseOccurrences {
-				if !occ.IsMatched {
-					amount := float64(occ.RecurringTransaction.ExpectedAmount) / 100.0
-					if amount < 0 {
-						moneyOut += -amount // Make positive for display
-					}
-					netMoney += amount
-				}
-			}
-			// Add upcoming income occurrences
-			for _, occ := range incomeOccurrences {
-				if !occ.IsMatched {
-					amount := float64(occ.RecurringTransaction.ExpectedAmount) / 100.0
-					if amount > 0 {
-						moneyIn += amount
-					}
-					netMoney += amount
 				}
 			}
 		}
 
 		log.Printf("Home handler: User is authenticated - isAuthenticated=%t", isAuthenticated)
+
+		// Get budget plans and selected plan for selector
+		var budgetPlans []data.BudgetPlan
+		var selectedBudgetPlanID int
+		var budgetSummaries []data.BudgetSummary
+		var yearlyIncome int
+		if budgetPlanID, ok := r.Context().Value("budget_plan_id").(int); ok && budgetPlanID > 0 {
+			selectedBudgetPlanID = budgetPlanID
+			plans, err := s.store.GetBudgetPlansByAccount(acc.ID)
+			if err == nil {
+				budgetPlans = plans
+			}
+			// Get budgets with summaries for the selected month
+			summaries, err := s.store.GetBudgetSummaries(acc.ID, budgetPlanID, year, month)
+			if err == nil {
+				budgetSummaries = summaries
+			}
+			// Calculate yearly income for display
+			income, err := s.store.CalculateExpectedYearlyIncome(acc.ID, budgetPlanID)
+			if err == nil {
+				yearlyIncome = income
+			}
+		}
+
+		page := templates.SummaryPage(moneyIn, moneyOut, netMoney, monthName, allOccurrences, includeUpcoming, year, month, prevYear, prevMonth, nextYear, nextMonth, budgetPlans, selectedBudgetPlanID, budgetSummaries, yearlyIncome)
+		if err := templates.BaseLayoutWithAuthAndBudgetPlan("Monthly Summary - Budget App", isAuthenticated, budgetPlans, selectedBudgetPlanID, page).Render(w); err != nil {
+			log.Printf("Error rendering summary page: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+		return
 	} else {
 		log.Printf("Home handler: User is not authenticated - isAuthenticated=%t", isAuthenticated)
-	}
-
-	page := templates.SummaryPage(moneyIn, moneyOut, netMoney, monthName, allOccurrences, includeUpcoming)
-	if err := templates.BaseLayoutWithAuth("Summary - Budget App", isAuthenticated, page).Render(w); err != nil {
-		log.Printf("Error rendering summary page: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		page := templates.SummaryPage(moneyIn, moneyOut, netMoney, monthName, allOccurrences, includeUpcoming, year, month, prevYear, prevMonth, nextYear, nextMonth, nil, 0, nil, 0)
+		if err := templates.BaseLayoutWithAuth("Monthly Summary - Budget App", isAuthenticated, page).Render(w); err != nil {
+			log.Printf("Error rendering summary page: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -649,8 +767,14 @@ func (s *Server) transactionsPageHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
 		return
 	}
+	financialAccounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+		return
+	}
 	errMsg := r.URL.Query().Get("error")
-	page := templates.TransactionsPage(txs, cats, errMsg)
+	successMsg := r.URL.Query().Get("success")
+	page := templates.TransactionsPage(txs, cats, financialAccounts, errMsg, successMsg)
 	_ = templates.BaseLayoutWithAuth("Transactions - Budget App", true, page).Render(w)
 }
 
@@ -701,6 +825,26 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Failed to parse form", http.StatusBadRequest)
 		return
 	}
+
+	// Get financial account ID from form
+	financialAccountIDStr := r.FormValue("financial_account_id")
+	if financialAccountIDStr == "" {
+		http.Error(w, "Financial account is required", http.StatusBadRequest)
+		return
+	}
+	financialAccountID, err := strconv.Atoi(financialAccountIDStr)
+	if err != nil {
+		http.Error(w, "Invalid financial account ID", http.StatusBadRequest)
+		return
+	}
+
+	// Load financial account and its CSV mappings
+	financialAccount, err := s.store.GetFinancialAccount(account.ID, financialAccountID)
+	if err != nil || financialAccount == nil {
+		http.Error(w, "Financial account not found", http.StatusBadRequest)
+		return
+	}
+
 	file, _, err := r.FormFile("csv")
 	if err != nil {
 		http.Error(w, "Failed to get uploaded file", http.StatusBadRequest)
@@ -717,37 +861,52 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "CSV file is empty", http.StatusBadRequest)
 		return
 	}
+
 	header := records[0]
-	required := map[string]bool{"date": false, "payee": false, "amount": false}
-	unrecognized := []string{}
-	colIdx := map[string]int{}
-	for i, col := range header {
-		colNorm := strings.ToLower(strings.TrimSpace(col))
-		switch colNorm {
-		case "date", "payee", "amount":
-			required[colNorm] = true
-			colIdx[colNorm] = i
-		default:
-			unrecognized = append(unrecognized, col)
-		}
+	// Map CSV column names to indices using financial account's field mappings
+	colIdx := make(map[string]int)
+	requiredFields := map[string]string{
+		"date":    financialAccount.CSVDateField,
+		"payee":   financialAccount.CSVPayeeField,
+		"expense": financialAccount.CSVExpenseField,
+		"income":  financialAccount.CSVIncomeField,
 	}
+	optionalFields := make(map[string]string)
+	if financialAccount.CSVCategoryField != nil {
+		optionalFields["category"] = *financialAccount.CSVCategoryField
+	}
+	if financialAccount.CSVBalanceField != nil {
+		optionalFields["balance"] = *financialAccount.CSVBalanceField
+	}
+
+	// Find column indices for required fields
 	missing := []string{}
-	for k, v := range required {
-		if !v {
-			missing = append(missing, k)
+	for fieldName, mappedName := range requiredFields {
+		found := false
+		for i, col := range header {
+			if strings.EqualFold(strings.TrimSpace(col), mappedName) {
+				colIdx[fieldName] = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, mappedName)
 		}
 	}
-	if len(missing) > 0 || len(unrecognized) > 0 {
-		errMsg := "CSV error: "
-		if len(missing) > 0 {
-			errMsg += "Missing columns: " + strings.Join(missing, ", ")
-		}
-		if len(unrecognized) > 0 {
-			if len(missing) > 0 {
-				errMsg += ". "
+
+	// Find column indices for optional fields
+	for fieldName, mappedName := range optionalFields {
+		for i, col := range header {
+			if strings.EqualFold(strings.TrimSpace(col), mappedName) {
+				colIdx[fieldName] = i
+				break
 			}
-			errMsg += "Unrecognized columns: " + strings.Join(unrecognized, ", ")
 		}
+	}
+
+	if len(missing) > 0 {
+		errMsg := "CSV error: Missing required columns: " + strings.Join(missing, ", ")
 		if isHTMX(r) {
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusBadRequest)
@@ -758,37 +917,163 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	var txs []data.Transaction
-	for i, rec := range records[1:] {
-		if len(rec) < len(header) {
-			http.Error(w, "Row "+strconv.Itoa(i+2)+" is missing columns", http.StatusBadRequest)
+
+	// Get all categories for matching
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+	categoryMap := make(map[string]int) // category name (lowercase) -> category ID
+	for _, cat := range categories {
+		categoryMap[strings.ToLower(cat.Name)] = cat.ID
+	}
+
+	// Get or create "Imported" category
+	var importedCategoryID *int
+	if importedID, found := categoryMap["imported"]; found {
+		importedCategoryID = &importedID
+	} else {
+		// Create "Imported" category
+		importedCat, err := s.store.CreateCategory(account.ID, "Imported", nil)
+		if err != nil {
+			log.Printf("Failed to create Imported category: %v", err)
+			http.Error(w, "Failed to create Imported category", http.StatusInternalServerError)
 			return
 		}
-		dateStr := rec[colIdx["date"]]
-		payee := rec[colIdx["payee"]]
-		amountStr := rec[colIdx["amount"]]
+		importedCategoryID = &importedCat.ID
+		categoryMap["imported"] = importedCat.ID
+		// Reload categories to include the new one
+		categories, err = s.store.GetCategoriesByAccount(account.ID)
+		if err == nil {
+			for _, cat := range categories {
+				categoryMap[strings.ToLower(cat.Name)] = cat.ID
+			}
+		}
+	}
+
+	var txs []data.Transaction
+	var lastBalance *int
+	var lastBalanceDate *time.Time
+	var skippedCount int
+	var skippedReasons []string
+
+	for i, rec := range records[1:] {
+		if len(rec) < len(header) {
+			skippedCount++
+			skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: missing columns", i+2))
+			continue
+		}
+
+		// Parse date - skip if invalid
+		dateStr := strings.TrimSpace(rec[colIdx["date"]])
+		if dateStr == "" || strings.EqualFold(dateStr, "pending") {
+			skippedCount++
+			skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: invalid or pending date", i+2))
+			continue
+		}
 		date, err := time.Parse("2006-01-02", dateStr)
 		if err != nil {
 			// Try mm/dd/yyyy
 			date, err = time.Parse("01/02/2006", dateStr)
 			if err != nil {
-				http.Error(w, "Invalid date in row "+strconv.Itoa(i+2)+": "+dateStr, http.StatusBadRequest)
-				return
+				skippedCount++
+				skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: invalid date format: %s", i+2, dateStr))
+				continue
 			}
 		}
-		amountCents, err := parseAmountToCents(amountStr)
-		if err != nil {
-			http.Error(w, "Invalid amount in row "+strconv.Itoa(i+2)+": "+amountStr, http.StatusBadRequest)
-			return
+
+		// Parse payee - skip if empty
+		payee := strings.TrimSpace(rec[colIdx["payee"]])
+		if payee == "" {
+			skippedCount++
+			skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: empty payee", i+2))
+			continue
 		}
+
+		// Calculate amount from expense and income fields - skip if invalid
+		var amountCents int
+		expenseStr := strings.TrimSpace(rec[colIdx["expense"]])
+		incomeStr := strings.TrimSpace(rec[colIdx["income"]])
+
+		if expenseStr != "" {
+			expenseCents, err := parseAmountToCents(expenseStr)
+			if err != nil {
+				skippedCount++
+				skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: invalid expense amount: %s", i+2, expenseStr))
+				continue
+			}
+			amountCents = -expenseCents // Expenses are negative
+		} else if incomeStr != "" {
+			incomeCents, err := parseAmountToCents(incomeStr)
+			if err != nil {
+				skippedCount++
+				skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: invalid income amount: %s", i+2, incomeStr))
+				continue
+			}
+			amountCents = incomeCents // Income is positive
+		} else {
+			skippedCount++
+			skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: both expense and income fields are empty", i+2))
+			continue
+		}
+
+		// Parse optional category - create if doesn't exist under "Imported"
+		var categoryID *int
+		if catIdx, ok := colIdx["category"]; ok {
+			categoryName := strings.TrimSpace(rec[catIdx])
+			if categoryName != "" {
+				categoryNameLower := strings.ToLower(categoryName)
+				if catID, found := categoryMap[categoryNameLower]; found {
+					categoryID = &catID
+				} else {
+					// Category doesn't exist, create it under "Imported"
+					newCat, err := s.store.CreateCategory(account.ID, categoryName, importedCategoryID)
+					if err != nil {
+						log.Printf("Failed to create category %s: %v", categoryName, err)
+						// Continue without category rather than failing
+					} else {
+						categoryID = &newCat.ID
+						categoryMap[categoryNameLower] = newCat.ID
+					}
+				}
+			}
+		}
+
+		// Check balance field if present - skip transaction if invalid/pending
+		if balanceIdx, ok := colIdx["balance"]; ok {
+			balanceStr := strings.TrimSpace(rec[balanceIdx])
+			if balanceStr == "" || strings.EqualFold(balanceStr, "pending") {
+				skippedCount++
+				skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: invalid or pending balance", i+2))
+				continue
+			}
+			// Validate balance can be parsed
+			balanceCents, err := parseAmountToCents(balanceStr)
+			if err != nil {
+				skippedCount++
+				skippedReasons = append(skippedReasons, fmt.Sprintf("Row %d: invalid balance format: %s", i+2, balanceStr))
+				continue
+			}
+			// Track balance for account update
+			if lastBalanceDate == nil || !date.Before(*lastBalanceDate) {
+				lastBalance = &balanceCents
+				dateCopy := date
+				lastBalanceDate = &dateCopy
+			}
+		}
+
 		txs = append(txs, data.Transaction{
-			AccountID:     account.ID,
-			Date:          date,
-			OriginalPayee: payee,
-			Payee:         payee,
-			Amount:        amountCents,
+			AccountID:          account.ID,
+			FinancialAccountID: financialAccountID,
+			Date:               date,
+			OriginalPayee:      payee,
+			Payee:              payee,
+			CategoryID:         categoryID,
+			Amount:             amountCents,
 		})
 	}
+
 	// Deduplicate: fetch all existing transactions for this account (including reviewed ones)
 	existingTxs, err := s.store.GetAllTransactionsByAccount(account.ID)
 	if err != nil {
@@ -810,11 +1095,60 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 			existing[key] = struct{}{} // prevent duplicates within the same upload
 		}
 	}
-	if err := s.store.BulkInsertTransactions(account.ID, deduped); err != nil {
+
+	// Insert transactions
+	if err := s.store.BulkInsertTransactions(account.ID, financialAccountID, deduped); err != nil {
 		http.Error(w, "Failed to import transactions", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/transactions/", http.StatusSeeOther)
+
+	// Build success message with import stats
+	var successMsg string
+	if len(deduped) > 0 {
+		successMsg = fmt.Sprintf("Successfully imported %d transaction(s)", len(deduped))
+		if skippedCount > 0 {
+			successMsg += fmt.Sprintf(". Skipped %d invalid transaction(s)", skippedCount)
+		}
+	} else if skippedCount > 0 {
+		successMsg = fmt.Sprintf("No valid transactions to import. Skipped %d invalid transaction(s)", skippedCount)
+	} else {
+		successMsg = "No new transactions to import (all were duplicates)"
+	}
+
+	// Log skipped reasons for debugging
+	if len(skippedReasons) > 0 {
+		log.Printf("CSV import skipped transactions: %v", skippedReasons)
+	}
+
+	// Update account balance if balance field was present and we have a valid balance
+	if lastBalance != nil && lastBalanceDate != nil {
+		// Check if this transaction date is >= current latest transaction date for this account
+		// Get the latest transaction date for this financial account
+		var latestTxDate sql.NullTime
+		query := `SELECT MAX(date) FROM transactions WHERE financial_account_id = $1`
+		err := s.store.GetDB().QueryRow(query, financialAccountID).Scan(&latestTxDate)
+		if err == nil && latestTxDate.Valid {
+			// Only update if the imported transaction date is >= current latest
+			if !lastBalanceDate.Before(latestTxDate.Time) {
+				if err := s.store.UpdateFinancialAccountBalance(account.ID, financialAccountID, *lastBalance); err != nil {
+					log.Printf("Failed to update financial account balance: %v", err)
+					// Don't fail the import if balance update fails
+				}
+			}
+		} else {
+			// No existing transactions, update balance
+			if err := s.store.UpdateFinancialAccountBalance(account.ID, financialAccountID, *lastBalance); err != nil {
+				log.Printf("Failed to update financial account balance: %v", err)
+			}
+		}
+	}
+
+	// Redirect with success message
+	if successMsg != "" {
+		http.Redirect(w, r, "/transactions/?success="+url.QueryEscape(successMsg), http.StatusSeeOther)
+	} else {
+		http.Redirect(w, r, "/transactions/", http.StatusSeeOther)
+	}
 }
 
 // parseAmountToCents parses a decimal string to int cents
@@ -1750,7 +2084,11 @@ func (s *Server) recurringTransactionsPageHandler(w http.ResponseWriter, r *http
 		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
 		return
 	}
-	rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+	if !s.requireBudgetPlan(w, r, account.ID) {
+		return
+	}
+	budgetPlanID, _ := r.Context().Value("budget_plan_id").(int)
+	rts, err := s.store.GetRecurringTransactionsByAccount(account.ID, budgetPlanID)
 	if err != nil {
 		http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
 		return
@@ -1760,8 +2098,18 @@ func (s *Server) recurringTransactionsPageHandler(w http.ResponseWriter, r *http
 		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
 		return
 	}
-	page := templates.RecurringTransactionsPage(rts, categories)
-	_ = templates.BaseLayoutWithAuth("Recurring Transactions - Budget App", true, page).Render(w)
+	financialAccounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+		return
+	}
+	budgetPlans, err := s.store.GetBudgetPlansByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+		return
+	}
+	page := templates.RecurringTransactionsPage(rts, categories, financialAccounts, budgetPlans, budgetPlanID)
+	_ = templates.BaseLayoutWithAuthAndBudgetPlan("Recurring Transactions - Budget App", true, budgetPlans, budgetPlanID, page).Render(w)
 }
 
 func (s *Server) createRecurringTransactionHandler(w http.ResponseWriter, r *http.Request) {
@@ -1856,7 +2204,30 @@ func (s *Server) createRecurringTransactionHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
-	_, err = s.store.CreateRecurringTransaction(account.ID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue)
+	financialAccountIDStr := r.FormValue("financial_account_id")
+	if financialAccountIDStr == "" {
+		http.Error(w, "Financial account is required", http.StatusBadRequest)
+		return
+	}
+	financialAccountID, err := strconv.Atoi(financialAccountIDStr)
+	if err != nil {
+		http.Error(w, "Invalid financial account ID", http.StatusBadRequest)
+		return
+	}
+	// Verify the financial account belongs to this account
+	_, err = s.store.GetFinancialAccount(account.ID, financialAccountID)
+	if err != nil || err == sql.ErrNoRows {
+		http.Error(w, "Financial account not found", http.StatusBadRequest)
+		return
+	}
+
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		http.Error(w, "No budget plan selected", http.StatusBadRequest)
+		return
+	}
+
+	_, err = s.store.CreateRecurringTransaction(account.ID, budgetPlanID, financialAccountID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue)
 	if err != nil {
 		http.Error(w, "Failed to create recurring transaction", http.StatusInternalServerError)
 		return
@@ -1864,7 +2235,12 @@ func (s *Server) createRecurringTransactionHandler(w http.ResponseWriter, r *htt
 
 	if isHTMX(r) {
 		// Return updated recurring transactions list
-		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+		if !ok || budgetPlanID == 0 {
+			http.Error(w, "No budget plan selected", http.StatusBadRequest)
+			return
+		}
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID, budgetPlanID)
 		if err != nil {
 			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
 			return
@@ -1943,7 +2319,7 @@ func (s *Server) updateRecurringTransactionHandler(w http.ResponseWriter, r *htt
 		http.Error(w, "Invalid expected amount", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Type is generated from amount sign by the database
 	// Store amount as-is: negative = expense, positive = income
 	// User enters the signed value directly, no conversion needed
@@ -1979,7 +2355,30 @@ func (s *Server) updateRecurringTransactionHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
-	err = s.store.UpdateRecurringTransaction(account.ID, rtID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue)
+	financialAccountIDStr := r.FormValue("financial_account_id")
+	if financialAccountIDStr == "" {
+		http.Error(w, "Financial account is required", http.StatusBadRequest)
+		return
+	}
+	financialAccountID, err := strconv.Atoi(financialAccountIDStr)
+	if err != nil {
+		http.Error(w, "Invalid financial account ID", http.StatusBadRequest)
+		return
+	}
+	// Verify the financial account belongs to this account
+	_, err = s.store.GetFinancialAccount(account.ID, financialAccountID)
+	if err != nil {
+		http.Error(w, "Financial account not found", http.StatusBadRequest)
+		return
+	}
+
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		http.Error(w, "No budget plan selected", http.StatusBadRequest)
+		return
+	}
+
+	err = s.store.UpdateRecurringTransaction(account.ID, rtID, budgetPlanID, financialAccountID, name, counterparty, categoryID, expectedAmount, tolerance, startDate, recurrenceUnit, recurrenceValue)
 	if err != nil {
 		http.Error(w, "Failed to update recurring transaction", http.StatusInternalServerError)
 		return
@@ -1987,7 +2386,7 @@ func (s *Server) updateRecurringTransactionHandler(w http.ResponseWriter, r *htt
 
 	if isHTMX(r) {
 		// Return updated recurring transactions list
-		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID, budgetPlanID)
 		if err != nil {
 			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
 			return
@@ -2041,7 +2440,12 @@ func (s *Server) archiveRecurringTransactionHandler(w http.ResponseWriter, r *ht
 
 	if isHTMX(r) {
 		// Return updated recurring transactions list
-		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+		if !ok || budgetPlanID == 0 {
+			http.Error(w, "No budget plan selected", http.StatusBadRequest)
+			return
+		}
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID, budgetPlanID)
 		if err != nil {
 			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
 			return
@@ -2079,7 +2483,12 @@ func (s *Server) deleteRecurringTransactionHandler(w http.ResponseWriter, r *htt
 
 	if isHTMX(r) {
 		// Return updated recurring transactions list
-		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID)
+		budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+		if !ok || budgetPlanID == 0 {
+			http.Error(w, "No budget plan selected", http.StatusBadRequest)
+			return
+		}
+		rts, err := s.store.GetRecurringTransactionsByAccount(account.ID, budgetPlanID)
 		if err != nil {
 			http.Error(w, "Failed to load recurring transactions", http.StatusInternalServerError)
 			return
@@ -2121,10 +2530,27 @@ func (s *Server) editRecurringTransactionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Get categories for the form
+	// Get categories and financial accounts for the form
 	categories, err := s.store.GetCategoriesByAccount(account.ID)
 	if err != nil {
 		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+	financialAccounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+		return
+	}
+
+	budgetPlans, err := s.store.GetBudgetPlansByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+		return
+	}
+
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		http.Error(w, "No budget plan selected", http.StatusBadRequest)
 		return
 	}
 
@@ -2136,11 +2562,1245 @@ func (s *Server) editRecurringTransactionHandler(w http.ResponseWriter, r *http.
 		g.Attr("hx-target", "#recurring-transactions-list"),
 		g.Attr("hx-swap", "outerHTML"),
 		g.Attr("hx-on::after-request", `if (event.target === this) { bootstrap.Modal.getInstance(this.closest('.modal')).hide(); }`),
-		templates.RecurringTransactionFormFields(categories, rt),
+		templates.RecurringTransactionFormFields(categories, financialAccounts, budgetPlans, budgetPlanID, rt),
 		html.Div(
 			html.Class("d-flex justify-content-end gap-2"),
 			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
 			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 		),
 	).Render(w)
+}
+
+func (s *Server) paycheckSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+		return
+	}
+	if !s.requireBudgetPlan(w, r, account.ID) {
+		return
+	}
+
+	// Get all financial accounts for selection
+	financialAccounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+		return
+	}
+
+	// Get selected financial account from query parameter
+	var selectedFinancialAccount *data.FinancialAccount
+	financialAccountIDStr := r.URL.Query().Get("financial_account_id")
+	if financialAccountIDStr != "" {
+		financialAccountID, err := strconv.Atoi(financialAccountIDStr)
+		if err == nil {
+			fa, err := s.store.GetFinancialAccount(account.ID, financialAccountID)
+			if err == nil && fa != nil {
+				selectedFinancialAccount = fa
+			}
+		}
+	}
+	// If no account selected, use the first one if available
+	if selectedFinancialAccount == nil && len(financialAccounts) > 0 {
+		selectedFinancialAccount = &financialAccounts[0]
+	}
+
+	// Get budget plan ID from context
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		http.Error(w, "No budget plan selected", http.StatusBadRequest)
+		return
+	}
+
+	// Parse offset parameter (default 0 for current period, must be >= 0)
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// Find base last received income date (for offset 0)
+	baseLastIncomeDate, err := s.store.GetLastReceivedIncomeOccurrence(account.ID, budgetPlanID)
+	if err != nil {
+		log.Printf("Error getting last received income: %v", err)
+		http.Error(w, "Failed to load paycheck summary data", http.StatusInternalServerError)
+		return
+	}
+
+	// If no last income date but we have recurring income, use the earliest start date as baseline
+	if baseLastIncomeDate == nil {
+		incomeRts, err := s.store.GetRecurringIncomeByAccount(account.ID, budgetPlanID)
+		if err == nil && len(incomeRts) > 0 {
+			// Find the earliest start date
+			earliestStart := incomeRts[0].StartDate
+			for _, rt := range incomeRts {
+				if rt.StartDate.Before(earliestStart) {
+					earliestStart = rt.StartDate
+				}
+			}
+			// Use the earliest start date if it's today or in the past
+			// If it's in the future, use today as the baseline
+			now := time.Now().Truncate(24 * time.Hour)
+			if earliestStart.Before(now) || earliestStart.Equal(now) {
+				baseLastIncomeDate = &earliestStart
+			} else {
+				// Start date is in the future, use today
+				baseLastIncomeDate = &now
+			}
+		}
+	}
+
+	// Calculate lastIncomeDate based on offset (offset >= 0, where 0 is current period)
+	var lastIncomeDate *time.Time
+	if offset == 0 {
+		lastIncomeDate = baseLastIncomeDate
+	} else {
+		// Go forwards: find next income occurrences
+		currentDate := baseLastIncomeDate
+		if currentDate == nil {
+			// No base date, start from now
+			now := time.Now()
+			currentDate = &now
+		}
+		for i := 0; i < offset; i++ {
+			next, err := s.store.GetNextIncomeOccurrenceAfter(account.ID, budgetPlanID, *currentDate)
+			if err != nil || next == nil {
+				// No more next income found
+				lastIncomeDate = nil
+				break
+			}
+			lastIncomeDate = next
+			currentDate = next
+		}
+	}
+
+	// Calculate balance for the period being viewed
+	var balanceCents *int
+	if offset == 0 {
+		// Current period: use actual account balance
+		if selectedFinancialAccount != nil {
+			balanceCents = &selectedFinancialAccount.Balance
+		} else {
+			// Fallback to last income amount if no financial account
+			lastIncomeAmount, err := s.store.GetLastReceivedIncomeAmount(account.ID, budgetPlanID)
+			if err == nil && lastIncomeAmount != nil {
+				balanceCents = lastIncomeAmount
+			}
+		}
+	} else {
+		// Future period: calculate balance by applying all recurring transactions
+		// Start with the current period balance
+		var startingBalance int
+		if selectedFinancialAccount != nil {
+			startingBalance = selectedFinancialAccount.Balance
+		} else {
+			lastIncomeAmount, err := s.store.GetLastReceivedIncomeAmount(account.ID, budgetPlanID)
+			if err == nil && lastIncomeAmount != nil {
+				startingBalance = *lastIncomeAmount
+			}
+		}
+
+		// Apply all recurring transactions between baseLastIncomeDate and lastIncomeDate
+		if baseLastIncomeDate != nil && lastIncomeDate != nil {
+			// Iterate through each paycheck period between base and target
+			currentPeriodStart := *baseLastIncomeDate
+
+			for currentPeriodStart.Before(*lastIncomeDate) {
+				// Find the end of this period (next income occurrence)
+				periodEnd, err := s.store.GetNextIncomeOccurrenceAfter(account.ID, budgetPlanID, currentPeriodStart)
+				if err != nil || periodEnd == nil {
+					break
+				}
+				if !periodEnd.Before(*lastIncomeDate) && !periodEnd.Equal(*lastIncomeDate) {
+					// We've reached or passed the target period
+					break
+				}
+
+				// Process all recurring transactions in this period
+				periodStart := currentPeriodStart
+				periodEndDate := *periodEnd
+
+				// Get all expense occurrences in this period
+				expenseOccs, err := s.store.GetUpcomingExpenseOccurrencesBetweenDates(account.ID, budgetPlanID, periodStart, periodEndDate)
+				if err == nil {
+					for _, occ := range expenseOccs {
+						// Filter by financial account if selected
+						if selectedFinancialAccount == nil || occ.RecurringTransaction.FinancialAccountID == selectedFinancialAccount.ID {
+							// Apply expense (negative amount)
+							startingBalance += occ.RecurringTransaction.ExpectedAmount
+						}
+					}
+				}
+
+				// Apply only the income that starts this period (at periodStart)
+				// The income at periodEndDate starts the next period, so we don't apply it here
+				incomeRts, err := s.store.GetRecurringIncomeByAccount(account.ID, budgetPlanID)
+				if err == nil {
+					for _, rt := range incomeRts {
+						if selectedFinancialAccount == nil || rt.FinancialAccountID == selectedFinancialAccount.ID {
+							// Check if this recurring income has an occurrence at periodStart
+							occDate := rt.NextOccurrence(periodStart.AddDate(0, 0, -1))
+							if !occDate.IsZero() && occDate.Equal(periodStart) {
+								// This income starts the period, apply it
+								startingBalance += rt.ExpectedAmount
+							}
+						}
+					}
+				}
+
+				// Move to next period
+				currentPeriodStart = periodEndDate
+			}
+		}
+
+		balanceCents = &startingBalance
+	}
+
+	// Find next upcoming income date based on lastIncomeDate
+	var nextIncomeDate *time.Time
+	if lastIncomeDate != nil {
+		nextIncomeDate, err = s.store.GetNextIncomeOccurrenceAfter(account.ID, budgetPlanID, *lastIncomeDate)
+		if err != nil {
+			log.Printf("Error getting next upcoming income: %v", err)
+			http.Error(w, "Failed to load paycheck summary data", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Fallback to original method if no lastIncomeDate
+		nextIncomeDate, err = s.store.GetNextUpcomingIncomeOccurrence(account.ID, budgetPlanID)
+		if err != nil {
+			log.Printf("Error getting next upcoming income: %v", err)
+			http.Error(w, "Failed to load paycheck summary data", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Calculate previous and next paycheck periods for pagination
+	// Previous = go back towards offset 0 (only if offset > 0)
+	// Next = go forward to next period (offset + 1)
+	var prevLastIncomeDate, nextLastIncomeDate *time.Time
+	// Previous period: only if we're not at offset 0 (current period)
+	if offset > 0 {
+		// Calculate what lastIncomeDate would be at offset - 1
+		if offset == 1 {
+			// Going back to offset 0 means using baseLastIncomeDate
+			prevLastIncomeDate = baseLastIncomeDate
+		} else {
+			// Calculate the period at offset - 1
+			currentDate := baseLastIncomeDate
+			if currentDate == nil {
+				now := time.Now()
+				currentDate = &now
+			}
+			for i := 0; i < offset-1; i++ {
+				next, err := s.store.GetNextIncomeOccurrenceAfter(account.ID, budgetPlanID, *currentDate)
+				if err != nil || next == nil {
+					prevLastIncomeDate = nil
+					break
+				}
+				prevLastIncomeDate = next
+				currentDate = next
+			}
+		}
+	}
+	if nextIncomeDate != nil {
+		// Next period: find the income occurrence after nextIncomeDate
+		nextLastIncomeDate, _ = s.store.GetNextIncomeOccurrenceAfter(account.ID, budgetPlanID, *nextIncomeDate)
+	}
+
+	// Get budget plans for selector
+	budgetPlans, err := s.store.GetBudgetPlansByAccount(account.ID)
+	if err != nil {
+		log.Printf("Error getting budget plans: %v", err)
+		budgetPlans = []data.BudgetPlan{}
+	}
+
+	// If we still don't have dates, show the page with no data message
+	if lastIncomeDate == nil || nextIncomeDate == nil {
+		page := templates.PaycheckSummaryPage(nil, nil, nil, nil, financialAccounts, selectedFinancialAccount, nil, 0, nil, prevLastIncomeDate, nextLastIncomeDate, offset, budgetPlans, budgetPlanID)
+		if err := templates.BaseLayoutWithAuthAndBudgetPlan("Paycheck Summary - Budget App", true, budgetPlans, budgetPlanID, page).Render(w); err != nil {
+			log.Printf("Error rendering paycheck summary page: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Get all transactions in the period (between last income and next income)
+	// Filter by financial account if one is selected
+	var transactions []data.Transaction
+	allTransactions, err := s.store.GetTransactionsBetweenDates(account.ID, *lastIncomeDate, *nextIncomeDate)
+	if err != nil {
+		log.Printf("Error getting transactions between dates: %v", err)
+		http.Error(w, "Failed to load transactions", http.StatusInternalServerError)
+		return
+	}
+
+	// Filter by financial account if selected
+	if selectedFinancialAccount != nil {
+		for _, tx := range allTransactions {
+			if tx.FinancialAccountID == selectedFinancialAccount.ID {
+				transactions = append(transactions, tx)
+			}
+		}
+	} else {
+		transactions = allTransactions
+	}
+
+	// Get upcoming expense occurrences in the period
+	expenseOccurrences, err := s.store.GetUpcomingExpenseOccurrencesBetweenDates(account.ID, budgetPlanID, *lastIncomeDate, *nextIncomeDate)
+	if err != nil {
+		log.Printf("Error getting expense occurrences: %v", err)
+		http.Error(w, "Failed to load expense occurrences", http.StatusInternalServerError)
+		return
+	}
+
+	// Calculate total expenses
+	// Count actual transactions (which includes matched recurring transactions)
+	var totalExpensesCents int64
+	for _, tx := range transactions {
+		// Only count negative amounts (expenses)
+		if tx.Amount < 0 {
+			totalExpensesCents += int64(-tx.Amount) // Make positive for calculation
+		}
+	}
+	// Only count unmatched expense occurrences to avoid double-counting
+	// Matched occurrences are already counted as actual transactions above
+	for _, occ := range expenseOccurrences {
+		// Only count expenses (negative expected amounts) that haven't been matched yet
+		if occ.RecurringTransaction.ExpectedAmount < 0 && !occ.IsMatched {
+			totalExpensesCents += int64(-occ.RecurringTransaction.ExpectedAmount) // Make positive
+		}
+	}
+
+	// Calculate expected remaining balance
+	var expectedRemainingCents *int64
+	if balanceCents != nil {
+		remaining := int64(*balanceCents) - totalExpensesCents
+		expectedRemainingCents = &remaining
+	}
+
+	page := templates.PaycheckSummaryPage(
+		lastIncomeDate,
+		nextIncomeDate,
+		transactions,
+		expenseOccurrences,
+		financialAccounts,
+		selectedFinancialAccount,
+		balanceCents,
+		totalExpensesCents,
+		expectedRemainingCents,
+		prevLastIncomeDate,
+		nextLastIncomeDate,
+		offset,
+		budgetPlans,
+		budgetPlanID,
+	)
+	if err := templates.BaseLayoutWithAuthAndBudgetPlan("Paycheck Summary - Budget App", true, budgetPlans, budgetPlanID, page).Render(w); err != nil {
+		log.Printf("Error rendering paycheck summary page: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// Budget plan management handlers
+
+func (s *Server) budgetPlansListHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+		return
+	}
+	// Get transaction counts for each plan
+	plansWithCounts := make([]templates.PlanWithCount, len(plans))
+	for i, p := range plans {
+		var count int
+		query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+		err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+		if err != nil {
+			count = 0
+		}
+		plansWithCounts[i] = templates.PlanWithCount{
+			BudgetPlan:       p,
+			TransactionCount: count,
+		}
+	}
+	w.Header().Set("Content-Type", "text/html")
+	templates.RenderBudgetPlansList(w, plansWithCounts)
+}
+
+func (s *Server) budgetPlansPageHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+		return
+	}
+	plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+		return
+	}
+	// Get transaction counts for each plan
+	plansWithCounts := make([]templates.PlanWithCount, len(plans))
+	for i, p := range plans {
+		var count int
+		query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+		err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+		if err != nil {
+			count = 0
+		}
+		plansWithCounts[i] = templates.PlanWithCount{
+			BudgetPlan:       p,
+			TransactionCount: count,
+		}
+	}
+	// Get budget plans for sidebar selector
+	var budgetPlans []data.BudgetPlan
+	for _, pwc := range plansWithCounts {
+		budgetPlans = append(budgetPlans, pwc.BudgetPlan)
+	}
+	// Get selected budget plan ID from context
+	var selectedBudgetPlanID int
+	if budgetPlanID, ok := r.Context().Value("budget_plan_id").(int); ok {
+		selectedBudgetPlanID = budgetPlanID
+	}
+	page := templates.BudgetPlansPage(plansWithCounts)
+	_ = templates.BaseLayoutWithAuthAndBudgetPlan("Budget Plans - Budget App", true, budgetPlans, selectedBudgetPlanID, page).Render(w)
+}
+
+func (s *Server) createBudgetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+	name := r.FormValue("name")
+	if name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+	_, err := s.store.CreateBudgetPlan(account.ID, name)
+	if err != nil {
+		http.Error(w, "Failed to create budget plan", http.StatusInternalServerError)
+		return
+	}
+	if isHTMX(r) {
+		// Return updated budget plans list
+		plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+			return
+		}
+		plansWithCounts := make([]templates.PlanWithCount, len(plans))
+		for i, p := range plans {
+			var count int
+			query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+			err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+			if err != nil {
+				count = 0
+			}
+			plansWithCounts[i] = templates.PlanWithCount{
+				BudgetPlan:       p,
+				TransactionCount: count,
+			}
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderBudgetPlansList(w, plansWithCounts)
+	} else {
+		http.Redirect(w, r, "/budget-plans/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) updateBudgetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	planID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget plan ID", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+	name := r.FormValue("name")
+	if name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+	err = s.store.UpdateBudgetPlan(account.ID, planID, name)
+	if err != nil {
+		http.Error(w, "Failed to update budget plan", http.StatusInternalServerError)
+		return
+	}
+	if isHTMX(r) {
+		// Return updated budget plans list
+		plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+			return
+		}
+		plansWithCounts := make([]templates.PlanWithCount, len(plans))
+		for i, p := range plans {
+			var count int
+			query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+			err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+			if err != nil {
+				count = 0
+			}
+			plansWithCounts[i] = templates.PlanWithCount{
+				BudgetPlan:       p,
+				TransactionCount: count,
+			}
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderBudgetPlansList(w, plansWithCounts)
+	} else {
+		http.Redirect(w, r, "/budget-plans/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) deleteBudgetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	planID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget plan ID", http.StatusBadRequest)
+		return
+	}
+	err = s.store.DeleteBudgetPlan(account.ID, planID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if isHTMX(r) {
+		// Return updated budget plans list
+		plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+			return
+		}
+		plansWithCounts := make([]templates.PlanWithCount, len(plans))
+		for i, p := range plans {
+			var count int
+			query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+			err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+			if err != nil {
+				count = 0
+			}
+			plansWithCounts[i] = templates.PlanWithCount{
+				BudgetPlan:       p,
+				TransactionCount: count,
+			}
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderBudgetPlansList(w, plansWithCounts)
+	} else {
+		http.Redirect(w, r, "/budget-plans/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) activateBudgetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	planID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget plan ID", http.StatusBadRequest)
+		return
+	}
+	err = s.store.SetActiveBudgetPlan(account.ID, planID)
+	if err != nil {
+		http.Error(w, "Failed to activate budget plan", http.StatusInternalServerError)
+		return
+	}
+	// Update cookie to reflect new active plan
+	http.SetCookie(w, &http.Cookie{
+		Name:     "selected_budget_plan_id",
+		Value:    idStr,
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(30 * 24 * time.Hour.Seconds()),
+	})
+	if isHTMX(r) {
+		// Return updated budget plans list
+		plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+			return
+		}
+		plansWithCounts := make([]templates.PlanWithCount, len(plans))
+		for i, p := range plans {
+			var count int
+			query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+			err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+			if err != nil {
+				count = 0
+			}
+			plansWithCounts[i] = templates.PlanWithCount{
+				BudgetPlan:       p,
+				TransactionCount: count,
+			}
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderBudgetPlansList(w, plansWithCounts)
+	} else {
+		http.Redirect(w, r, "/budget-plans/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) copyBudgetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	sourcePlanID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget plan ID", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+	newName := r.FormValue("name")
+	if newName == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+	_, err = s.store.CopyBudgetPlan(account.ID, sourcePlanID, newName)
+	if err != nil {
+		http.Error(w, "Failed to copy budget plan", http.StatusInternalServerError)
+		return
+	}
+	if isHTMX(r) {
+		// Return updated budget plans list
+		plans, err := s.store.GetBudgetPlansByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load budget plans", http.StatusInternalServerError)
+			return
+		}
+		plansWithCounts := make([]templates.PlanWithCount, len(plans))
+		for i, p := range plans {
+			var count int
+			query := `SELECT COUNT(*) FROM recurring_transactions WHERE budget_plan_id = $1`
+			err := s.store.GetDB().QueryRow(query, p.ID).Scan(&count)
+			if err != nil {
+				count = 0
+			}
+			plansWithCounts[i] = templates.PlanWithCount{
+				BudgetPlan:       p,
+				TransactionCount: count,
+			}
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderBudgetPlansList(w, plansWithCounts)
+	} else {
+		http.Redirect(w, r, "/budget-plans/", http.StatusSeeOther)
+	}
+}
+
+// Budget management handlers
+
+func (s *Server) budgetsPageHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+		return
+	}
+
+	// Check if budget plan is required
+	if !s.requireBudgetPlan(w, r, account.ID) {
+		return
+	}
+
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		http.Redirect(w, r, "/budget-plans", http.StatusSeeOther)
+		return
+	}
+
+	// Parse year and month from query parameters (default to current month)
+	now := time.Now()
+	year := now.Year()
+	month := int(now.Month())
+
+	if yearStr := r.URL.Query().Get("year"); yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+	if monthStr := r.URL.Query().Get("month"); monthStr != "" {
+		if m, err := strconv.Atoi(monthStr); err == nil && m >= 1 && m <= 12 {
+			month = m
+		}
+	}
+
+	// Get budgets with summaries
+	budgetSummaries, err := s.store.GetBudgetSummaries(account.ID, budgetPlanID, year, month)
+	if err != nil {
+		log.Printf("Error fetching budgets: %v", err)
+		budgetSummaries = []data.BudgetSummary{}
+	}
+
+	// Get categories for the form
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		log.Printf("Error fetching categories: %v", err)
+		categories = []data.Category{}
+	}
+
+	// Calculate yearly income for display
+	yearlyIncome, err := s.store.CalculateExpectedYearlyIncome(account.ID, budgetPlanID)
+	if err != nil {
+		log.Printf("Error calculating yearly income: %v", err)
+		yearlyIncome = 0
+	}
+
+	// Get budget plans for sidebar selector
+	budgetPlans, err := s.store.GetBudgetPlansByAccount(account.ID)
+	if err != nil {
+		log.Printf("Error fetching budget plans: %v", err)
+		budgetPlans = []data.BudgetPlan{}
+	}
+
+	page := templates.BudgetsPage(budgetSummaries, categories, yearlyIncome, year, month)
+	_ = templates.BaseLayoutWithAuthAndBudgetPlan("Budgets - Budget App", true, budgetPlans, budgetPlanID, page).Render(w)
+}
+
+func (s *Server) createBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Check if budget plan is required
+	if !s.requireBudgetPlan(w, r, account.ID) {
+		return
+	}
+
+	budgetPlanID, ok := r.Context().Value("budget_plan_id").(int)
+	if !ok || budgetPlanID == 0 {
+		http.Error(w, "Budget plan required", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	categoryIDStr := r.FormValue("category_id")
+	amountType := r.FormValue("amount_type")
+	amountStr := r.FormValue("amount")
+
+	if amountType == "" || amountStr == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	var categoryID *int
+	if categoryIDStr != "" && categoryIDStr != "0" {
+		id, err := strconv.Atoi(categoryIDStr)
+		if err == nil {
+			categoryID = &id
+		}
+	}
+
+	var amount int
+	if amountType == "fixed" {
+		// Parse as dollar amount (e.g., "100.50" -> 10050 cents)
+		parsed, err := parseAmountToCents(amountStr)
+		if err != nil {
+			http.Error(w, "Invalid amount format", http.StatusBadRequest)
+			return
+		}
+		amount = parsed
+	} else if amountType == "percentage" {
+		// Parse as percentage (e.g., "10.5" -> 1050 for 10.5%)
+		percentage, err := strconv.ParseFloat(amountStr, 64)
+		if err != nil || percentage < 0 || percentage > 100 {
+			http.Error(w, "Invalid percentage (must be 0-100)", http.StatusBadRequest)
+			return
+		}
+		// Store as percentage * 100 (e.g., 10.5% = 1050)
+		amount = int(percentage * 100)
+	} else {
+		http.Error(w, "Invalid amount type", http.StatusBadRequest)
+		return
+	}
+
+	_, err := s.store.CreateBudget(account.ID, budgetPlanID, categoryID, amountType, amount)
+	if err != nil {
+		log.Printf("Error creating budget: %v", err)
+		http.Error(w, "Failed to create budget", http.StatusInternalServerError)
+		return
+	}
+
+	// Parse year and month for redirect
+	now := time.Now()
+	year := now.Year()
+	month := int(now.Month())
+	if yearStr := r.URL.Query().Get("year"); yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+	if monthStr := r.URL.Query().Get("month"); monthStr != "" {
+		if m, err := strconv.Atoi(monthStr); err == nil && m >= 1 && m <= 12 {
+			month = m
+		}
+	}
+
+	if isHTMX(r) {
+		// Return updated budgets list
+		budgetSummaries, err := s.store.GetBudgetSummaries(account.ID, budgetPlanID, year, month)
+		if err != nil {
+			http.Error(w, "Failed to load budgets", http.StatusInternalServerError)
+			return
+		}
+		yearlyIncome, _ := s.store.CalculateExpectedYearlyIncome(account.ID, budgetPlanID)
+		w.Header().Set("Content-Type", "text/html")
+		templates.BudgetTable(budgetSummaries, yearlyIncome).Render(w)
+	} else {
+		http.Redirect(w, r, fmt.Sprintf("/budgets?year=%d&month=%d", year, month), http.StatusSeeOther)
+	}
+}
+
+func (s *Server) updateBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	budgetID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	categoryIDStr := r.FormValue("category_id")
+	amountType := r.FormValue("amount_type")
+	amountStr := r.FormValue("amount")
+
+	if amountType == "" || amountStr == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	var categoryID *int
+	if categoryIDStr != "" && categoryIDStr != "0" {
+		id, err := strconv.Atoi(categoryIDStr)
+		if err == nil {
+			categoryID = &id
+		}
+	}
+
+	var amount int
+	if amountType == "fixed" {
+		parsed, err := parseAmountToCents(amountStr)
+		if err != nil {
+			http.Error(w, "Invalid amount format", http.StatusBadRequest)
+			return
+		}
+		amount = parsed
+	} else if amountType == "percentage" {
+		percentage, err := strconv.ParseFloat(amountStr, 64)
+		if err != nil || percentage < 0 || percentage > 100 {
+			http.Error(w, "Invalid percentage (must be 0-100)", http.StatusBadRequest)
+			return
+		}
+		amount = int(percentage * 100)
+	} else {
+		http.Error(w, "Invalid amount type", http.StatusBadRequest)
+		return
+	}
+
+	err = s.store.UpdateBudget(account.ID, budgetID, categoryID, amountType, amount)
+	if err != nil {
+		log.Printf("Error updating budget: %v", err)
+		http.Error(w, "Failed to update budget", http.StatusInternalServerError)
+		return
+	}
+
+	// Get budget plan ID for redirect
+	budget, err := s.store.GetBudget(account.ID, budgetID)
+	if err != nil || budget == nil {
+		http.Error(w, "Budget not found", http.StatusNotFound)
+		return
+	}
+
+	// Parse year and month for redirect
+	now := time.Now()
+	year := now.Year()
+	month := int(now.Month())
+	if yearStr := r.URL.Query().Get("year"); yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+	if monthStr := r.URL.Query().Get("month"); monthStr != "" {
+		if m, err := strconv.Atoi(monthStr); err == nil && m >= 1 && m <= 12 {
+			month = m
+		}
+	}
+
+	if isHTMX(r) {
+		// Return updated budgets list
+		budgetSummaries, err := s.store.GetBudgetSummaries(account.ID, budget.BudgetPlanID, year, month)
+		if err != nil {
+			http.Error(w, "Failed to load budgets", http.StatusInternalServerError)
+			return
+		}
+		yearlyIncome, _ := s.store.CalculateExpectedYearlyIncome(account.ID, budget.BudgetPlanID)
+		w.Header().Set("Content-Type", "text/html")
+		templates.BudgetTable(budgetSummaries, yearlyIncome).Render(w)
+	} else {
+		http.Redirect(w, r, fmt.Sprintf("/budgets?year=%d&month=%d", year, month), http.StatusSeeOther)
+	}
+}
+
+func (s *Server) deleteBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	budgetID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get budget to get budget plan ID
+	budget, err := s.store.GetBudget(account.ID, budgetID)
+	if err != nil || budget == nil {
+		http.Error(w, "Budget not found", http.StatusNotFound)
+		return
+	}
+
+	err = s.store.DeleteBudget(account.ID, budgetID)
+	if err != nil {
+		log.Printf("Error deleting budget: %v", err)
+		http.Error(w, "Failed to delete budget", http.StatusInternalServerError)
+		return
+	}
+
+	// Parse year and month for redirect
+	now := time.Now()
+	year := now.Year()
+	month := int(now.Month())
+	if yearStr := r.URL.Query().Get("year"); yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+	if monthStr := r.URL.Query().Get("month"); monthStr != "" {
+		if m, err := strconv.Atoi(monthStr); err == nil && m >= 1 && m <= 12 {
+			month = m
+		}
+	}
+
+	if isHTMX(r) {
+		// Return updated budgets list
+		budgetSummaries, err := s.store.GetBudgetSummaries(account.ID, budget.BudgetPlanID, year, month)
+		if err != nil {
+			http.Error(w, "Failed to load budgets", http.StatusInternalServerError)
+			return
+		}
+		yearlyIncome, _ := s.store.CalculateExpectedYearlyIncome(account.ID, budget.BudgetPlanID)
+		w.Header().Set("Content-Type", "text/html")
+		templates.BudgetTable(budgetSummaries, yearlyIncome).Render(w)
+	} else {
+		http.Redirect(w, r, fmt.Sprintf("/budgets?year=%d&month=%d", year, month), http.StatusSeeOther)
+	}
+}
+
+func (s *Server) editBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	budgetID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid budget ID", http.StatusBadRequest)
+		return
+	}
+
+	budget, err := s.store.GetBudget(account.ID, budgetID)
+	if err != nil || budget == nil {
+		http.Error(w, "Budget not found", http.StatusNotFound)
+		return
+	}
+
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+
+	budgetPlanID, _ := r.Context().Value("budget_plan_id").(int)
+	yearlyIncome, _ := s.store.CalculateExpectedYearlyIncome(account.ID, budgetPlanID)
+
+	w.Header().Set("Content-Type", "text/html")
+	templates.BudgetForm(budget, categories, yearlyIncome, true).Render(w)
+}
+
+func (s *Server) newBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	categories, err := s.store.GetCategoriesByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load categories", http.StatusInternalServerError)
+		return
+	}
+
+	budgetPlanID, _ := r.Context().Value("budget_plan_id").(int)
+	yearlyIncome, _ := s.store.CalculateExpectedYearlyIncome(account.ID, budgetPlanID)
+
+	w.Header().Set("Content-Type", "text/html")
+	templates.BudgetForm(nil, categories, yearlyIncome, false).Render(w)
+}
+
+// Financial accounts management handlers
+
+func (s *Server) financialAccountsPageHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+		return
+	}
+	accounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+	if err != nil {
+		http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+		return
+	}
+	page := templates.FinancialAccountsPage(accounts)
+	_ = templates.BaseLayoutWithAuth("Financial Accounts - Budget App", true, page).Render(w)
+}
+
+func (s *Server) createFinancialAccountHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	name := r.FormValue("name")
+	accountType := r.FormValue("type")
+	csvDateField := r.FormValue("csv_date_field")
+	csvPayeeField := r.FormValue("csv_payee_field")
+	csvExpenseField := r.FormValue("csv_expense_field")
+	csvIncomeField := r.FormValue("csv_income_field")
+	csvCategoryField := r.FormValue("csv_category_field")
+	csvBalanceField := r.FormValue("csv_balance_field")
+
+	if name == "" || accountType == "" || csvDateField == "" || csvPayeeField == "" || csvExpenseField == "" || csvIncomeField == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	var csvCategoryFieldPtr *string
+	if csvCategoryField != "" {
+		csvCategoryFieldPtr = &csvCategoryField
+	}
+	var csvBalanceFieldPtr *string
+	if csvBalanceField != "" {
+		csvBalanceFieldPtr = &csvBalanceField
+	}
+
+	_, err := s.store.CreateFinancialAccount(account.ID, name, accountType, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField, csvCategoryFieldPtr, csvBalanceFieldPtr)
+	if err != nil {
+		http.Error(w, "Failed to create financial account", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated financial accounts list
+		accounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderFinancialAccountsList(w, accounts)
+	} else {
+		http.Redirect(w, r, "/financial-accounts/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) updateFinancialAccountHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	financialAccountID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid financial account ID", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	name := r.FormValue("name")
+	accountType := r.FormValue("type")
+	csvDateField := r.FormValue("csv_date_field")
+	csvPayeeField := r.FormValue("csv_payee_field")
+	csvExpenseField := r.FormValue("csv_expense_field")
+	csvIncomeField := r.FormValue("csv_income_field")
+	csvCategoryField := r.FormValue("csv_category_field")
+	csvBalanceField := r.FormValue("csv_balance_field")
+	balanceStr := r.FormValue("balance")
+
+	if name == "" || accountType == "" || csvDateField == "" || csvPayeeField == "" || csvExpenseField == "" || csvIncomeField == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	var csvCategoryFieldPtr *string
+	if csvCategoryField != "" {
+		csvCategoryFieldPtr = &csvCategoryField
+	}
+	var csvBalanceFieldPtr *string
+	if csvBalanceField != "" {
+		csvBalanceFieldPtr = &csvBalanceField
+	}
+	var balancePtr *int
+	if balanceStr != "" {
+		balance, err := parseAmountToCents(balanceStr)
+		if err == nil {
+			balancePtr = &balance
+		}
+	}
+
+	err = s.store.UpdateFinancialAccount(account.ID, financialAccountID, name, accountType, csvDateField, csvPayeeField, csvExpenseField, csvIncomeField, csvCategoryFieldPtr, csvBalanceFieldPtr, balancePtr)
+	if err != nil {
+		http.Error(w, "Failed to update financial account", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated financial accounts list
+		accounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderFinancialAccountsList(w, accounts)
+	} else {
+		http.Redirect(w, r, "/financial-accounts/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) deleteFinancialAccountHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	financialAccountID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid financial account ID", http.StatusBadRequest)
+		return
+	}
+
+	err = s.store.DeleteFinancialAccount(account.ID, financialAccountID)
+	if err != nil {
+		http.Error(w, "Failed to delete financial account", http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		// Return updated financial accounts list
+		accounts, err := s.store.GetFinancialAccountsByAccount(account.ID)
+		if err != nil {
+			http.Error(w, "Failed to load financial accounts", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		templates.RenderFinancialAccountsList(w, accounts)
+	} else {
+		http.Redirect(w, r, "/financial-accounts/", http.StatusSeeOther)
+	}
+}
+
+func (s *Server) editFinancialAccountHandler(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value("account").(*data.Account)
+	if !ok || account == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	financialAccountID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid financial account ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get the financial account
+	fa, err := s.store.GetFinancialAccount(account.ID, financialAccountID)
+	if err != nil {
+		http.Error(w, "Failed to load financial account", http.StatusInternalServerError)
+		return
+	}
+
+	if fa == nil {
+		http.Error(w, "Financial account not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+
+	// Render the edit form
+	templates.FinancialAccountFormFields(fa, "edit").Render(w)
 }
