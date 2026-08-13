@@ -456,6 +456,7 @@ jobs:
       app_id: ${{ steps.deploy.outputs.app_id }}
       migration_app_id: ${{ steps.deploy.outputs.migration_app_id }}
       termination_time: ${{ steps.termination.outputs.termination_time }}
+      termination_delay_minutes: ${{ steps.termination.outputs.termination_delay_minutes }}
     
     permissions:
       contents: read
@@ -795,9 +796,13 @@ jobs:
     - name: Calculate termination time
       id: termination
       if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
+      env:
+        DELAY_MINUTES: ${{ vars.TERMINATION_DELAY_MINUTES || '30' }}
       run: |
-        TERMINATION_TIME=$(date -d '+30 minutes' -u +'%Y-%m-%dT%H:%M:%SZ')
+        TERMINATION_TIME=$(date -d "+${DELAY_MINUTES} minutes" -u +'%Y-%m-%dT%H:%M:%SZ')
         echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
+        echo "termination_delay_minutes=${DELAY_MINUTES}" >> $GITHUB_OUTPUT
+        echo "Auto-termination scheduled in ${DELAY_MINUTES} minutes (must match termination-delay environment wait timer)"
 
   auto-termination:
     name: Set Up Auto-Termination
@@ -818,6 +823,7 @@ jobs:
         APP_ID: ${{ needs.deploy.outputs.app_id }}
         MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
         APP_URL: ${{ needs.deploy.outputs.app_url }}
+        TERMINATION_DELAY_MINUTES: ${{ needs.deploy.outputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
@@ -877,12 +883,13 @@ jobs:
                 deployment_id: deploymentId,
                 app_id: appId || '',
                 migration_app_id: migrationAppId || '',
-                app_url: appUrl || ''
+                app_url: appUrl || '',
+                termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30'
               }
             });
             
             console.log('✅ Auto-termination workflow triggered successfully');
-            console.log(`Workflow will execute after 30-minute delay (environment wait timer)`);
+            console.log(`Workflow will execute after ${process.env.TERMINATION_DELAY_MINUTES || '30'}-minute delay (environment wait timer)`);
           } catch (error) {
             console.error('❌ Failed to trigger auto-termination workflow:', error);
             throw error;
@@ -1092,7 +1099,7 @@ jobs:
                   },
                   {
                     "title": "Auto-terminates",
-                    "value": "30 minutes",
+                    "value": "${{ vars.TERMINATION_DELAY_MINUTES || '30' }} minutes",
                     "short": true
                   }
                 ]

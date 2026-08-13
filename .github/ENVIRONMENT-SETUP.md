@@ -16,15 +16,17 @@ To enable the modern workflow_dispatch auto-termination with wait timers, you ne
 1. In the `termination-delay` environment settings:
 2. Click **Add protection rule**
 3. Enable **Wait timer**
-4. Set wait time to: **30 minutes**
+4. Set wait time to match **`TERMINATION_DELAY_MINUTES`** (repository variable under **Settings → Secrets and variables → Actions → Variables**; default **30 minutes**)
 5. Click **Save protection rules**
+
+When testing with a shorter delay, set both the environment wait timer and `TERMINATION_DELAY_MINUTES` to the same value so deploy comments show the correct termination time.
 
 ### 3. Environment Configuration
 
 ```yaml
 Environment Name: termination-delay
 Protection Rules:
-  ✅ Wait timer: 30 minutes
+  ✅ Wait timer: same as TERMINATION_DELAY_MINUTES (default 30 minutes)
   ❌ Required reviewers: (leave unchecked)
   ❌ Prevent self-review: (leave unchecked)
   ❌ Restrict pushes: (leave unchecked)

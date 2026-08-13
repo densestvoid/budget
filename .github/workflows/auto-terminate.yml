@@ -23,6 +23,11 @@ on:
         description: 'Application URL (leave empty to auto-detect)'
         required: false
         type: string
+      termination_delay_minutes:
+        description: 'Wait timer duration in minutes (must match termination-delay environment and TERMINATION_DELAY_MINUTES variable)'
+        required: false
+        type: string
+        default: '30'
 
 # Prevent multiple auto-terminate workflows for the same PR
 # Cancel previous terminations since destroy operations are idempotent
@@ -43,11 +48,9 @@ jobs:
       issues: write
       pull-requests: write
     
-    # Use environment with wait timer - this is the key!
+    # Use environment with wait timer - duration must match TERMINATION_DELAY_MINUTES repo variable
     environment: 
       name: termination-delay
-      # The environment will have a 30-minute wait timer configured
-      # This delays the job WITHOUT using runner time
     
     steps:
     - name: Checkout code
@@ -314,11 +317,12 @@ jobs:
           });
     
     - name: Send termination notification to Slack
-      if: always() && steps.validate.outputs.pr_number != ''
+      if: always() && steps.validate.outputs.pr_number != '' && secrets.SLACK_WEBHOOK_PR != ''
+      continue-on-error: true
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        webhook: ${{ secrets.SLACK_WEBHOOK_PR }}
         payload: |
           {
             "text": "${{ steps.init.outputs.already_terminated == 'true' && 'ℹ️ PR Deployment Already Terminated' || steps.destroy.outputs.destroy_success == 'true' && '✅ PR Deployment Auto-Terminated' || '❌ PR Deployment Termination Failed' }}",
@@ -352,7 +356,9 @@ jobs:
           }
     
     - name: Update workflow summary
+      if: always()
       run: |
+        DELAY_MINUTES="${{ github.event.inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}"
         echo "## 🗑️ Auto-Termination Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**App ID:** ${{ steps.validate.outputs.app_id }}" >> $GITHUB_STEP_SUMMARY
@@ -361,4 +367,4 @@ jobs:
         echo "**Termination Result:** ${{ steps.destroy.outputs.destroy_success }}" >> $GITHUB_STEP_SUMMARY
         echo "**Completed At:** $(date -u)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "*Environment wait timer prevented runner time waste during 30-minute delay*" >> $GITHUB_STEP_SUMMARY
+        echo "*Environment wait timer (${DELAY_MINUTES} minutes) prevented runner time waste during the delay*" >> $GITHUB_STEP_SUMMARY
