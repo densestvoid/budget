@@ -22,7 +22,7 @@ The server will listen on the configured port and serve the web application.`,
 		// Connect to database
 		dsn := viper.GetString("DATABASE_URL")
 		if dsn == "" {
-			dsn = "postgres://postgres:password@localhost:5432/budget?sslmode=disable"
+			dsn = defaultLocalDSN
 		}
 
 		if err := app.ConnectDB(dsn); err != nil {

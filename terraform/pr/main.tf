@@ -23,6 +23,11 @@ provider "digitalocean" {
 # Local values
 locals {
   project_name = "budget-develop"
+  # Unique /24 per PR — DigitalOcean VPC CIDRs must not overlap account-wide.
+  pr_suffix         = replace(var.deployment_id, "pr-", "")
+  pr_number         = tonumber(local.pr_suffix)
+  vpc_third_octet   = (local.pr_number % 240) + 10
+  vpc_ip_range      = "10.${local.vpc_third_octet}.0.0/24"
 }
 
 # Reference existing DigitalOcean project
@@ -34,7 +39,7 @@ data "digitalocean_project" "budget" {
 resource "digitalocean_vpc" "budget_vpc" {
   name     = var.deployment_id
   region   = var.region
-  ip_range = "172.16.0.0/16"
+  ip_range = local.vpc_ip_range
 }
 
 # Managed PostgreSQL database with private VPC networking
@@ -60,6 +65,10 @@ resource "digitalocean_database_db" "budget_database" {
 resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = var.deployment_id
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 # Create budget schema and grant privileges using null_resource

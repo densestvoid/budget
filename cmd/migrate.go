@@ -9,13 +9,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-const defaultDSN = "postgres://postgres:password@localhost:5432/budget?sslmode=disable"
-
 // runMigration executes a migration operation with proper setup
 func runMigration(operation func(*data.Storage) error, operationName string) error {
 	dsn := viper.GetString("DATABASE_URL")
 	if dsn == "" {
-		dsn = defaultDSN
+		dsn = defaultLocalDSN
 	}
 
 	// Initialize migrations

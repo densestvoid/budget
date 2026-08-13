@@ -20,8 +20,6 @@ import (
 	_ "github.com/lib/pq"
 	g "github.com/maragudk/gomponents"
 	"github.com/maragudk/gomponents/html"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 type Server struct {
@@ -42,7 +40,6 @@ func (s *Server) SetupMiddleware() {
 	// Basic middleware
 	s.router.Use(middleware.Logger)
 	s.router.Use(middleware.Recoverer)
-	s.router.Use(middleware.RealIP)
 	s.router.Use(middleware.RequestID)
 	s.router.Use(middleware.Timeout(60 * time.Second))
 
@@ -564,7 +561,7 @@ func (s *Server) uploadTransactionsHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Parse CSV file
-	records, err := parseCSVFile(r)
+	records, err := parseCSVFile(w, r)
 	if err != nil {
 		s.handleCSVError(w, r, err.Error())
 		return
@@ -729,8 +726,7 @@ func (s *Server) handleRuleCreationResponse(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "text/html")
 	if updatedCount > 0 {
-		banner := fmt.Sprintf(`<div id="rule-banner" class="alert alert-success position-fixed top-0 start-50 translate-middle-x mt-3" style="z-index:2000; min-width:300px; text-align:center;">Updated %d transactions</div><script>setTimeout(function(){ var b=document.getElementById('rule-banner'); if(b){b.remove();}}, 3500);</script>`, updatedCount)
-		if _, err := w.Write([]byte(banner)); err != nil {
+		if err := ruleUpdateBannerTmpl.Execute(w, map[string]int{"Count": updatedCount}); err != nil {
 			log.Printf("Error writing rule banner: %v", err)
 		}
 	}
@@ -920,12 +916,10 @@ func (s *Server) SetDB(db *sql.DB) {
 func (s *Server) Run() error {
 	log.Printf("Server starting on port %s", s.port)
 
-	// Create HTTP/2 server
-	h2s := &http2.Server{}
 	server := &http.Server{
 		Addr:              ":" + s.port,
-		Handler:           h2c.NewHandler(s.router, h2s),
-		ReadHeaderTimeout: 20 * time.Second, // Prevent Slowloris attacks
+		Handler:           s.router,
+		ReadHeaderTimeout: 20 * time.Second,
 	}
 
 	return server.ListenAndServe()
@@ -992,9 +986,7 @@ func (s *Server) editPayeeInlineHandler(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	w.Header().Set("Content-Type", "text/html")
-	if _, err := w.Write([]byte(`<form hx-patch="/transactions/` + idStr + `" hx-trigger="blur from:input, submit" hx-target="this" hx-swap="outerHTML" style="display:inline;">
-		<input type="text" name="payee" value="` + htmlEscape(payee) + `" class="form-control form-control-sm w-auto d-inline" autofocus onblur="this.form.requestSubmit()">
-</form>`)); err != nil {
+	if err := payeeEditFormTmpl.Execute(w, map[string]string{"ID": idStr, "Payee": payee}); err != nil {
 		log.Printf("Error writing form response: %v", err)
 	}
 }
@@ -1338,8 +1330,11 @@ func (s *Server) findCategoryByID(categories []data.Category, categoryID int) *d
 }
 
 // parseCSVFile parses the uploaded CSV file and returns records
-func parseCSVFile(r *http.Request) ([][]string, error) {
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
+func parseCSVFile(w http.ResponseWriter, r *http.Request) ([][]string, error) {
+	const maxUploadSize = 10 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	// #nosec G120 -- body size is limited by MaxBytesReader above; ParseMultipartForm uses the same limit
+	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		return nil, fmt.Errorf("failed to parse form: %w", err)
 	}
 

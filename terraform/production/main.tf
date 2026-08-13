@@ -28,7 +28,6 @@ locals {
   database_cluster_name = "production"
   database_name = "production"
   database_user_name = "production"
-  domain_name = "budget.densestvoid.dev"
 }
 
 # Reference existing DigitalOcean project
@@ -138,9 +137,10 @@ SQL
   }
 }
 
-# Reference existing domain (pre-allocated, DNS records are preconfigured)
+# Reference existing domain when configured (pre-allocated, DNS records are preconfigured)
 data "digitalocean_domain" "existing_domain" {
-  name = local.domain_name
+  count = var.domain_name != "" ? 1 : 0
+  name  = var.domain_name
 }
 
 # Use the budget-app module
