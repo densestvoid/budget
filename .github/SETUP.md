@@ -30,7 +30,7 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 | `PRODUCTION_DOMAIN` | Production (optional) | Custom domain pre-allocated in DigitalOcean (DNS managed outside Terraform) |
 | `TERMINATION_DELAY_MINUTES` | PR auto-termination (optional) | Minutes before PR deployments are destroyed (default: `30`). Must match the `termination-delay` environment wait timer. |
 
-You can override the delay per run via the PR deploy workflow's `termination_delay_minutes` input, or via the production workflow's `domain_name` input.
+You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input. Override `TERMINATION_DELAY_MINUTES` per run via the PR deploy workflow's `termination_delay_minutes` input.
 
 ## GitHub environment (PR auto-termination)
 

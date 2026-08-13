@@ -18,6 +18,11 @@ on:
         description: 'Minutes before auto-termination (must match termination-delay environment wait timer)'
         required: false
         type: string
+      force_cleanup:
+        description: 'Destroy existing PR deployment before redeploying (use when prior deployment was not terminated)'
+        required: false
+        type: boolean
+        default: false
 
 # Prevent concurrent deployments for the same PR (manual and automatic)
 # Don't cancel running workflows to avoid partial Terraform deployments
@@ -54,6 +59,7 @@ jobs:
       pr_number: ${{ github.event.number || github.event.inputs.pr_number }}
       git_ref: ${{ github.event.inputs.ref || '' }}
       termination_delay_minutes: ${{ github.event.inputs.termination_delay_minutes || '' }}
+      force_cleanup: ${{ github.event.inputs.force_cleanup == true }}
     secrets:
       DO_TOKEN: ${{ secrets.DO_TOKEN }}
       TERRAFORM_AWS_S3_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}

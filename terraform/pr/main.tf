@@ -65,6 +65,10 @@ resource "digitalocean_database_db" "budget_database" {
 resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = var.deployment_id
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 # Create budget schema and grant privileges using null_resource
