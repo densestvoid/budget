@@ -68,9 +68,9 @@ Deploys to production using long-living, pre-allocated resources:
    - Database is **never recreated** or modified by Terraform
    - Long-living and stable
    
-2. **Domain**: References pre-allocated domain
+2. **Domain**: Optional custom domain via `domain_name` variable or `PRODUCTION_DOMAIN` repository variable
    - DNS records are **preconfigured outside Terraform**
-   - Terraform only references the domain for informational purposes
+   - When set, Terraform references the domain for outputs only
    
 3. **Migrations**: Always execute on every deployment
    - Schema migrations run via the migration app before the main app
@@ -116,13 +116,10 @@ terraform apply
 
 ### Production Deployments
 
-- `existing_database_cluster_name`: Name of existing database cluster
-- `existing_database_name`: Name of existing database
-- `existing_database_user_name`: Name of existing database user
-- `domain_name`: Pre-allocated domain name
-- `github_repo`: GitHub repository
+- `do_token`: DigitalOcean API token
 - `docker_image_tag`: Docker image tag to deploy
 - `region`: DigitalOcean region
+- `domain_name`: Optional custom domain (pre-allocated in DigitalOcean; DNS managed outside Terraform)
 
 ## Outputs
 

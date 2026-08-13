@@ -10,6 +10,10 @@ on:
         description: 'PR number to deploy'
         required: true
         type: string
+      ref:
+        description: 'Git ref to deploy from (optional; defaults to the PR head branch for manual runs)'
+        required: false
+        type: string
 
 # Prevent concurrent deployments for the same PR (manual and automatic)
 # Don't cancel running workflows to avoid partial Terraform deployments
@@ -44,6 +48,7 @@ jobs:
       post_pr_comments: true
       setup_auto_termination: true
       pr_number: ${{ github.event.number || github.event.inputs.pr_number }}
+      git_ref: ${{ github.event.inputs.ref || '' }}
     secrets:
       DO_TOKEN: ${{ secrets.DO_TOKEN }}
       TERRAFORM_AWS_S3_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}

@@ -59,6 +59,14 @@ on:
         description: 'PR number (only for PR deployments)'
         required: false
         type: string
+      domain_name:
+        description: 'Custom domain for production (optional; DNS managed outside Terraform)'
+        required: false
+        type: string
+      git_ref:
+        description: 'Git ref to checkout (optional; defaults to the triggering ref)'
+        required: false
+        type: string
     secrets:
       DO_TOKEN:
         required: true
@@ -85,6 +93,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -242,6 +252,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Restore Go build cache
       id: cache
@@ -352,6 +364,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Download Go binary artifact
       if: needs.build-go.result == 'success'
@@ -437,11 +451,11 @@ jobs:
     runs-on: ubuntu-latest
     if: always() && (needs.check-builds.result == 'success' && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped'))
     outputs:
-      deployment_success: ${{ steps.defaults.outputs.deployment_success || steps.deploy.outputs.deployment_success }}
-      app_url: ${{ steps.defaults.outputs.app_url || steps.deploy.outputs.app_url }}
-      app_id: ${{ steps.defaults.outputs.app_id || steps.deploy.outputs.app_id }}
-      migration_app_id: ${{ steps.defaults.outputs.migration_app_id || steps.deploy.outputs.migration_app_id }}
-      termination_time: ${{ steps.defaults.outputs.termination_time || steps.deploy.outputs.termination_time }}
+      deployment_success: ${{ steps.deploy.outputs.deployment_success == 'true' }}
+      app_url: ${{ steps.deploy.outputs.app_url }}
+      app_id: ${{ steps.deploy.outputs.app_id }}
+      migration_app_id: ${{ steps.deploy.outputs.migration_app_id }}
+      termination_time: ${{ steps.termination.outputs.termination_time }}
     
     permissions:
       contents: read
@@ -452,16 +466,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
-    - name: Set default failure outputs
-      id: defaults
-      run: |
-        # Set default outputs in case deployment fails early
-        echo "deployment_success=false" >> $GITHUB_OUTPUT
-        echo "app_url=" >> $GITHUB_OUTPUT
-        echo "app_id=" >> $GITHUB_OUTPUT
-        echo "migration_app_id=" >> $GITHUB_OUTPUT
-        echo "termination_time=" >> $GITHUB_OUTPUT
+      with:
+        ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Verify Docker image exists
       id: verify_image
@@ -558,6 +564,10 @@ jobs:
         
         if [ "${{ inputs.environment }}" = "pr" ]; then
           echo "deployment_id = \"${{ inputs.deployment_id }}\"" >> terraform.tfvars
+        fi
+
+        if [ "${{ inputs.environment }}" = "production" ] && [ -n "${{ inputs.domain_name }}" ]; then
+          echo "domain_name = \"${{ inputs.domain_name }}\"" >> terraform.tfvars
         fi
         
         echo "✅ Terraform configuration prepared"
@@ -783,6 +793,7 @@ jobs:
         fi
     
     - name: Calculate termination time
+      id: termination
       if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
       run: |
         TERMINATION_TIME=$(date -d '+30 minutes' -u +'%Y-%m-%dT%H:%M:%SZ')
@@ -889,6 +900,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3

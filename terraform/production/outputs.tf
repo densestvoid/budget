@@ -34,8 +34,8 @@ output "database_connection_string" {
 
 # Domain info
 output "domain_name" {
-  description = "Pre-allocated domain name"
-  value       = data.digitalocean_domain.existing_domain.name
+  description = "Custom domain name when configured"
+  value       = var.domain_name != "" ? data.digitalocean_domain.existing_domain[0].name : ""
 }
 
 # Project info

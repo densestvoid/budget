@@ -24,3 +24,9 @@ variable "docker_image_tag" {
   type        = string
 }
 
+variable "domain_name" {
+  description = "Custom domain name pre-allocated in DigitalOcean (DNS managed outside Terraform). Leave empty to skip domain lookup."
+  type        = string
+  default     = ""
+}
+

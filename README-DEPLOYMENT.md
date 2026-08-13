@@ -1,68 +1,88 @@
-# 💰 Ultra-Cheap DigitalOcean App Platform Deployment
+# Budget App Deployment
 
-This branch contains a **cost-optimized** deployment using DigitalOcean App Platform for just **$10/month** (or **$0.011/hour** for 30-minute deployments).
+Automated deployment to DigitalOcean App Platform via GitHub Actions.
 
-## 🚀 GitHub Actions Deployment (Recommended)
+## Quick start
 
-1. **Add repository secret:**
-   - `DO_TOKEN`: Your DigitalOcean API token
+1. Configure [GitHub Actions secrets and variables](.github/SETUP.md)
+2. Create the `termination-delay` environment for PR auto-termination
+3. Open a PR — deployment runs automatically and comments with the app URL
+4. Merge to `main` — production deploys automatically
 
-2. **Push to any branch** - deployment happens automatically on PR creation/updates!
+## Manual deployment
 
-3. **Auto-termination after 30 minutes** saves costs
+### PR environment
 
-## 💰 App Platform Cost-Optimized Features
+Actions → **Deploy Budget App to DigitalOcean** → Run workflow
 
-- **$10/month total cost** ($5 app + $5 PostgreSQL container)
-- **Managed container service** - no server management
-- **Automatic HTTPS/SSL** - built into App Platform
-- **Built-in load balancing** and auto-scaling
-- **30-minute auto-termination** for cost control
-- **GitHub Actions integration**
+| Input | Required | Description |
+|-------|----------|-------------|
+| `pr_number` | Yes | Pull request number |
+| `ref` | No | Git ref to build from |
 
-## Architecture
+### Production
+
+Actions → **Deploy to Production** → Run workflow
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `ref` | No | Branch or tag (default: `main`) |
+| `domain_name` | No | Custom domain (default: `PRODUCTION_DOMAIN` variable) |
+
+## Environments
+
+| Environment | Terraform dir | DO project | Auto-terminate | Domain |
+|-------------|---------------|------------|----------------|--------|
+| PR | `terraform/pr` | `budget-develop` | Yes (30 min) | App Platform default URL |
+| Production | `terraform/production` | `budget-prod` | No | Optional (`PRODUCTION_DOMAIN` or workflow input) |
+
+## Custom domain (production)
+
+Production does not manage DNS in Terraform. To use a custom domain:
+
+1. Add the domain in DigitalOcean
+2. Configure DNS records outside Terraform (pointing to App Platform)
+3. Set repository variable `PRODUCTION_DOMAIN` or pass `domain_name` when running the production workflow manually
+
+Terraform only references the domain for outputs when configured.
+
+## Pipeline overview
+
+All deploy workflows call `.github/workflows/deploy-reusable.yml`, which handles:
+
+- Build caching (Go binary, Docker buildx)
+- External Go checks (`densestvoid/workflows`)
+- GHCR image push
+- Terraform apply against AWS S3 backend (`densestvoid-terraform` bucket)
+- Health check against `/health`
+- Slack notifications
+- PR comments with deployment URL and termination time
+
+## Local Terraform
+
+```bash
+# PR deployment
+cd terraform/pr
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform plan
+
+# Production
+cd terraform/production
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform plan
 ```
-Internet → App Platform (Managed) → Web Service + PostgreSQL Service
-                                      ↓
-                              Automatic HTTPS/SSL
-```
 
-## 🎯 App Platform Benefits
+See [terraform/README.md](terraform/README.md) for variable details.
 
-### **vs. Droplet Deployment:**
-- ✅ **Faster deployment** (2-3 minutes vs 15+ minutes)
-- ✅ **More reliable** (managed service vs DIY)
-- ✅ **Automatic HTTPS** (no nginx configuration needed)
-- ✅ **Built-in monitoring** and health checks
-- ✅ **Auto-scaling** if traffic increases
-- ✅ **No server management** - fully managed
+## Cost
 
-### **Cost Comparison:**
-| Approach | Monthly Cost | 30-min Cost | Benefits |
-|----------|-------------|-------------|----------|
-| **Droplet** | $4/month | $0.0055 | Full control, SSH access |
-| **App Platform** | $10/month | $0.011 | Managed, HTTPS, scaling |
+| Environment | Typical cost | Notes |
+|-------------|--------------|-------|
+| PR | ~$0.01 per run | Auto-terminates after 30 minutes |
+| Production | ~$25+/month | Persistent DB + app |
 
-## Perfect For
-- 🧪 **Testing & Demos** - Fast, reliable deployments
-- 🔄 **CI/CD Pipelines** - Managed container orchestration
-- 📚 **Learning & Development** - No infrastructure management
-- 💡 **Production Prototypes** - Built-in scaling and HTTPS
+## Setup reference
 
-## 🔒 Security Features
-
-- **No SSH access needed** - fully managed platform
-- **Automatic HTTPS** with SSL certificates
-- **Container isolation** - PostgreSQL not externally accessible
-- **Built-in DDoS protection** via DigitalOcean
-- **Automatic security updates** for base images
-
-## 🚀 Getting Started
-
-1. **Add DO_TOKEN secret** to your GitHub repository
-2. **Create a PR** - automatic deployment!
-3. **Get HTTPS URL** in PR comment
-4. **Test your application**
-5. **Auto-termination** after 30 minutes
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed documentation.# Test workspace initialization
+Full secret, variable, and environment configuration: [.github/SETUP.md](.github/SETUP.md)
