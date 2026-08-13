@@ -34,11 +34,13 @@ You can override `PRODUCTION_DOMAIN` per run via the production workflow's `doma
 
 ## GitHub environment (PR auto-termination)
 
-PR deployments auto-terminate after a configurable delay (default 30 minutes). Create a repository environment:
+PR deployments auto-terminate after the `termination-delay` environment wait timer. Create a repository environment:
 
 1. **Settings → Environments → New environment**
 2. Name: `termination-delay`
-3. Add protection rule: **Wait timer** = same value as `TERMINATION_DELAY_MINUTES` (default 30 minutes)
+3. Add protection rule: **Wait timer** (e.g. 5 minutes for testing, 30 for production-like runs)
+
+The deploy workflow reads this wait timer via the GitHub API for PR comments and auto-termination scheduling.
 
 See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 

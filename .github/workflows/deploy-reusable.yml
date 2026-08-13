@@ -965,7 +965,7 @@ jobs:
               migration_app_id: migrationAppId || '',
               app_url: appUrl || '',
               termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30',
-              skip_environment_wait: 'false'
+              skip_environment_wait: false
             }
           });
           
