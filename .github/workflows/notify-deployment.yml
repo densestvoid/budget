@@ -16,11 +16,12 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      actions: read
 
     env:
       SLACK_WEBHOOK: >-
         ${{
-          github.event.workflow_run.name == 'Deploy to Production'
+          github.event.workflow_run.path == '.github/workflows/deploy-production.yml'
           && secrets.SLACK_WEBHOOK_PRODUCTION || secrets.SLACK_WEBHOOK_PR
         }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
@@ -29,23 +30,24 @@ jobs:
     - name: Determine notification type
       id: kind
       run: |
-        NAME="${{ github.event.workflow_run.name }}"
+        # workflow_run.name is the run-name on completed events; use path for routing.
+        PATH="${{ github.event.workflow_run.path }}"
 
-        case "$NAME" in
-          "Deploy Budget App to DigitalOcean")
+        case "$PATH" in
+          ".github/workflows/deploy.yml")
             echo "type=deploy_pr" >> "$GITHUB_OUTPUT"
             echo "post_pr_comment=true" >> "$GITHUB_OUTPUT"
             ;;
-          "Deploy to Production")
+          ".github/workflows/deploy-production.yml")
             echo "type=deploy_production" >> "$GITHUB_OUTPUT"
             echo "post_pr_comment=false" >> "$GITHUB_OUTPUT"
             ;;
-          "Terminate PR Deployment")
+          ".github/workflows/terminate-pr-deployment.yml")
             echo "type=terminate" >> "$GITHUB_OUTPUT"
             echo "post_pr_comment=true" >> "$GITHUB_OUTPUT"
             ;;
           *)
-            echo "Unknown workflow: $NAME"
+            echo "Unknown workflow path: $PATH"
             exit 1
             ;;
         esac
@@ -86,6 +88,13 @@ jobs:
           REASON=$(jq -r '.reason' terminate-result.json)
           DESTROY_SUCCESS=$(jq -r '.destroy_success' terminate-result.json)
           ALREADY=$(jq -r '.already_terminated' terminate-result.json)
+          SKIPPED=$(jq -r '.skipped' terminate-result.json)
+
+          if [ "$SKIPPED" = "true" ]; then
+            echo "Termination skipped (e.g. app already removed) — no notification"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ "$ALREADY" = "true" ]; then
             PR_BODY="## ✅ PR Deployment Already Terminated

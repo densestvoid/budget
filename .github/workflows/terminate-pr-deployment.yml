@@ -213,7 +213,6 @@ jobs:
         github_repo = "${{ github.repository }}"
         docker_image_tag = "${DEPLOYMENT_ID}"
         github_token = "${{ secrets.GITHUB_TOKEN }}"
-        auto_terminate_minutes = 30
         EOF
 
         BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
