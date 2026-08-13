@@ -13,7 +13,7 @@ The deployment uses **DigitalOcean App Platform** with **managed PostgreSQL**:
 - **GHCR** — container images built in CI and pushed to GitHub Container Registry
 - **Terraform state** — stored in AWS S3 (`densestvoid-terraform` bucket)
 
-PR deployments auto-terminate after 30 minutes. Production is persistent.
+PR deployments auto-terminate after the `termination-delay` environment wait timer. Production is persistent.
 
 ## GitHub Actions (recommended)
 
@@ -21,14 +21,17 @@ PR deployments auto-terminate after 30 minutes. Production is persistent.
 
 1. Add repository secrets (see [.github/SETUP.md](.github/SETUP.md))
 2. Set `PRODUCTION_DOMAIN` variable if using a custom production domain
-3. Create the `termination-delay` GitHub environment (30-minute wait timer)
+3. Create the `termination-delay` GitHub environment
+4. Require **CI / Run Go Checks** in branch protection (not deploy workflows)
 
 ### Automatic deployment
 
-| Event | Workflow | Result |
-|-------|----------|--------|
-| PR opened/updated | `deploy.yml` | Ephemeral `pr-<number>` environment |
-| Push to `main` | `deploy-production.yml` | Production deployment |
+| Event | Workflows | Result |
+|-------|-----------|--------|
+| PR updated (non-`main` head) | `ci.yml` → `deploy.yml` | Ephemeral `pr-<number>` environment |
+| Push to `main` | `ci.yml` → `deploy-production.yml` | Production deployment |
+
+Notifications and PR teardown run via `workflow_run` listeners (`notify-deployment.yml`, `terminate-pr-deployment.yml`).
 
 ### Manual deployment
 

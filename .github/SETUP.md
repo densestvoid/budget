@@ -12,7 +12,7 @@ Configure these under **Settings → Secrets and variables → Actions → Secre
 | `TERRAFORM_AWS_S3_ACCESS_KEY` | PR + production | AWS access key for Terraform state (S3) |
 | `TERRAFORM_AWS_S3_ACCESS_KEY_SECRET` | PR + production | AWS secret key for Terraform state |
 | `TERRAFORM_AWS_S3_REGION` | PR + production | AWS region for the state bucket (e.g. `us-east-1`) |
-| `SLACK_WEBHOOK_PR` | PR deployments | Slack incoming webhook for PR deploy notifications |
+| `SLACK_WEBHOOK_PR` | PR deploy + terminate | Slack incoming webhook for PR notifications |
 | `SLACK_WEBHOOK_PRODUCTION` | Production | Slack incoming webhook for production notifications |
 
 ### Getting a DigitalOcean token
@@ -31,6 +31,10 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 
 You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input.
 
+## Branch protection
+
+Require **CI / Run Go Checks** only. Do not require deploy workflows as status checks — deploy runs asynchronously after CI passes.
+
 ## GitHub environment (PR auto-termination)
 
 PR deployments auto-terminate after the `termination-delay` environment wait timer. Create a repository environment:
@@ -39,7 +43,7 @@ PR deployments auto-terminate after the `termination-delay` environment wait tim
 2. Name: `termination-delay`
 3. Add protection rule: **Wait timer** (e.g. 5 minutes for testing, 30 for production-like runs)
 
-The deploy workflow reads this wait timer via the GitHub API for PR comments and auto-termination scheduling.
+The terminate workflow uses this environment when scheduling auto-termination after a successful PR deploy.
 
 See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 
@@ -55,48 +59,53 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 
 | Workflow | File | Triggers |
 |----------|------|----------|
-| Deploy Budget App to DigitalOcean | `deploy.yml` | PR open/sync/reopen; **manual** (`workflow_dispatch`) |
-| Deploy to Production | `deploy-production.yml` | Push to `main`; **manual** (`workflow_dispatch`) |
-| Auto-Terminate Deployment | `auto-terminate.yml` | Triggered by PR deploy workflow; **manual** (`workflow_dispatch`) |
-| Deploy Budget App (Reusable) | `deploy-reusable.yml` | Called by the workflows above (not run directly) |
+| CI | `ci.yml` | PR open/sync/reopen; push to `main` |
+| Deploy Budget App to DigitalOcean | `deploy.yml` | After CI success on PR (non-`main` head); **manual** |
+| Deploy to Production | `deploy-production.yml` | After CI success on push to `main`; **manual** |
+| Terminate PR Deployment | `terminate-pr-deployment.yml` | After PR deploy completes; **manual** |
+| Notify Deployment | `notify-deployment.yml` | After deploy or terminate completes (`workflow_run`) |
+| Deploy Budget App (Reusable) | `deploy-reusable.yml` | Called by deploy workflows (not run directly) |
 
 ### Automatic triggers
 
-- **PR**: Opening or updating a pull request runs a PR deployment (`pr-<number>` resources in `budget-develop`).
-- **Production**: Merging to `main` runs a production deployment (`budget-prod`).
+- **PR**: Push to a PR branch runs CI. When CI passes, PR deploy runs automatically (head branch must not be `main`).
+- **Production**: Push to `main` runs CI. When CI passes, production deploy runs automatically.
+- **PR teardown**: When a PR deploy completes, terminate runs — scheduled wait after success, immediate cleanup after failure.
+- **Notifications**: Notify runs after every deploy and terminate completion (PR comment + Slack or Slack only).
+
+`workflow_run` listener workflows must exist on the default branch to fire.
 
 ### Manual triggers
 
-Workflows with `workflow_dispatch` must be run from a branch that contains the workflow file. In the Actions UI, use **Run workflow** and select the branch (e.g. your PR head branch) before starting the run.
+Workflows with `workflow_dispatch` must be run from a branch that contains the workflow file.
 
 **Deploy a PR** (Actions → *Deploy Budget App to DigitalOcean* → Run workflow):
 
 - `pr_number` — PR number to deploy (required)
-- `ref` — optional branch or tag to build from (defaults to the workflow's selected branch)
-- `termination_delay_minutes` — optional override for the displayed termination time (normally read from the `termination-delay` environment wait timer)
-- `force_cleanup` — set to **true** to destroy existing PR resources before deploying (use when a prior deployment was never terminated)
+- `ref` — optional git ref to build from
+- `force_cleanup` — destroy existing PR resources before deploying
 
-**Terminate a PR deployment immediately** (Actions → *Auto-Terminate Deployment* → Run workflow):
+Manual PR deploy does **not** run CI — use only for redeploy/debug.
 
-- Select the branch that contains the workflow (e.g. your PR branch)
-- `pr_number`, `deployment_id` (e.g. `pr-9`), `app_id`, `app_url` — from the deployment PR comment
-- `skip_environment_wait` — set to **true** for immediate cleanup (skips the wait timer)
+**Terminate or cleanup a PR deployment** (Actions → *Terminate PR Deployment* → Run workflow):
+
+- `pr_number` — PR number (required)
+- `skip_environment_wait` — default **true** for immediate cleanup
 
 **Deploy production** (Actions → *Deploy to Production* → Run workflow):
 
 - `ref` — branch or tag to deploy (default: `main`)
 - `domain_name` — optional custom domain (falls back to `PRODUCTION_DOMAIN`)
 
+Manual production deploy does **not** run CI.
+
 ## What each deployment does
 
-1. Detect whether Go and Docker builds are needed (cache + GHCR image check by content hash)
-2. Run Go checks when source changed
-3. Build and push Docker image to GHCR when needed
-4. Run Terraform (`terraform/pr` or `terraform/production`)
-5. Run database migrations via a DigitalOcean pre-deploy job
-6. Deploy the application to App Platform
-7. Post a PR comment and Slack notification
-8. PR only: schedule auto-termination via the `termination-delay` environment wait timer
+1. **CI** (`ci.yml`): Go checks (vet, lint, static analysis, security, vulnerabilities)
+2. **Deploy** (`deploy-reusable.yml`): detect build requirements, build/push Docker image when needed, Terraform apply, health check, publish `deploy-result` artifact
+3. **Notify** (`notify-deployment.yml`): PR comment and/or Slack on deploy success or failure
+4. **Terminate** (`terminate-pr-deployment.yml`): destroy PR resources after success (with wait timer) or failure (immediate), plus manual cleanup
+5. **Notify** (again): PR comment and Slack when terminate/cleanup completes
 
 ## Architecture
 

@@ -6,8 +6,9 @@ Automated deployment to DigitalOcean App Platform via GitHub Actions.
 
 1. Configure [GitHub Actions secrets and variables](.github/SETUP.md)
 2. Create the `termination-delay` environment for PR auto-termination
-3. Open a PR — deployment runs automatically and comments with the app URL
-4. Merge to `main` — production deploys automatically
+3. Set branch protection to require **CI / Run Go Checks** only
+4. Open a PR — CI runs, then deploy runs automatically and comments with the app URL
+5. Merge to `main` — CI runs, then production deploys automatically
 
 ## Manual deployment
 
@@ -19,6 +20,9 @@ Actions → **Deploy Budget App to DigitalOcean** → Run workflow
 |-------|----------|-------------|
 | `pr_number` | Yes | Pull request number |
 | `ref` | No | Git ref to build from |
+| `force_cleanup` | No | Destroy existing PR resources before deploy |
+
+Manual deploy skips CI.
 
 ### Production
 
@@ -29,12 +33,25 @@ Actions → **Deploy to Production** → Run workflow
 | `ref` | No | Branch or tag (default: `main`) |
 | `domain_name` | No | Custom domain (default: `PRODUCTION_DOMAIN` variable) |
 
+Manual production deploy skips CI.
+
+### Terminate PR deployment
+
+Actions → **Terminate PR Deployment** → Run workflow
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `pr_number` | Yes | Pull request number |
+| `skip_environment_wait` | No | Immediate cleanup (default: true) |
+
 ## Environments
 
 | Environment | Terraform dir | DO project | Auto-terminate | Domain |
 |-------------|---------------|------------|----------------|--------|
-| PR | `terraform/pr` | `budget-develop` | Yes (30 min) | App Platform default URL |
+| PR | `terraform/pr` | `budget-develop` | Yes (`termination-delay` env) | App Platform default URL |
 | Production | `terraform/production` | `budget-prod` | No | Optional (`PRODUCTION_DOMAIN` or workflow input) |
+
+PR deploy runs only when the PR head branch is not `main`. Production deploy runs on push to `main`.
 
 ## Custom domain (production)
 
@@ -48,15 +65,16 @@ Terraform only references the domain for outputs when configured.
 
 ## Pipeline overview
 
-All deploy workflows call `.github/workflows/deploy-reusable.yml`, which handles:
+```
+PR/main change → CI (go-checks)
+              → deploy.yml or deploy-production.yml
+              → deploy-reusable.yml (build, Terraform, artifact)
+              → notify-deployment.yml (PR comment + Slack)
+              → terminate-pr-deployment.yml (PR only)
+              → notify-deployment.yml (terminate result)
+```
 
-- Build caching (Go binary, Docker buildx)
-- External Go checks (`densestvoid/workflows`)
-- GHCR image push
-- Terraform apply against AWS S3 backend (`densestvoid-terraform` bucket)
-- Health check against `/health`
-- Slack notifications
-- PR comments with deployment URL and termination time
+`deploy-reusable.yml` handles build caching, GHCR push, Terraform apply, and health checks. Notifications and teardown are separate `workflow_run` listeners.
 
 ## Local Terraform
 
@@ -80,7 +98,7 @@ See [terraform/README.md](terraform/README.md) for variable details.
 
 | Environment | Typical cost | Notes |
 |-------------|--------------|-------|
-| PR | ~$0.01 per run | Auto-terminates after 30 minutes |
+| PR | ~$0.01 per run | Auto-terminates after `termination-delay` wait timer |
 | Production | ~$25+/month | Persistent DB + app |
 
 ## Setup reference

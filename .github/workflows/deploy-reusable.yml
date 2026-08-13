@@ -23,10 +23,6 @@ on:
         description: 'Docker image tag'
         required: true
         type: string
-      slack_webhook_secret_name:
-        description: 'Name of Slack webhook secret (for documentation only)'
-        required: true
-        type: string
       vpc_name:
         description: 'VPC name'
         required: true
@@ -47,14 +43,6 @@ on:
         description: 'DigitalOcean project name (e.g., budget-develop or budget-prod)'
         required: true
         type: string
-      post_pr_comments:
-        description: 'Whether to post PR comments (true for PR, false for production)'
-        required: true
-        type: boolean
-      setup_auto_termination:
-        description: 'Whether to set up auto-termination (true for PR, false for production)'
-        required: true
-        type: boolean
       pr_number:
         description: 'PR number (only for PR deployments)'
         required: false
@@ -65,10 +53,6 @@ on:
         type: string
       git_ref:
         description: 'Git ref to checkout (optional; defaults to the triggering ref)'
-        required: false
-        type: string
-      termination_delay_minutes:
-        description: 'Optional override for displayed termination time (defaults to termination-delay environment wait timer)'
         required: false
         type: string
       force_cleanup:
@@ -84,8 +68,6 @@ on:
       TERRAFORM_AWS_S3_ACCESS_KEY_SECRET:
         required: true
       TERRAFORM_AWS_S3_REGION:
-        required: true
-      SLACK_WEBHOOK:
         required: true
 
 jobs:
@@ -290,17 +272,11 @@ jobs:
           echo "need_docker_build=true" >> $GITHUB_OUTPUT
         fi
 
-  go-checks:
-    name: Run Go Checks
-    needs: check-builds
-    if: needs.check-builds.outputs.need_go_build == 'true'
-    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
-
   build-go:
     name: Build Go Binary
-    needs: [check-builds, go-checks]
+    needs: [check-builds]
     runs-on: ubuntu-latest
-    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && needs.check-builds.outputs.need_go_build == 'true' && (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped')
+    if: needs.check-builds.result == 'success' && needs.check-builds.outputs.need_docker_build == 'true' && needs.check-builds.outputs.need_go_build == 'true'
     outputs:
       go_built: ${{ steps.build.outputs.go_built }}
       go_cache_hit: ${{ steps.cache.outputs.cache-hit }}
@@ -402,12 +378,11 @@ jobs:
 
   build-docker:
     name: Build Docker Image
-    needs: [check-builds, build-go, go-checks]
+    needs: [check-builds, build-go]
     runs-on: ubuntu-latest
     if: |
       always() &&
       needs.check-builds.result == 'success' &&
-      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') &&
       needs.check-builds.outputs.need_docker_build == 'true' &&
       (
         needs.check-builds.outputs.need_go_build == 'false' ||
@@ -507,22 +482,18 @@ jobs:
 
   deploy:
     name: Deploy to DigitalOcean
-    needs: [check-builds, build-docker, go-checks, pre-cleanup]
+    needs: [check-builds, build-docker, build-go, pre-cleanup]
     runs-on: ubuntu-latest
-    if: always() && needs.check-builds.result == 'success' && (needs.pre-cleanup.result == 'success' || needs.pre-cleanup.result == 'skipped') && (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    if: always() && needs.check-builds.result == 'success' && (needs.pre-cleanup.result == 'success' || needs.pre-cleanup.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
     outputs:
       deployment_success: ${{ steps.deploy.outputs.deployment_success }}
       app_url: ${{ steps.deploy.outputs.app_url }}
       app_id: ${{ steps.deploy.outputs.app_id }}
       migration_app_id: ${{ steps.deploy.outputs.migration_app_id }}
-      termination_time: ${{ steps.termination.outputs.termination_time }}
-      termination_delay_minutes: ${{ steps.termination.outputs.termination_delay_minutes }}
     
     permissions:
       contents: read
       packages: write
-      pull-requests: write
-      actions: write
     
     steps:
     - name: Checkout code
@@ -852,507 +823,56 @@ jobs:
         else
           echo "⚠️ No application URL available for health check"
         fi
-    
-    - name: Resolve termination delay
-      id: termination_delay
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const delayFromInput = '${{ inputs.termination_delay_minutes }}'.trim();
-          
-          if (delayFromInput) {
-            core.setOutput('minutes', delayFromInput);
-            core.info(`Using termination_delay_minutes workflow input: ${delayFromInput} minutes`);
-            return;
-          }
-          
-          try {
-            const { data } = await github.rest.repos.getEnvironment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              environment_name: 'termination-delay'
-            });
-            const waitRule = data.protection_rules?.find(rule => rule.type === 'wait_timer');
-            const minutes = waitRule?.wait_timer ?? 30;
-            core.setOutput('minutes', String(minutes));
-            core.info(`Using termination-delay environment wait timer: ${minutes} minutes`);
-          } catch (error) {
-            core.warning(`Could not read termination-delay environment wait timer, defaulting to 30 minutes: ${error.message}`);
-            core.setOutput('minutes', '30');
-          }
 
-    - name: Calculate termination time
-      id: termination
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination
-      env:
-        DELAY_MINUTES: ${{ steps.termination_delay.outputs.minutes }}
-      run: |
-        TERMINATION_TIME=$(date -d "+${DELAY_MINUTES} minutes" -u +'%Y-%m-%dT%H:%M:%SZ')
-        echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
-        echo "termination_delay_minutes=${DELAY_MINUTES}" >> $GITHUB_OUTPUT
-        echo "Auto-termination scheduled in ${DELAY_MINUTES} minutes"
-
-    - name: Trigger auto-termination workflow
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination && inputs.environment == 'pr'
-      uses: actions/github-script@v7
-      env:
-        PR_NUMBER: ${{ inputs.pr_number }}
-        DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-        APP_ID: ${{ steps.deploy.outputs.app_id }}
-        MIGRATION_APP_ID: ${{ steps.deploy.outputs.migration_app_id }}
-        APP_URL: ${{ steps.deploy.outputs.app_url }}
-        TERMINATION_DELAY_MINUTES: ${{ steps.termination_delay.outputs.minutes }}
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const prNumber = process.env.PR_NUMBER;
-          const deploymentId = process.env.DEPLOYMENT_ID;
-          const appId = process.env.APP_ID;
-          const migrationAppId = process.env.MIGRATION_APP_ID;
-          const appUrl = process.env.APP_URL;
-          
-          if (!prNumber || !deploymentId) {
-            core.setFailed('Missing required inputs for auto-termination');
-            return;
-          }
-          
-          core.info('Triggering auto-termination workflow...');
-          core.info(`PR Number: ${prNumber}`);
-          core.info(`Deployment ID: ${deploymentId}`);
-          core.info(`Delay: ${process.env.TERMINATION_DELAY_MINUTES} minutes`);
-          
-          let branchRef = context.ref;
-          
-          if (branchRef.startsWith('refs/pull/')) {
-            try {
-              const pr = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: parseInt(prNumber)
-              });
-              branchRef = `refs/heads/${pr.data.head.ref}`;
-              core.info(`Using PR head branch: ${branchRef}`);
-            } catch (error) {
-              core.warning(`Could not determine PR head branch: ${error.message}`);
-              const repo = await github.rest.repos.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-              branchRef = `refs/heads/${repo.data.default_branch}`;
-            }
-          } else if (!branchRef.startsWith('refs/heads/')) {
-            branchRef = `refs/heads/${branchRef}`;
-          }
-          
-          await github.rest.actions.createWorkflowDispatch({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            workflow_id: 'auto-terminate.yml',
-            ref: branchRef.replace('refs/heads/', ''),
-            inputs: {
-              pr_number: prNumber,
-              deployment_id: deploymentId,
-              app_id: appId || '',
-              migration_app_id: migrationAppId || '',
-              app_url: appUrl || '',
-              termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30',
-              skip_environment_wait: false
-            }
-          });
-          
-          core.info(`Auto-termination workflow triggered (${process.env.TERMINATION_DELAY_MINUTES}-minute environment wait timer)`);
-
-  cleanup:
-    name: Cleanup Failed Deployment
-    needs: deploy
+  publish-results:
+    name: Publish Deploy Result
+    needs: [pre-cleanup, check-builds, build-go, build-docker, deploy]
     runs-on: ubuntu-latest
-    if: always() && needs.deploy.result == 'failure' && inputs.environment == 'pr'
-    
-    permissions:
-      contents: read
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
-    
-    - name: Set up Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.5.7
-    
-    - name: Cleanup failed deployment
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-      run: |
-        echo "🧹 Cleaning up failed deployment..."
-        
-        cd ${{ inputs.terraform_dir }}
-        
-        cat > terraform.tfvars << EOF
-        do_token = "${{ secrets.DO_TOKEN }}"
-        region = "nyc1"
-        deployment_id = "${{ inputs.deployment_id }}"
-        docker_image_tag = "${{ inputs.deployment_id }}"
-        EOF
-        
-        if terraform init -backend-config="key=${{ inputs.backend_key }}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
-          echo "✅ Terraform initialized for cleanup"
-          
-          if terraform state list | grep -q .; then
-            echo "🗑️ Found resources in state - destroying..."
-            
-            if terraform destroy -auto-approve; then
-              echo "✅ Cleanup completed successfully"
-              
-              echo "🗑️ Removing state file from S3..."
-              if aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}"; then
-                echo "✅ State file removed from S3"
-              else
-                echo "⚠️ Failed to remove state file from S3"
-              fi
-            else
-              echo "⚠️ Cleanup failed - manual intervention may be required"
-            fi
-          else
-            echo "ℹ️ No resources found in state - nothing to clean up"
-          fi
-        else
-          echo "❌ Failed to initialize Terraform for cleanup"
-          echo "⚠️ Manual cleanup may be required for deployment: ${{ inputs.deployment_id }}"
-        fi
+    if: always()
 
-  pr-comment:
-    name: Comment on PR
-    needs: [go-checks, build-docker, deploy]
-    runs-on: ubuntu-latest
-    if: always() && inputs.post_pr_comments == true
-    
-    permissions:
-      contents: read
-      pull-requests: write
-    
     steps:
-    - name: Comment on PR
-      uses: actions/github-script@v7
+    - name: Build deploy-result.json
+      id: result
       env:
-        PR_NUMBER: ${{ inputs.pr_number }}
+        DEPLOYMENT_SUCCESS: ${{ needs.deploy.outputs.deployment_success }}
         APP_URL: ${{ needs.deploy.outputs.app_url }}
         APP_ID: ${{ needs.deploy.outputs.app_id }}
         MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
-        DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-        TERMINATION_TIME: ${{ needs.deploy.outputs.termination_time }}
-        DEPLOYMENT_SUCCESS: ${{ needs.deploy.outputs.deployment_success }}
-        GO_CHECKS_RESULT: ${{ needs.go-checks.result }}
-        BUILD_DOCKER_RESULT: ${{ needs.build-docker.result }}
-        DEPLOY_RESULT: ${{ needs.deploy.result }}
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
-          const deploymentSuccess = process.env.DEPLOYMENT_SUCCESS === 'true' || process.env.DEPLOY_RESULT === 'success';
-          const goChecksResult = process.env.GO_CHECKS_RESULT;
-          const deployResult = process.env.DEPLOY_RESULT;
-          const buildDockerResult = process.env.BUILD_DOCKER_RESULT;
-          
-          if (!issueNumber) {
-            console.log('⚠️ Could not determine PR number, skipping comment');
-            return;
-          }
-          
-          let message;
-          
-          if (deploymentSuccess) {
-            message = [
-            '## ✅ Deployment Successful',
-            '',
-            `🌐 **URL:** ${process.env.APP_URL || 'N/A'}`,
-            `🆔 **App ID:** ${process.env.APP_ID || 'N/A'}`,
-            `🔧 **Migration ID:** ${process.env.MIGRATION_APP_ID || 'N/A'}`,
-            `📦 **Deployment:** ${process.env.DEPLOYMENT_ID || 'N/A'}`,
-            `⏰ **Terminates:** ${process.env.TERMINATION_TIME || 'N/A'}`
-          ].join('\n');
-          } else {
-            const workflow = 'Deploy Budget App';
-            let failedStep = 'Unknown';
-            let errorMessage = 'Workflow execution failed';
-            let cleanupNote = 'No infrastructure was deployed.';
+        IMAGE_TAG: ${{ needs.check-builds.outputs.image_tag }}
+      run: |
+        if [ "${DEPLOYMENT_SUCCESS}" = "true" ]; then
+          SUCCESS_JSON=true
+        else
+          SUCCESS_JSON=false
+        fi
 
-            if (goChecksResult === 'failure') {
-              failedStep = 'Go checks (vet, lint, static analysis, security, vulnerabilities)';
-              errorMessage = 'Deployment was not attempted. Fix Go check failures in GitHub Actions logs and push again.';
-            } else if (deployResult === 'failure') {
-              failedStep = 'Deploy infrastructure (Database → Migration → Application)';
-              errorMessage = 'Terraform deployment failed. This could be:\\n' +
-                            '• Database cluster creation failure\\n' +
-                            '• Migration container failure (check migration logs in DigitalOcean App Platform)\\n' +
-                            '• Application container deployment failure\\n' +
-                            '• Database firewall configuration failure\\n' +
-                            'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
-              cleanupNote = 'Partial deployment cleaned up automatically';
-            } else if (deployResult === 'skipped') {
-              failedStep = 'Build or deploy skipped';
-              if (buildDockerResult === 'skipped') {
-                errorMessage = 'Docker build or deploy was skipped. Check earlier workflow jobs for build gate failures.';
-              } else {
-                errorMessage = 'Deploy was skipped. Check earlier workflow jobs for the cause.';
-              }
-            } else {
-              failedStep = 'Post-deployment verification';
-              errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
-              cleanupNote = 'Partial deployment may require manual cleanup';
-            }
-            
-            message = [
-              '## ❌ Deployment Failed',
-              '',
-              `**Workflow:** ${workflow}`,
-              `**Step:** ${failedStep}`,
-              '**Error:**',
-              '```',
-              errorMessage,
-              '```',
-              `**Cleanup:** ${cleanupNote}`
-            ].join('\n');
+        cat > deploy-result.json << EOF
+        {
+          "environment": "${{ inputs.environment }}",
+          "deployment_id": "${{ inputs.deployment_id }}",
+          "pr_number": "${{ inputs.pr_number }}",
+          "deployment_success": ${SUCCESS_JSON},
+          "app_url": "${APP_URL}",
+          "app_id": "${APP_ID}",
+          "migration_app_id": "${MIGRATION_APP_ID}",
+          "image_tag": "${IMAGE_TAG}",
+          "git_sha": "${{ github.sha }}",
+          "jobs": {
+            "pre_cleanup": "${{ needs.pre-cleanup.result }}",
+            "check_builds": "${{ needs.check-builds.result }}",
+            "build_go": "${{ needs.build-go.result }}",
+            "build_docker": "${{ needs.build-docker.result }}",
+            "deploy": "${{ needs.deploy.result }}"
           }
+        }
+        EOF
 
-          await github.rest.issues.createComment({
-            issue_number: parseInt(issueNumber),
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: message
-          });
-    
-  slack-notification:
-    name: Send Slack Notification
-    needs: [check-builds, go-checks, build-docker, deploy]
-    runs-on: ubuntu-latest
-    if: always()
-    
-    permissions:
-      contents: read
-    
-    steps:
-    - name: Send success notification to Slack (PR)
-      if: needs.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
-      uses: slackapi/slack-github-action@v2.1.1
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
-        payload: |
-          {
-            "text": "✅ PR Deployment Successful",
-            "attachments": [
-              {
-                "color": "good",
-                "fields": [
-                  {
-                    "title": "Application URL",
-                    "value": "${{ needs.deploy.outputs.app_url }}",
-                    "short": true
-                  },
-                  {
-                    "title": "PR Number",
-                    "value": "${{ inputs.pr_number }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Deployment ID",
-                    "value": "${{ inputs.deployment_id }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Auto-terminates",
-                    "value": "${{ needs.deploy.outputs.termination_delay_minutes || '30' }} minutes",
-                    "short": true
-                  }
-                ]
-              }
-            ]
-          }
-    
-    - name: Send success notification to Slack (Production)
-      if: needs.deploy.outputs.deployment_success == 'true' && inputs.environment != 'pr'
-      uses: slackapi/slack-github-action@v2.1.1
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
-        payload: |
-          {
-            "text": "✅ Production Deployment Successful",
-            "attachments": [
-              {
-                "color": "good",
-                "fields": [
-                  {
-                    "title": "Application URL",
-                    "value": "${{ needs.deploy.outputs.app_url }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Commit",
-                    "value": "${{ github.sha }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Image Tag",
-                    "value": "${{ needs.check-builds.outputs.image_tag }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Branch",
-                    "value": "${{ github.ref_name }}",
-                    "short": true
-                  }
-                ]
-              }
-            ]
-          }
-    
-    - name: Send Go checks failure notification to Slack (PR)
-      if: needs.go-checks.result == 'failure' && inputs.environment == 'pr'
-      uses: slackapi/slack-github-action@v2.1.1
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
-        payload: |
-          {
-            "text": "❌ PR Deployment Blocked — Go Checks Failed",
-            "attachments": [
-              {
-                "color": "danger",
-                "fields": [
-                  {
-                    "title": "PR Number",
-                    "value": "${{ inputs.pr_number }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Deployment ID",
-                    "value": "${{ inputs.deployment_id }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Error Details",
-                    "value": "Go checks failed (vet, lint, static analysis, security, or vulnerabilities). Deployment was not attempted.",
-                    "short": false
-                  }
-                ]
-              }
-            ]
-          }
+        echo "Deploy result:"
+        cat deploy-result.json
 
-    - name: Send failure notification to Slack (PR)
-      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment == 'pr' && needs.go-checks.result != 'failure' && needs.deploy.result == 'failure'
-      uses: slackapi/slack-github-action@v2.1.1
+    - name: Upload deploy-result artifact
+      uses: actions/upload-artifact@v4
       with:
-        webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
-        payload: |
-          {
-            "text": "❌ PR Deployment Failed",
-            "attachments": [
-              {
-                "color": "danger",
-                "fields": [
-                  {
-                    "title": "PR Number",
-                    "value": "${{ inputs.pr_number }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Deployment ID",
-                    "value": "${{ inputs.deployment_id }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Error Details",
-                    "value": "Deployment failed during infrastructure or application deployment",
-                    "short": false
-                  },
-                  {
-                    "title": "Cleanup Status",
-                    "value": "Partial deployment cleaned up automatically",
-                    "short": true
-                  }
-                ]
-              }
-            ]
-          }
-    
-    - name: Send Go checks failure notification to Slack (Production)
-      if: needs.go-checks.result == 'failure' && inputs.environment != 'pr'
-      uses: slackapi/slack-github-action@v2.1.1
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
-        payload: |
-          {
-            "text": "❌ Production Deployment Blocked — Go Checks Failed",
-            "attachments": [
-              {
-                "color": "danger",
-                "fields": [
-                  {
-                    "title": "Commit",
-                    "value": "${{ github.sha }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Branch",
-                    "value": "${{ github.ref_name }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Error Details",
-                    "value": "Go checks failed (vet, lint, static analysis, security, or vulnerabilities). Deployment was not attempted.",
-                    "short": false
-                  }
-                ]
-              }
-            ]
-          }
-
-    - name: Send failure notification to Slack (Production)
-      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment != 'pr' && needs.go-checks.result != 'failure' && needs.deploy.result == 'failure'
-      uses: slackapi/slack-github-action@v2.1.1
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ secrets.SLACK_WEBHOOK }}
-        payload: |
-          {
-            "text": "❌ Production Deployment Failed",
-            "attachments": [
-              {
-                "color": "danger",
-                "fields": [
-                  {
-                    "title": "Commit",
-                    "value": "${{ github.sha }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Image Tag",
-                    "value": "${{ needs.check-builds.outputs.image_tag }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Error Details",
-                    "value": "Deployment failed during infrastructure or application deployment",
-                    "short": false
-                  },
-                  {
-                    "title": "Branch",
-                    "value": "${{ github.ref_name }}",
-                    "short": true
-                  }
-                ]
-              }
-            ]
-          }
+        name: deploy-result
+        path: deploy-result.json
+        retention-days: 7
