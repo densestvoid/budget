@@ -67,6 +67,10 @@ on:
         description: 'Git ref to checkout (optional; defaults to the triggering ref)'
         required: false
         type: string
+      termination_delay_minutes:
+        description: 'Minutes before PR auto-termination (overrides TERMINATION_DELAY_MINUTES variable)'
+        required: false
+        type: string
     secrets:
       DO_TOKEN:
         required: true
@@ -109,12 +113,13 @@ jobs:
         # Generate cache keys
         GO_HASH=$(find . -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
         DOCKER_HASH=$(find . -name "Dockerfile*" -o -name "*.go" -o -name "go.mod" -o -name "go.sum" | sort | xargs md5sum | md5sum | cut -d' ' -f1)
+        IMAGE_TAG="${{ inputs.deployment_id }}-${DOCKER_HASH}"
         
         echo "go_hash=${GO_HASH}" >> $GITHUB_OUTPUT
         echo "docker_hash=${DOCKER_HASH}" >> $GITHUB_OUTPUT
-        echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
         
-        echo "📦 Image tag: ${{ inputs.image_tag }}"
+        echo "📦 Image tag: ${IMAGE_TAG} (content hash; ignores caller image_tag input)"
         echo "🔑 Go cache key: ${GO_HASH}"
         echo "🔑 Docker cache key: ${DOCKER_HASH}"
     
@@ -451,7 +456,7 @@ jobs:
     runs-on: ubuntu-latest
     if: always() && needs.check-builds.result == 'success' && (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
     outputs:
-      deployment_success: ${{ steps.deploy.outputs.deployment_success == 'true' }}
+      deployment_success: ${{ steps.deploy.outputs.deployment_success }}
       app_url: ${{ steps.deploy.outputs.app_url }}
       app_id: ${{ steps.deploy.outputs.app_id }}
       migration_app_id: ${{ steps.deploy.outputs.migration_app_id }}
@@ -797,7 +802,7 @@ jobs:
       id: termination
       if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
       env:
-        DELAY_MINUTES: ${{ vars.TERMINATION_DELAY_MINUTES || '30' }}
+        DELAY_MINUTES: ${{ inputs.termination_delay_minutes != '' && inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}
       run: |
         TERMINATION_TIME=$(date -d "+${DELAY_MINUTES} minutes" -u +'%Y-%m-%dT%H:%M:%SZ')
         echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
@@ -823,7 +828,7 @@ jobs:
         APP_ID: ${{ needs.deploy.outputs.app_id }}
         MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
         APP_URL: ${{ needs.deploy.outputs.app_url }}
-        TERMINATION_DELAY_MINUTES: ${{ needs.deploy.outputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}
+        TERMINATION_DELAY_MINUTES: ${{ needs.deploy.outputs.termination_delay_minutes || inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
@@ -884,7 +889,8 @@ jobs:
                 app_id: appId || '',
                 migration_app_id: migrationAppId || '',
                 app_url: appUrl || '',
-                termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30'
+                termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30',
+                skip_environment_wait: 'false'
               }
             });
             
@@ -1099,7 +1105,7 @@ jobs:
                   },
                   {
                     "title": "Auto-terminates",
-                    "value": "${{ vars.TERMINATION_DELAY_MINUTES || '30' }} minutes",
+                    "value": "${{ inputs.termination_delay_minutes != '' && inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }} minutes",
                     "short": true
                   }
                 ]

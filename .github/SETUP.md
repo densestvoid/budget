@@ -30,7 +30,7 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 | `PRODUCTION_DOMAIN` | Production (optional) | Custom domain pre-allocated in DigitalOcean (DNS managed outside Terraform) |
 | `TERMINATION_DELAY_MINUTES` | PR auto-termination (optional) | Minutes before PR deployments are destroyed (default: `30`). Must match the `termination-delay` environment wait timer. |
 
-You can override this per run via the production workflow's `domain_name` input.
+You can override the delay per run via the PR deploy workflow's `termination_delay_minutes` input, or via the production workflow's `domain_name` input.
 
 ## GitHub environment (PR auto-termination)
 
@@ -56,7 +56,7 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 |----------|------|----------|
 | Deploy Budget App to DigitalOcean | `deploy.yml` | PR open/sync/reopen; **manual** (`workflow_dispatch`) |
 | Deploy to Production | `deploy-production.yml` | Push to `main`; **manual** (`workflow_dispatch`) |
-| Auto-Terminate Deployment | `auto-terminate.yml` | Triggered by PR deploy workflow |
+| Auto-Terminate Deployment | `auto-terminate.yml` | Triggered by PR deploy workflow; **manual** (`workflow_dispatch`) |
 | Deploy Budget App (Reusable) | `deploy-reusable.yml` | Called by the workflows above (not run directly) |
 
 ### Automatic triggers
@@ -66,10 +66,19 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 
 ### Manual triggers
 
+Workflows with `workflow_dispatch` must be run from a branch that contains the workflow file. In the Actions UI, use **Run workflow** and select the branch (e.g. your PR head branch) before starting the run.
+
 **Deploy a PR** (Actions → *Deploy Budget App to DigitalOcean* → Run workflow):
 
 - `pr_number` — PR number to deploy (required)
 - `ref` — optional branch or tag to build from (defaults to the workflow's selected branch)
+- `termination_delay_minutes` — optional delay override (must match `termination-delay` environment wait timer and `TERMINATION_DELAY_MINUTES`)
+
+**Terminate a PR deployment immediately** (Actions → *Auto-Terminate Deployment* → Run workflow):
+
+- Select the branch that contains the workflow (e.g. your PR branch)
+- `pr_number`, `deployment_id` (e.g. `pr-9`), `app_id`, `app_url` — from the deployment PR comment
+- `skip_environment_wait` — set to **true** for immediate cleanup (skips the wait timer)
 
 **Deploy production** (Actions → *Deploy to Production* → Run workflow):
 
@@ -78,7 +87,7 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 
 ## What each deployment does
 
-1. Detect whether Go and Docker builds are needed (cache + GHCR image check)
+1. Detect whether Go and Docker builds are needed (cache + GHCR image check by content hash)
 2. Run Go checks when source changed
 3. Build and push Docker image to GHCR when needed
 4. Run Terraform (`terraform/pr` or `terraform/production`)

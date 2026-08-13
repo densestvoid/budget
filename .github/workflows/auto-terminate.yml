@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: '30'
+      skip_environment_wait:
+        description: 'Skip the termination-delay wait timer (immediate termination for manual cleanup)'
+        required: false
+        type: boolean
+        default: false
 
 # Prevent multiple auto-terminate workflows for the same PR
 # Cancel previous terminations since destroy operations are idempotent
@@ -48,9 +53,8 @@ jobs:
       issues: write
       pull-requests: write
     
-    # Use environment with wait timer - duration must match TERMINATION_DELAY_MINUTES repo variable
-    environment: 
-      name: termination-delay
+    # Wait timer duration must match TERMINATION_DELAY_MINUTES (skipped when skip_environment_wait is true)
+    environment: ${{ github.event.inputs.skip_environment_wait != 'true' && 'termination-delay' || '' }}
     
     steps:
     - name: Checkout code
@@ -74,6 +78,7 @@ jobs:
         echo "App ID: $APP_ID"
         echo "App URL: $APP_URL" 
         echo "PR Number: #$PR_NUMBER"
+        echo "Skip environment wait: ${{ github.event.inputs.skip_environment_wait }}"
         echo "Triggered at: $(date -u)"
         
         # Validate required inputs
@@ -317,7 +322,7 @@ jobs:
           });
     
     - name: Send termination notification to Slack
-      if: always() && steps.validate.outputs.pr_number != '' && secrets.SLACK_WEBHOOK_PR != ''
+      if: always() && steps.validate.outputs.pr_number != ''
       continue-on-error: true
       uses: slackapi/slack-github-action@v2.1.1
       with:

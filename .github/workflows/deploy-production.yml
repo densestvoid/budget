@@ -39,7 +39,7 @@ jobs:
       deployment_id: production
       terraform_dir: terraform/production
       backend_key: production/production.tfstate
-      image_tag: production-${{ github.sha }}
+      image_tag: production
       slack_webhook_secret_name: SLACK_WEBHOOK_PRODUCTION
       vpc_name: production
       app_name: production
