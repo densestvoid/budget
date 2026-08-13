@@ -484,7 +484,7 @@ jobs:
     name: Deploy to DigitalOcean
     needs: [check-builds, build-docker, build-go, pre-cleanup]
     runs-on: ubuntu-latest
-    if: always() && needs.check-builds.result == 'success' && (needs.pre-cleanup.result == 'success' || needs.pre-cleanup.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    if: always() && needs.check-builds.result == 'success' && (needs.pre-cleanup.result == 'success' || needs.pre-cleanup.result == 'skipped') && (needs.build-go.result == 'success' || needs.build-go.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
     outputs:
       deployment_success: ${{ steps.deploy.outputs.deployment_success }}
       app_url: ${{ steps.deploy.outputs.app_url }}

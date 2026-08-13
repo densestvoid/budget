@@ -1,14 +1,6 @@
 name: Terminate PR Deployment
 
-run-name: >-
-  terminate-pr-${{
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
-    github.event.workflow_run.pull_requests[0].number
-  }}-${{
-    github.event_name == 'workflow_dispatch' && 'manual' ||
-    github.event.workflow_run.conclusion == 'success' && 'scheduled' ||
-    'failure_cleanup'
-  }}
+run-name: terminate-pr-${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number || 'run' }}
 
 on:
   workflow_run:
@@ -40,58 +32,96 @@ env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
 jobs:
-  terminate:
+  resolve:
+    name: Resolve Termination Context
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion != 'cancelled'
-    permissions:
-      contents: read
-    environment: >-
-      ${{
-        (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_environment_wait != 'true') ||
-        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
-        && 'termination-delay' || ''
-      }}
+    outputs:
+      should_run: ${{ steps.resolve.outputs.should_run }}
+      reason: ${{ steps.resolve.outputs.reason }}
+      use_wait_timer: ${{ steps.resolve.outputs.use_wait_timer }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      deployment_id: ${{ steps.resolve.outputs.deployment_id }}
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
 
     steps:
+    - name: Download deploy-result artifact
+      if: github.event_name == 'workflow_run'
+      uses: actions/download-artifact@v4
+      with:
+        name: deploy-result
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+      continue-on-error: true
+
     - name: Resolve context
-      id: context
+      id: resolve
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           PR_NUMBER="${{ github.event.inputs.pr_number }}"
-          REASON="manual"
-          CHECKOUT_REF="${{ github.ref }}"
-        else
-          PR_NUMBER="${{ github.event.workflow_run.pull_requests[0].number }}"
           if [ -z "$PR_NUMBER" ]; then
-            TITLE="${{ github.event.workflow_run.display_title }}"
-            PR_NUMBER=$(echo "$TITLE" | sed -n 's/.*deploy-pr-\([0-9][0-9]*\).*/\1/p')
+            echo "PR number is required"
+            exit 1
           fi
-          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
-            REASON="scheduled"
-          else
-            REASON="failure_cleanup"
-          fi
-          CHECKOUT_REF="${{ github.event.workflow_run.head_sha }}"
+          USE_WAIT=$([ "${{ github.event.inputs.skip_environment_wait }}" = "true" ] && echo false || echo true)
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "reason=manual" >> "$GITHUB_OUTPUT"
+          echo "use_wait_timer=${USE_WAIT}" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "deployment_id=pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
 
-        if [ -z "$PR_NUMBER" ]; then
-          echo "Could not resolve PR number"
-          exit 1
+        if [ ! -f deploy-result.json ]; then
+          echo "No deploy-result artifact — deploy did not run"
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
 
-        DEPLOYMENT_ID="pr-${PR_NUMBER}"
+        PR_NUMBER=$(jq -r '.pr_number // empty' deploy-result.json)
+        DEPLOYMENT_ID=$(jq -r '.deployment_id // empty' deploy-result.json)
+        DEPLOYMENT_SUCCESS=$(jq -r '.deployment_success' deploy-result.json)
+        DEPLOY_JOB=$(jq -r '.jobs.deploy // empty' deploy-result.json)
+
+        if [ -z "$PR_NUMBER" ] || [ -z "$DEPLOYMENT_ID" ]; then
+          echo "deploy-result missing pr_number or deployment_id"
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$DEPLOY_JOB" = "skipped" ]; then
+          echo "Deploy job was skipped — nothing to terminate"
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$DEPLOYMENT_SUCCESS" = "true" ]; then
+          echo "reason=scheduled" >> "$GITHUB_OUTPUT"
+          echo "use_wait_timer=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "reason=failure_cleanup" >> "$GITHUB_OUTPUT"
+          echo "use_wait_timer=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        echo "should_run=true" >> "$GITHUB_OUTPUT"
         echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
         echo "deployment_id=${DEPLOYMENT_ID}" >> "$GITHUB_OUTPUT"
-        echo "reason=${REASON}" >> "$GITHUB_OUTPUT"
-        echo "checkout_ref=${CHECKOUT_REF}" >> "$GITHUB_OUTPUT"
-        echo "Resolved PR #${PR_NUMBER}, deployment ${DEPLOYMENT_ID}, reason ${REASON}"
+        echo "checkout_ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
+  terminate:
+    name: Terminate PR Deployment
+    needs: resolve
+    if: needs.resolve.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: ${{ needs.resolve.outputs.use_wait_timer == 'true' && 'termination-delay' || '' }}
+
+    steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        ref: ${{ steps.context.outputs.checkout_ref }}
+        ref: ${{ needs.resolve.outputs.checkout_ref }}
 
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -105,7 +135,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
-        DEPLOYMENT_ID="${{ steps.context.outputs.deployment_id }}"
+        DEPLOYMENT_ID="${{ needs.resolve.outputs.deployment_id }}"
         BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
         APP_URL=""
         APP_ID=""
@@ -128,13 +158,12 @@ jobs:
 
     - name: Check app health before termination
       id: health_check
-      if: steps.context.outputs.reason == 'scheduled'
+      if: needs.resolve.outputs.reason == 'scheduled'
       run: |
         APP_URL="${{ steps.outputs.outputs.app_url }}"
         APP_ID="${{ steps.outputs.outputs.app_id }}"
 
         if [ -z "$APP_URL" ]; then
-          echo "No app URL available - proceeding with termination"
           echo "should_terminate=true" >> "$GITHUB_OUTPUT"
           echo "health_status=unknown" >> "$GITHUB_OUTPUT"
           exit 0
@@ -162,7 +191,7 @@ jobs:
 
     - name: Set termination decision for non-scheduled runs
       id: force_terminate
-      if: steps.context.outputs.reason != 'scheduled'
+      if: needs.resolve.outputs.reason != 'scheduled'
       run: |
         echo "should_terminate=true" >> "$GITHUB_OUTPUT"
         echo "health_status=skipped" >> "$GITHUB_OUTPUT"
@@ -174,8 +203,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
-        DEPLOYMENT_ID="${{ steps.context.outputs.deployment_id }}"
-        BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
+        DEPLOYMENT_ID="${{ needs.resolve.outputs.deployment_id }}"
 
         cd terraform/pr
         cat > terraform.tfvars << EOF
@@ -188,6 +216,7 @@ jobs:
         auto_terminate_minutes = 30
         EOF
 
+        BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
         if terraform init -backend-config="key=${BACKEND_KEY}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
           echo "init_success=true" >> "$GITHUB_OUTPUT"
           RESOURCE_COUNT=$(terraform state list 2>/dev/null | wc -l)
@@ -216,13 +245,12 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
-        DEPLOYMENT_ID="${{ steps.context.outputs.deployment_id }}"
+        DEPLOYMENT_ID="${{ needs.resolve.outputs.deployment_id }}"
         cd terraform/pr
 
         if terraform destroy -auto-approve; then
           echo "destroy_success=true" >> "$GITHUB_OUTPUT"
-          STATE_FILE_KEY="pr/${DEPLOYMENT_ID}.tfstate"
-          aws s3 rm "s3://densestvoid-terraform/${STATE_FILE_KEY}" || true
+          aws s3 rm "s3://densestvoid-terraform/pr/${DEPLOYMENT_ID}.tfstate" || true
         else
           echo "destroy_success=false" >> "$GITHUB_OUTPUT"
           exit 1
@@ -239,30 +267,29 @@ jobs:
       if: always()
       run: |
         DESTROY_SUCCESS="${{ steps.destroy.outputs.destroy_success }}"
-        if [ -z "$DESTROY_SUCCESS" ]; then
-          DESTROY_SUCCESS="false"
-        fi
+        [ -z "$DESTROY_SUCCESS" ] && DESTROY_SUCCESS="false"
         ALREADY="${{ steps.init.outputs.already_terminated }}"
-        if [ -z "$ALREADY" ]; then
-          ALREADY="false"
-        fi
+        [ -z "$ALREADY" ] && ALREADY="false"
         SKIPPED="${{ steps.skipped.outputs.skipped }}"
-        if [ "$SKIPPED" = "true" ]; then
-          SKIPPED_JSON=true
-        else
-          SKIPPED_JSON=false
-        fi
+        [ "$SKIPPED" = "true" ] && SKIPPED_JSON=true || SKIPPED_JSON=false
+        [ "$DESTROY_SUCCESS" = "true" ] && DS_JSON=true || DS_JSON=false
+        [ "$ALREADY" = "true" ] && AT_JSON=true || AT_JSON=false
 
-        cat > terminate-result.json << EOF
-        {
-          "pr_number": "${{ steps.context.outputs.pr_number }}",
-          "deployment_id": "${{ steps.context.outputs.deployment_id }}",
-          "reason": "${{ steps.context.outputs.reason }}",
-          "destroy_success": ${DESTROY_SUCCESS},
-          "already_terminated": ${ALREADY},
-          "skipped": ${SKIPPED_JSON}
-        }
-        EOF
+        jq -n \
+          --arg pr_number "${{ needs.resolve.outputs.pr_number }}" \
+          --arg deployment_id "${{ needs.resolve.outputs.deployment_id }}" \
+          --arg reason "${{ needs.resolve.outputs.reason }}" \
+          --argjson destroy_success "$DS_JSON" \
+          --argjson already_terminated "$AT_JSON" \
+          --argjson skipped "$SKIPPED_JSON" \
+          '{
+            pr_number: $pr_number,
+            deployment_id: $deployment_id,
+            reason: $reason,
+            destroy_success: $destroy_success,
+            already_terminated: $already_terminated,
+            skipped: $skipped
+          }' > terminate-result.json
 
         cat terminate-result.json
 
