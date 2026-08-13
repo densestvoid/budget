@@ -16,17 +16,17 @@ To enable the modern workflow_dispatch auto-termination with wait timers, you ne
 1. In the `termination-delay` environment settings:
 2. Click **Add protection rule**
 3. Enable **Wait timer**
-4. Set wait time to match **`TERMINATION_DELAY_MINUTES`** (repository variable under **Settings → Secrets and variables → Actions → Variables**; default **30 minutes**)
+4. Set wait time to your desired delay (e.g. **5 minutes** for testing, **30 minutes** for production-like runs)
 5. Click **Save protection rules**
 
-When testing with a shorter delay, set both the environment wait timer and `TERMINATION_DELAY_MINUTES` to the same value so deploy comments show the correct termination time.
+The deploy workflow reads this wait timer via the GitHub API for PR comments and auto-termination scheduling. This environment setting is the single source of truth for when PR deployments are destroyed.
 
 ### 3. Environment Configuration
 
 ```yaml
 Environment Name: termination-delay
 Protection Rules:
-  ✅ Wait timer: same as TERMINATION_DELAY_MINUTES (default 30 minutes)
+  ✅ Wait timer: your chosen delay (e.g. 5 or 30 minutes)
   ❌ Required reviewers: (leave unchecked)
   ❌ Prevent self-review: (leave unchecked)
   ❌ Restrict pushes: (leave unchecked)
@@ -43,14 +43,14 @@ Deploy Workflow (5 min) → Trigger Auto-Terminate → Auto-Terminate Runs Immed
 
 ### With Environment Wait Timer (Correct):
 ```
-Deploy Workflow (5 min) → Trigger Auto-Terminate → Environment Wait (30 min, NO RUNNER)
+Deploy Workflow (5 min) → Trigger Auto-Terminate → Environment Wait (NO RUNNER)
                                                    ↓
-                                              Auto-Terminate Runs (30 sec)
+                                              Auto-Terminate Runs (~30 sec)
 ```
 
 ## ⚡ Benefits
 
-- **Zero runner waste**: No sleep/wait during the 30-minute delay
+- **Zero runner waste**: No sleep/wait during the delay
 - **Automatic execution**: Workflow starts automatically after wait timer
 - **Cost effective**: Only pays for actual execution time (~30 seconds)
 - **GitHub native**: Built-in environment protection feature
@@ -61,7 +61,7 @@ Deploy Workflow (5 min) → Trigger Auto-Terminate → Environment Wait (30 min,
 After setup, you should see:
 1. Deploy workflow completes in ~5 minutes
 2. Auto-terminate workflow shows "Waiting for environment approval" 
-3. After 30 minutes, auto-terminate workflow runs automatically
+3. After the configured wait timer, auto-terminate workflow runs automatically
 4. Total runner time: ~5.5 minutes instead of 35+ minutes
 
 ## 📊 Cost Comparison

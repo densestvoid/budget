@@ -28,9 +28,8 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 | Variable | Used by | Description |
 |----------|---------|-------------|
 | `PRODUCTION_DOMAIN` | Production (optional) | Custom domain pre-allocated in DigitalOcean (DNS managed outside Terraform) |
-| `TERMINATION_DELAY_MINUTES` | PR auto-termination (optional) | Override for minutes before PR deployments are destroyed. If unset, the workflow reads the `termination-delay` environment wait timer automatically (fallback: `30`). |
 
-You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input. Override `TERMINATION_DELAY_MINUTES` per run via the PR deploy workflow's `termination_delay_minutes` input.
+You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input.
 
 ## GitHub environment (PR auto-termination)
 
@@ -74,7 +73,7 @@ Workflows with `workflow_dispatch` must be run from a branch that contains the w
 
 - `pr_number` — PR number to deploy (required)
 - `ref` — optional branch or tag to build from (defaults to the workflow's selected branch)
-- `termination_delay_minutes` — optional delay override (must match `termination-delay` environment wait timer and `TERMINATION_DELAY_MINUTES`)
+- `termination_delay_minutes` — optional override for the displayed termination time (normally read from the `termination-delay` environment wait timer)
 - `force_cleanup` — set to **true** to destroy existing PR resources before deploying (use when a prior deployment was never terminated)
 
 **Terminate a PR deployment immediately** (Actions → *Auto-Terminate Deployment* → Run workflow):
@@ -97,7 +96,7 @@ Workflows with `workflow_dispatch` must be run from a branch that contains the w
 5. Run database migrations via a DigitalOcean pre-deploy job
 6. Deploy the application to App Platform
 7. Post a PR comment and Slack notification
-8. PR only: schedule auto-termination after `TERMINATION_DELAY_MINUTES` (default 30)
+8. PR only: schedule auto-termination via the `termination-delay` environment wait timer
 
 ## Architecture
 
@@ -108,11 +107,11 @@ Internet → DigitalOcean App Platform (HTTPS)
               └── Managed PostgreSQL (private VPC)
 ```
 
-PR deployments are ephemeral (default ~30 minutes; configurable via `TERMINATION_DELAY_MINUTES`). Production uses long-lived database resources with `prevent_destroy`.
+PR deployments are ephemeral (duration set by the `termination-delay` environment wait timer). Production uses long-lived database resources with `prevent_destroy`.
 
 ## Cost notes
 
-- PR: managed DB + App Platform, auto-terminated after `TERMINATION_DELAY_MINUTES` (default 30)
+- PR: managed DB + App Platform, auto-terminated after the `termination-delay` environment wait timer
 - Production: persistent DB (`db-s-1vcpu-1gb`) + App Platform (`basic-xxs`)
 
 ## Security

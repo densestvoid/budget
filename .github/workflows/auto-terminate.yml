@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       termination_delay_minutes:
-        description: 'Wait timer duration in minutes (must match termination-delay environment and TERMINATION_DELAY_MINUTES variable)'
+        description: 'Optional override for workflow summary display (defaults to termination-delay environment wait timer)'
         required: false
         type: string
         default: '30'
@@ -53,7 +53,7 @@ jobs:
       issues: write
       pull-requests: write
     
-    # Wait timer duration must match TERMINATION_DELAY_MINUTES (skipped when skip_environment_wait is true)
+    # Wait timer comes from the termination-delay environment (skipped when skip_environment_wait is true)
     environment: ${{ github.event.inputs.skip_environment_wait != 'true' && 'termination-delay' || '' }}
     
     steps:
@@ -367,8 +367,7 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const delayFromInput = '${{ github.event.inputs.termination_delay_minutes }}'.trim();
-          const delayFromVar = '${{ vars.TERMINATION_DELAY_MINUTES }}'.trim();
-          let delayMinutes = delayFromInput || delayFromVar;
+          let delayMinutes = delayFromInput;
           
           if (!delayMinutes) {
             try {

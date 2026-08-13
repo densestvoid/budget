@@ -68,7 +68,7 @@ on:
         required: false
         type: string
       termination_delay_minutes:
-        description: 'Minutes before PR auto-termination (overrides TERMINATION_DELAY_MINUTES variable)'
+        description: 'Optional override for displayed termination time (defaults to termination-delay environment wait timer)'
         required: false
         type: string
       force_cleanup:
@@ -861,17 +861,10 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const delayFromInput = '${{ inputs.termination_delay_minutes }}'.trim();
-          const delayFromVar = '${{ vars.TERMINATION_DELAY_MINUTES }}'.trim();
           
           if (delayFromInput) {
             core.setOutput('minutes', delayFromInput);
             core.info(`Using termination_delay_minutes workflow input: ${delayFromInput} minutes`);
-            return;
-          }
-          
-          if (delayFromVar) {
-            core.setOutput('minutes', delayFromVar);
-            core.info(`Using TERMINATION_DELAY_MINUTES repository variable: ${delayFromVar} minutes`);
             return;
           }
           
