@@ -892,7 +892,7 @@ jobs:
     name: Cleanup Failed Deployment
     needs: deploy
     runs-on: ubuntu-latest
-    if: always() && needs.deploy.result != 'success' && inputs.environment == 'pr'
+    if: always() && needs.deploy.result == 'failure' && inputs.environment == 'pr'
     
     permissions:
       contents: read
@@ -953,7 +953,7 @@ jobs:
 
   pr-comment:
     name: Comment on PR
-    needs: deploy
+    needs: [go-checks, build-docker, deploy]
     runs-on: ubuntu-latest
     if: always() && inputs.post_pr_comments == true
     
@@ -972,11 +972,17 @@ jobs:
         DEPLOYMENT_ID: ${{ inputs.deployment_id }}
         TERMINATION_TIME: ${{ needs.deploy.outputs.termination_time }}
         DEPLOYMENT_SUCCESS: ${{ needs.deploy.outputs.deployment_success }}
+        GO_CHECKS_RESULT: ${{ needs.go-checks.result }}
+        BUILD_DOCKER_RESULT: ${{ needs.build-docker.result }}
+        DEPLOY_RESULT: ${{ needs.deploy.result }}
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
           const deploymentSuccess = process.env.DEPLOYMENT_SUCCESS === 'true';
+          const goChecksResult = process.env.GO_CHECKS_RESULT;
+          const deployResult = process.env.DEPLOY_RESULT;
+          const buildDockerResult = process.env.BUILD_DOCKER_RESULT;
           
           if (!issueNumber) {
             console.log('⚠️ Could not determine PR number, skipping comment');
@@ -999,8 +1005,12 @@ jobs:
             const workflow = 'Deploy Budget App';
             let failedStep = 'Unknown';
             let errorMessage = 'Workflow execution failed';
+            let cleanupNote = 'No infrastructure was deployed.';
 
-            if (context.payload.workflow_run && context.payload.workflow_run.conclusion === 'failure') {
+            if (goChecksResult === 'failure') {
+              failedStep = 'Go checks (vet, lint, static analysis, security, vulnerabilities)';
+              errorMessage = 'Deployment was not attempted. Fix Go check failures in GitHub Actions logs and push again.';
+            } else if (deployResult === 'failure') {
               failedStep = 'Deploy infrastructure (Database → Migration → Application)';
               errorMessage = 'Terraform deployment failed. This could be:\\n' +
                             '• Database cluster creation failure\\n' +
@@ -1008,9 +1018,18 @@ jobs:
                             '• Application container deployment failure\\n' +
                             '• Database firewall configuration failure\\n' +
                             'Check GitHub Actions logs and DigitalOcean App Platform console for detailed error output.';
+              cleanupNote = 'Partial deployment cleaned up automatically';
+            } else if (deployResult === 'skipped') {
+              failedStep = 'Build or deploy skipped';
+              if (buildDockerResult === 'skipped') {
+                errorMessage = 'Docker build or deploy was skipped. Check earlier workflow jobs for build gate failures.';
+              } else {
+                errorMessage = 'Deploy was skipped. Check earlier workflow jobs for the cause.';
+              }
             } else {
               failedStep = 'Post-deployment verification';
               errorMessage = 'Infrastructure deployed but post-deployment steps failed. Check application health and auto-termination setup.';
+              cleanupNote = 'Partial deployment may require manual cleanup';
             }
             
             message = [
@@ -1022,7 +1041,7 @@ jobs:
               '```',
               errorMessage,
               '```',
-              '**Cleanup:** Partial deployment cleaned up automatically'
+              `**Cleanup:** ${cleanupNote}`
             ].join('\n');
           }
 
@@ -1035,7 +1054,7 @@ jobs:
     
   slack-notification:
     name: Send Slack Notification
-    needs: [check-builds, deploy]
+    needs: [check-builds, go-checks, build-docker, deploy]
     runs-on: ubuntu-latest
     if: always()
     
@@ -1119,8 +1138,41 @@ jobs:
             ]
           }
     
+    - name: Send Go checks failure notification to Slack (PR)
+      if: needs.go-checks.result == 'failure' && inputs.environment == 'pr'
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
+          {
+            "text": "❌ PR Deployment Blocked — Go Checks Failed",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "PR Number",
+                    "value": "${{ inputs.pr_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Deployment ID",
+                    "value": "${{ inputs.deployment_id }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Error Details",
+                    "value": "Go checks failed (vet, lint, static analysis, security, or vulnerabilities). Deployment was not attempted.",
+                    "short": false
+                  }
+                ]
+              }
+            ]
+          }
+
     - name: Send failure notification to Slack (PR)
-      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment == 'pr'
+      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment == 'pr' && needs.go-checks.result != 'failure' && needs.deploy.result == 'failure'
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook
@@ -1157,8 +1209,41 @@ jobs:
             ]
           }
     
+    - name: Send Go checks failure notification to Slack (Production)
+      if: needs.go-checks.result == 'failure' && inputs.environment != 'pr'
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
+          {
+            "text": "❌ Production Deployment Blocked — Go Checks Failed",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "Commit",
+                    "value": "${{ github.sha }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Error Details",
+                    "value": "Go checks failed (vet, lint, static analysis, security, or vulnerabilities). Deployment was not attempted.",
+                    "short": false
+                  }
+                ]
+              }
+            ]
+          }
+
     - name: Send failure notification to Slack (Production)
-      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment != 'pr'
+      if: needs.deploy.outputs.deployment_success != 'true' && inputs.environment != 'pr' && needs.go-checks.result != 'failure' && needs.deploy.result == 'failure'
       uses: slackapi/slack-github-action@v2.1.1
       with:
         webhook-type: incoming-webhook

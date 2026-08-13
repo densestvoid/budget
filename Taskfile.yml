@@ -46,10 +46,18 @@ tasks:
   lint:
     desc: Run all linting and security checks
     cmds:
+      - go vet ./...
       - go tool golangci-lint run
       - go tool staticcheck ./...
       - go tool gosec ./...
       - go tool govulncheck ./...
+
+  ci-checks:
+    desc: Run all CI Go checks (mirrors deploy workflow go-checks + build)
+    cmds:
+      - task: lint
+      - task: test
+      - task: build
 
   lint-golangci:
     desc: Run golangci-lint
