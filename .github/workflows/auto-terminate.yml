@@ -362,14 +362,33 @@ jobs:
     
     - name: Update workflow summary
       if: always()
-      run: |
-        DELAY_MINUTES="${{ github.event.inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}"
-        echo "## 🗑️ Auto-Termination Results" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**App ID:** ${{ steps.validate.outputs.app_id }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Health Status:** ${{ steps.health_check.outputs.health_status }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Should Terminate:** ${{ steps.health_check.outputs.should_terminate }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Termination Result:** ${{ steps.destroy.outputs.destroy_success }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Completed At:** $(date -u)" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "*Environment wait timer (${DELAY_MINUTES} minutes) prevented runner time waste during the delay*" >> $GITHUB_STEP_SUMMARY
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const delayFromInput = '${{ github.event.inputs.termination_delay_minutes }}'.trim();
+          const delayFromVar = '${{ vars.TERMINATION_DELAY_MINUTES }}'.trim();
+          let delayMinutes = delayFromInput || delayFromVar;
+          
+          if (!delayMinutes) {
+            try {
+              const { data } = await github.rest.repos.getEnvironment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment_name: 'termination-delay'
+              });
+              const waitRule = data.protection_rules?.find(rule => rule.type === 'wait_timer');
+              delayMinutes = String(waitRule?.wait_timer ?? 30);
+            } catch (error) {
+              delayMinutes = '30';
+            }
+          }
+          
+          core.summary.addHeading('🗑️ Auto-Termination Results');
+          core.summary.addRaw(`**App ID:** ${{ steps.validate.outputs.app_id }}\n`);
+          core.summary.addRaw(`**Health Status:** ${{ steps.health_check.outputs.health_status }}\n`);
+          core.summary.addRaw(`**Should Terminate:** ${{ steps.health_check.outputs.should_terminate }}\n`);
+          core.summary.addRaw(`**Termination Result:** ${{ steps.destroy.outputs.destroy_success }}\n`);
+          core.summary.addRaw(`**Completed At:** ${new Date().toISOString()}\n\n`);
+          core.summary.addRaw(`*Environment wait timer (${delayMinutes} minutes) prevented runner time waste during the delay*`);
+          await core.summary.write();

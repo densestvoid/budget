@@ -853,37 +853,64 @@ jobs:
           echo "⚠️ No application URL available for health check"
         fi
     
+    - name: Resolve termination delay
+      id: termination_delay
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const delayFromInput = '${{ inputs.termination_delay_minutes }}'.trim();
+          const delayFromVar = '${{ vars.TERMINATION_DELAY_MINUTES }}'.trim();
+          
+          if (delayFromInput) {
+            core.setOutput('minutes', delayFromInput);
+            core.info(`Using termination_delay_minutes workflow input: ${delayFromInput} minutes`);
+            return;
+          }
+          
+          if (delayFromVar) {
+            core.setOutput('minutes', delayFromVar);
+            core.info(`Using TERMINATION_DELAY_MINUTES repository variable: ${delayFromVar} minutes`);
+            return;
+          }
+          
+          try {
+            const { data } = await github.rest.repos.getEnvironment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment_name: 'termination-delay'
+            });
+            const waitRule = data.protection_rules?.find(rule => rule.type === 'wait_timer');
+            const minutes = waitRule?.wait_timer ?? 30;
+            core.setOutput('minutes', String(minutes));
+            core.info(`Using termination-delay environment wait timer: ${minutes} minutes`);
+          } catch (error) {
+            core.warning(`Could not read termination-delay environment wait timer, defaulting to 30 minutes: ${error.message}`);
+            core.setOutput('minutes', '30');
+          }
+
     - name: Calculate termination time
       id: termination
-      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination
       env:
-        DELAY_MINUTES: ${{ inputs.termination_delay_minutes != '' && inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}
+        DELAY_MINUTES: ${{ steps.termination_delay.outputs.minutes }}
       run: |
         TERMINATION_TIME=$(date -d "+${DELAY_MINUTES} minutes" -u +'%Y-%m-%dT%H:%M:%SZ')
         echo "termination_time=${TERMINATION_TIME}" >> $GITHUB_OUTPUT
         echo "termination_delay_minutes=${DELAY_MINUTES}" >> $GITHUB_OUTPUT
-        echo "Auto-termination scheduled in ${DELAY_MINUTES} minutes (must match termination-delay environment wait timer)"
+        echo "Auto-termination scheduled in ${DELAY_MINUTES} minutes"
 
-  auto-termination:
-    name: Set Up Auto-Termination
-    needs: deploy
-    runs-on: ubuntu-latest
-    if: needs.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination == true && inputs.environment == 'pr'
-    
-    permissions:
-      contents: read
-      actions: write
-    
-    steps:
     - name: Trigger auto-termination workflow
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.setup_auto_termination && inputs.environment == 'pr'
       uses: actions/github-script@v7
       env:
         PR_NUMBER: ${{ inputs.pr_number }}
         DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-        APP_ID: ${{ needs.deploy.outputs.app_id }}
-        MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
-        APP_URL: ${{ needs.deploy.outputs.app_url }}
-        TERMINATION_DELAY_MINUTES: ${{ needs.deploy.outputs.termination_delay_minutes || inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }}
+        APP_ID: ${{ steps.deploy.outputs.app_id }}
+        MIGRATION_APP_ID: ${{ steps.deploy.outputs.migration_app_id }}
+        APP_URL: ${{ steps.deploy.outputs.app_url }}
+        TERMINATION_DELAY_MINUTES: ${{ steps.termination_delay.outputs.minutes }}
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
@@ -894,68 +921,56 @@ jobs:
           const appUrl = process.env.APP_URL;
           
           if (!prNumber || !deploymentId) {
-            console.log('❌ Missing required inputs for auto-termination');
-            console.log(`PR Number: ${prNumber}`);
-            console.log(`Deployment ID: ${deploymentId}`);
+            core.setFailed('Missing required inputs for auto-termination');
             return;
           }
           
-          console.log('🚀 Triggering auto-termination workflow...');
-          console.log(`PR Number: ${prNumber}`);
-          console.log(`Deployment ID: ${deploymentId}`);
-          console.log(`App ID: ${appId || 'auto-detect'}`);
-          console.log(`Migration App ID: ${migrationAppId || 'auto-detect'}`);
-          console.log(`App URL: ${appUrl || 'auto-detect'}`);
+          core.info('Triggering auto-termination workflow...');
+          core.info(`PR Number: ${prNumber}`);
+          core.info(`Deployment ID: ${deploymentId}`);
+          core.info(`Delay: ${process.env.TERMINATION_DELAY_MINUTES} minutes`);
           
-          try {
-            let branchRef = context.ref;
-            
-            if (branchRef.startsWith('refs/pull/')) {
-              try {
-                const pr = await github.rest.pulls.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: parseInt(prNumber)
-                });
-                branchRef = `refs/heads/${pr.data.head.ref}`;
-                console.log(`Using PR head branch: ${branchRef}`);
-              } catch (e) {
-                console.log(`⚠️ Could not determine PR head branch, falling back to default branch`);
+          let branchRef = context.ref;
+          
+          if (branchRef.startsWith('refs/pull/')) {
+            try {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: parseInt(prNumber)
+              });
+              branchRef = `refs/heads/${pr.data.head.ref}`;
+              core.info(`Using PR head branch: ${branchRef}`);
+            } catch (error) {
+              core.warning(`Could not determine PR head branch: ${error.message}`);
               const repo = await github.rest.repos.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo
               });
-                branchRef = `refs/heads/${repo.data.default_branch}`;
-              }
-            } else if (!branchRef.startsWith('refs/heads/')) {
-              branchRef = `refs/heads/${branchRef}`;
+              branchRef = `refs/heads/${repo.data.default_branch}`;
             }
-            
-            console.log(`Using branch ref: ${branchRef}`);
-            
-            const response = await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'auto-terminate.yml',
-              ref: branchRef,
-              inputs: {
-                pr_number: prNumber,
-                deployment_id: deploymentId,
-                app_id: appId || '',
-                migration_app_id: migrationAppId || '',
-                app_url: appUrl || '',
-                termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30',
-                skip_environment_wait: 'false'
-              }
-            });
-            
-            console.log('✅ Auto-termination workflow triggered successfully');
-            console.log(`Workflow will execute after ${process.env.TERMINATION_DELAY_MINUTES || '30'}-minute delay (environment wait timer)`);
-          } catch (error) {
-            console.error('❌ Failed to trigger auto-termination workflow:', error);
-            throw error;
+          } else if (!branchRef.startsWith('refs/heads/')) {
+            branchRef = `refs/heads/${branchRef}`;
           }
-    
+          
+          await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'auto-terminate.yml',
+            ref: branchRef.replace('refs/heads/', ''),
+            inputs: {
+              pr_number: prNumber,
+              deployment_id: deploymentId,
+              app_id: appId || '',
+              migration_app_id: migrationAppId || '',
+              app_url: appUrl || '',
+              termination_delay_minutes: process.env.TERMINATION_DELAY_MINUTES || '30',
+              skip_environment_wait: 'false'
+            }
+          });
+          
+          core.info(`Auto-termination workflow triggered (${process.env.TERMINATION_DELAY_MINUTES}-minute environment wait timer)`);
+
   cleanup:
     name: Cleanup Failed Deployment
     needs: deploy
@@ -1048,7 +1063,7 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const issueNumber = context.payload.number || context.payload.pull_request?.number || process.env.PR_NUMBER;
-          const deploymentSuccess = process.env.DEPLOYMENT_SUCCESS === 'true';
+          const deploymentSuccess = process.env.DEPLOYMENT_SUCCESS === 'true' || process.env.DEPLOY_RESULT === 'success';
           const goChecksResult = process.env.GO_CHECKS_RESULT;
           const deployResult = process.env.DEPLOY_RESULT;
           const buildDockerResult = process.env.BUILD_DOCKER_RESULT;
@@ -1161,7 +1176,7 @@ jobs:
                   },
                   {
                     "title": "Auto-terminates",
-                    "value": "${{ inputs.termination_delay_minutes != '' && inputs.termination_delay_minutes || vars.TERMINATION_DELAY_MINUTES || '30' }} minutes",
+                    "value": "${{ needs.deploy.outputs.termination_delay_minutes || '30' }} minutes",
                     "short": true
                   }
                 ]

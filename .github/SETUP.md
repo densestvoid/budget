@@ -28,7 +28,7 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 | Variable | Used by | Description |
 |----------|---------|-------------|
 | `PRODUCTION_DOMAIN` | Production (optional) | Custom domain pre-allocated in DigitalOcean (DNS managed outside Terraform) |
-| `TERMINATION_DELAY_MINUTES` | PR auto-termination (optional) | Minutes before PR deployments are destroyed (default: `30`). Must match the `termination-delay` environment wait timer. |
+| `TERMINATION_DELAY_MINUTES` | PR auto-termination (optional) | Override for minutes before PR deployments are destroyed. If unset, the workflow reads the `termination-delay` environment wait timer automatically (fallback: `30`). |
 
 You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input. Override `TERMINATION_DELAY_MINUTES` per run via the PR deploy workflow's `termination_delay_minutes` input.
 
@@ -73,6 +73,7 @@ Workflows with `workflow_dispatch` must be run from a branch that contains the w
 - `pr_number` — PR number to deploy (required)
 - `ref` — optional branch or tag to build from (defaults to the workflow's selected branch)
 - `termination_delay_minutes` — optional delay override (must match `termination-delay` environment wait timer and `TERMINATION_DELAY_MINUTES`)
+- `force_cleanup` — set to **true** to destroy existing PR resources before deploying (use when a prior deployment was never terminated)
 
 **Terminate a PR deployment immediately** (Actions → *Auto-Terminate Deployment* → Run workflow):
 
