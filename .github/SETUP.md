@@ -85,7 +85,7 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 5. Run database migrations via a DigitalOcean pre-deploy job
 6. Deploy the application to App Platform
 7. Post a PR comment and Slack notification
-8. PR only: schedule auto-termination after 30 minutes
+8. PR only: schedule auto-termination after `TERMINATION_DELAY_MINUTES` (default 30)
 
 ## Architecture
 
@@ -96,11 +96,11 @@ Internet → DigitalOcean App Platform (HTTPS)
               └── Managed PostgreSQL (private VPC)
 ```
 
-PR deployments are ephemeral (~30 minutes). Production uses long-lived database resources with `prevent_destroy`.
+PR deployments are ephemeral (default ~30 minutes; configurable via `TERMINATION_DELAY_MINUTES`). Production uses long-lived database resources with `prevent_destroy`.
 
 ## Cost notes
 
-- PR: managed DB + App Platform, auto-terminated after 30 minutes
+- PR: managed DB + App Platform, auto-terminated after `TERMINATION_DELAY_MINUTES` (default 30)
 - Production: persistent DB (`db-s-1vcpu-1gb`) + App Platform (`basic-xxs`)
 
 ## Security
