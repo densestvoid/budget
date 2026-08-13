@@ -1,52 +1,137 @@
-# GitHub Actions Setup Guide
+# GitHub Actions Setup
 
-To enable automated deployment with GitHub Actions, you only need to configure one repository secret!
+This repository deploys the Budget App to DigitalOcean App Platform using GitHub Actions, Terraform, and a reusable workflow pipeline.
 
-## Required Secret
+## Repository secrets
 
-Go to your GitHub repository → Settings → Secrets and variables → Actions → New repository secret
+Configure these under **Settings → Secrets and variables → Actions → Secrets**:
 
-### `DO_TOKEN` (Only secret needed!)
-- **Description**: DigitalOcean API token
-- **How to get**: 
-  1. Go to [DigitalOcean Control Panel](https://cloud.digitalocean.com/account/api/tokens)
-  2. Click "Generate New Token"
-  3. Give it a name like "GitHub Actions Budget App"
-  4. Select "Write" scope
-  5. Copy the generated token
+| Secret | Used by | Description |
+|--------|---------|-------------|
+| `DO_TOKEN` | PR + production | DigitalOcean API token with write access |
+| `TERRAFORM_AWS_S3_ACCESS_KEY` | PR + production | AWS access key for Terraform state (S3) |
+| `TERRAFORM_AWS_S3_ACCESS_KEY_SECRET` | PR + production | AWS secret key for Terraform state |
+| `TERRAFORM_AWS_S3_REGION` | PR + production | AWS region for the state bucket (e.g. `us-east-1`) |
+| `SLACK_WEBHOOK_PR` | PR deploy + terminate | Slack incoming webhook for PR notifications |
+| `SLACK_WEBHOOK_PRODUCTION` | Production | Slack incoming webhook for production notifications |
 
-## No SSH Keys Required! 🎉
+### Getting a DigitalOcean token
 
-This deployment uses **cloud-init** instead of SSH, which means:
-- ✅ **More secure** - No SSH keys to manage
-- ✅ **Simpler setup** - Only one secret needed
-- ✅ **Better isolation** - No external SSH access to servers
-- ✅ **Automatic deployment** - Everything happens via cloud-init script
+1. Open [DigitalOcean API tokens](https://cloud.digitalocean.com/account/api/tokens)
+2. Create a token with **Write** scope
+3. Save it as `DO_TOKEN`
 
-## Deployment Triggers
+## Repository variables
 
-The GitHub Action will automatically deploy when you:
-- Push to `main`, `develop`, or any `feature/*`, `hotfix/*` branch
-- The deployment will auto-terminate after 30 minutes to save costs
+Configure under **Settings → Secrets and variables → Actions → Variables**:
 
-## Deployment Information
+| Variable | Used by | Description |
+|----------|---------|-------------|
+| `PRODUCTION_DOMAIN` | Production (optional) | Custom domain pre-allocated in DigitalOcean (DNS managed outside Terraform) |
 
-After deployment, check the GitHub Actions tab to see:
-- Application URL
-- Deployment status
-- Cost information
-- Auto-termination timer
+You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input.
 
-## Security Notes
+## Branch protection
 
-- Secrets are encrypted and only accessible to GitHub Actions
-- No SSH access to servers - more secure than traditional deployments
-- DigitalOcean token should have minimal required permissions
-- Auto-termination ensures resources don't run indefinitely
-- Servers have no external SSH access - only accessible via application port
+Require **CI / Run Go Checks** only. Do not require deploy workflows as status checks — deploy runs asynchronously after CI passes.
 
-## Cost Control
+## GitHub environment (PR auto-termination)
 
-- Each deployment costs ~$0.0055 (30 minutes at $4/month rate)
-- Perfect for testing, demos, and CI/CD pipelines
-- No long-running costs unless you disable auto-termination
+PR deployments auto-terminate after the `termination-delay` environment wait timer. Create a repository environment:
+
+1. **Settings → Environments → New environment**
+2. Name: `termination-delay`
+3. Add protection rule: **Wait timer** (e.g. 5 minutes for testing, 30 for production-like runs)
+
+The terminate workflow uses this environment when scheduling auto-termination after a successful PR deploy.
+
+See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
+
+## DigitalOcean prerequisites
+
+- Project `budget-develop` (PR deployments)
+- Project `budget-prod` (production)
+- S3 bucket `densestvoid-terraform` for Terraform state
+- GHCR package access for `ghcr.io/<org>/budget/budget-app`
+- Optional: custom domain added in DigitalOcean (referenced via `PRODUCTION_DOMAIN`)
+
+## Workflows
+
+| Workflow | File | Triggers |
+|----------|------|----------|
+| CI | `ci.yml` | PR open/sync/reopen; push to `main` |
+| Deploy Budget App to DigitalOcean | `deploy.yml` | After CI success on PR (non-`main` head); **manual** |
+| Deploy to Production | `deploy-production.yml` | After CI success on push to `main`; **manual** |
+| Terminate PR Deployment | `terminate-pr-deployment.yml` | After PR deploy completes; **manual** |
+| Notify Deployment | `notify-deployment.yml` | After deploy or terminate completes (`workflow_run`) |
+| Deploy Budget App (Reusable) | `deploy-reusable.yml` | Called by deploy workflows (not run directly) |
+
+### Automatic triggers
+
+- **PR**: Push to a PR branch runs CI. When CI passes, PR deploy runs automatically (head branch must not be `main`).
+- **Production**: Push to `main` runs CI. When CI passes, production deploy runs automatically.
+- **PR teardown**: When a PR deploy completes, terminate runs — scheduled wait after success, immediate cleanup after failure.
+- **Notifications**: Notify runs after every deploy and terminate completion (PR comment + Slack or Slack only).
+
+`workflow_run` listener workflows must exist on the default branch to fire.
+
+### Manual triggers
+
+Workflows with `workflow_dispatch` must be run from a branch that contains the workflow file.
+
+**Deploy a PR** (Actions → *Deploy Budget App to DigitalOcean* → Run workflow):
+
+- `pr_number` — PR number to deploy (required)
+- `ref` — optional git ref to build from
+- `force_cleanup` — destroy existing PR resources before deploying
+
+Manual PR deploy does **not** run CI — use only for redeploy/debug.
+
+**Terminate or cleanup a PR deployment** (Actions → *Terminate PR Deployment* → Run workflow):
+
+- `pr_number` — PR number (required)
+- `skip_environment_wait` — default **true** for immediate cleanup
+
+**Deploy production** (Actions → *Deploy to Production* → Run workflow):
+
+- `ref` — branch or tag to deploy (default: `main`)
+- `domain_name` — optional custom domain (falls back to `PRODUCTION_DOMAIN`)
+
+Manual production deploy does **not** run CI.
+
+## What each deployment does
+
+1. **CI** (`ci.yml`): Go checks (vet, lint, static analysis, security, vulnerabilities)
+2. **Deploy** (`deploy-reusable.yml`): detect build requirements, build/push Docker image when needed, Terraform apply, health check, publish `deploy-result` artifact
+3. **Notify** (`notify-deployment.yml`): PR comment and/or Slack on deploy success or failure
+4. **Terminate** (`terminate-pr-deployment.yml`): destroy PR resources after success (with wait timer) or failure (immediate), plus manual cleanup
+5. **Notify** (again): PR comment and Slack when terminate/cleanup completes
+
+## Architecture
+
+```
+Internet → DigitalOcean App Platform (HTTPS)
+              ├── Migration job (PRE_DEPLOY)
+              └── Web service
+              └── Managed PostgreSQL (private VPC)
+```
+
+PR deployments are ephemeral (duration set by the `termination-delay` environment wait timer). Production uses long-lived database resources with `prevent_destroy`.
+
+## Cost notes
+
+- PR: managed DB + App Platform, auto-terminated after the `termination-delay` environment wait timer
+- Production: persistent DB (`db-s-1vcpu-1gb`) + App Platform (`basic-xxs`)
+
+## Security
+
+- Secrets are only available inside GitHub Actions
+- Database runs on a private VPC endpoint
+- No SSH or droplet access — fully managed App Platform
+- PR deployments are destroyed automatically
+
+## More documentation
+
+- [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) — auto-termination environment
+- [README-DEPLOYMENT.md](../README-DEPLOYMENT.md) — deployment overview
+- [terraform/README.md](../terraform/README.md) — Terraform layout and variables

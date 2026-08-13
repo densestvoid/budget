@@ -46,6 +46,19 @@ type AuthResponse struct {
 	User  *data.Account `json:"user"`
 }
 
+// sessionCookie returns a session cookie with secure defaults for the environment.
+func sessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     "session_token",
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
+	}
+}
+
 // RegisterPage handles the registration page display
 func (h *AuthHandler) RegisterPage(w http.ResponseWriter, r *http.Request) {
 	if err := templates.BaseLayoutWithAuth("Register - Budget App", false, templates.RegisterPage()).Render(w); err != nil {
@@ -98,15 +111,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    session.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(24 * time.Hour.Seconds()),
-	})
+	http.SetCookie(w, sessionCookie(session.Token, int(24*time.Hour.Seconds())))
 
 	// Redirect to home page
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -143,15 +148,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    session.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(24 * time.Hour.Seconds()),
-	})
+	http.SetCookie(w, sessionCookie(session.Token, int(24*time.Hour.Seconds())))
 
 	// Redirect to home page
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -169,15 +166,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   -1,
-	})
+	http.SetCookie(w, sessionCookie("", -1))
 
 	// Redirect to home page
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -230,11 +219,11 @@ func (h *AuthHandler) OptionalAuthMiddleware(next http.Handler) http.Handler {
 		cookie, err := r.Cookie("session_token")
 		switch {
 		case err != nil:
-			log.Printf("No session cookie found: %v", err)
+			log.Printf("No session cookie found")
 		case cookie.Value == "":
 			log.Printf("Session cookie is empty")
 		default:
-			log.Printf("Found session token: %s", cookie.Value[:10]+"...")
+			log.Printf("Session cookie present, validating session")
 			// Get account from session
 			account, err := h.store.GetAccountBySession(cookie.Value)
 			switch {
@@ -243,7 +232,6 @@ func (h *AuthHandler) OptionalAuthMiddleware(next http.Handler) http.Handler {
 			case account == nil:
 				log.Printf("No account found for session token")
 			default:
-				log.Printf("Found authenticated account: %s (%s)", account.Name, account.Email)
 				// Add account to request context
 				ctx := r.Context()
 				ctx = context.WithValue(ctx, accountKey, account)

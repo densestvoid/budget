@@ -1,0 +1,12 @@
+# DigitalOcean Configuration
+do_token = "your-digitalocean-api-token-here"
+
+# Infrastructure Configuration
+region = "nyc1"
+
+# GitHub Integration
+# Note: github_repo is auto-detected from GITHUB_REPOSITORY environment variable
+docker_image_tag = "production-latest"
+
+# Optional custom domain (pre-allocated in DigitalOcean; DNS managed outside Terraform)
+# domain_name = "budget.example.com"

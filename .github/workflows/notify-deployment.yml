@@ -1,0 +1,365 @@
+name: Notify Deployment
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy Budget App to DigitalOcean
+      - Deploy to Production
+      - Terminate PR Deployment
+    types:
+      - completed
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion != 'cancelled'
+    permissions:
+      contents: read
+      pull-requests: write
+
+    env:
+      SLACK_WEBHOOK: >-
+        ${{
+          github.event.workflow_run.name == 'Deploy to Production'
+          && secrets.SLACK_WEBHOOK_PRODUCTION || secrets.SLACK_WEBHOOK_PR
+        }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+
+    steps:
+    - name: Determine notification type
+      id: kind
+      run: |
+        NAME="${{ github.event.workflow_run.name }}"
+
+        case "$NAME" in
+          "Deploy Budget App to DigitalOcean")
+            echo "type=deploy_pr" >> "$GITHUB_OUTPUT"
+            echo "post_pr_comment=true" >> "$GITHUB_OUTPUT"
+            ;;
+          "Deploy to Production")
+            echo "type=deploy_production" >> "$GITHUB_OUTPUT"
+            echo "post_pr_comment=false" >> "$GITHUB_OUTPUT"
+            ;;
+          "Terminate PR Deployment")
+            echo "type=terminate" >> "$GITHUB_OUTPUT"
+            echo "post_pr_comment=true" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "Unknown workflow: $NAME"
+            exit 1
+            ;;
+        esac
+
+    - name: Download deploy-result artifact
+      if: steps.kind.outputs.type == 'deploy_pr' || steps.kind.outputs.type == 'deploy_production'
+      uses: actions/download-artifact@v4
+      with:
+        name: deploy-result
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+      continue-on-error: true
+
+    - name: Download terminate-result artifact
+      if: steps.kind.outputs.type == 'terminate'
+      uses: actions/download-artifact@v4
+      with:
+        name: terminate-result
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+      continue-on-error: true
+
+    - name: Build notification messages
+      id: messages
+      run: |
+        TYPE="${{ steps.kind.outputs.type }}"
+        RUN_URL="${{ env.RUN_URL }}"
+
+        if [ "$TYPE" = "terminate" ]; then
+          if [ ! -f terminate-result.json ]; then
+            echo "No terminate-result artifact — termination was skipped"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_NUMBER=$(jq -r '.pr_number' terminate-result.json)
+          DEPLOYMENT_ID=$(jq -r '.deployment_id' terminate-result.json)
+          REASON=$(jq -r '.reason' terminate-result.json)
+          DESTROY_SUCCESS=$(jq -r '.destroy_success' terminate-result.json)
+          ALREADY=$(jq -r '.already_terminated' terminate-result.json)
+
+          if [ "$ALREADY" = "true" ]; then
+            PR_BODY="## ✅ PR Deployment Already Terminated
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Reason:** ${REASON}"
+            jq -n \
+              --arg text "ℹ️ PR Deployment Already Terminated" \
+              --arg pr "$PR_NUMBER" \
+              --arg deployment "$DEPLOYMENT_ID" \
+              --arg reason "$REASON" \
+              --arg url "$RUN_URL" \
+              '{
+                text: $text,
+                attachments: [{
+                  color: "warning",
+                  fields: [
+                    {title: "PR Number", value: $pr, short: true},
+                    {title: "Deployment ID", value: $deployment, short: true},
+                    {title: "Reason", value: $reason, short: true},
+                    {title: "Workflow Run", value: $url, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          elif [ "$DESTROY_SUCCESS" = "true" ]; then
+            case "$REASON" in
+              scheduled)
+                PR_BODY="## ✅ Auto-Termination Completed
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Result:** Successfully destroyed after scheduled wait"
+                SLACK_TEXT="✅ PR Deployment Auto-Terminated"
+                ;;
+              failure_cleanup)
+                PR_BODY="## ✅ Failed Deployment Cleaned Up
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Result:** Partial resources destroyed after deploy failure"
+                SLACK_TEXT="✅ PR Deployment Cleaned Up After Failure"
+                ;;
+              *)
+                PR_BODY="## ✅ PR Deployment Terminated
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Result:** Successfully destroyed (manual)"
+                SLACK_TEXT="✅ PR Deployment Terminated (Manual)"
+                ;;
+            esac
+            jq -n \
+              --arg text "$SLACK_TEXT" \
+              --arg pr "$PR_NUMBER" \
+              --arg deployment "$DEPLOYMENT_ID" \
+              --arg reason "$REASON" \
+              --arg url "$RUN_URL" \
+              '{
+                text: $text,
+                attachments: [{
+                  color: "good",
+                  fields: [
+                    {title: "PR Number", value: $pr, short: true},
+                    {title: "Deployment ID", value: $deployment, short: true},
+                    {title: "Reason", value: $reason, short: true},
+                    {title: "Workflow Run", value: $url, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          else
+            PR_BODY="## ❌ Termination Failed
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Reason:** ${REASON}
+        **Error:** Cleanup/termination did not complete successfully. Check workflow logs."
+            jq -n \
+              --arg pr "$PR_NUMBER" \
+              --arg deployment "$DEPLOYMENT_ID" \
+              --arg reason "$REASON" \
+              --arg url "$RUN_URL" \
+              '{
+                text: "❌ PR Deployment Termination Failed",
+                attachments: [{
+                  color: "danger",
+                  fields: [
+                    {title: "PR Number", value: $pr, short: true},
+                    {title: "Deployment ID", value: $deployment, short: true},
+                    {title: "Reason", value: $reason, short: true},
+                    {title: "Workflow Run", value: $url, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          {
+            echo "pr_body<<EOF"
+            echo "$PR_BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ ! -f deploy-result.json ]; then
+          echo "No deploy-result artifact — deploy did not run"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        DEPLOYMENT_ID=$(jq -r '.deployment_id' deploy-result.json)
+        PR_NUMBER=$(jq -r '.pr_number // empty' deploy-result.json)
+        DEPLOYMENT_SUCCESS=$(jq -r '.deployment_success' deploy-result.json)
+        APP_URL=$(jq -r '.app_url // empty' deploy-result.json)
+        APP_ID=$(jq -r '.app_id // empty' deploy-result.json)
+        MIGRATION_APP_ID=$(jq -r '.migration_app_id // empty' deploy-result.json)
+        IMAGE_TAG=$(jq -r '.image_tag // empty' deploy-result.json)
+        GIT_SHA=$(jq -r '.git_sha // empty' deploy-result.json)
+        CHECK_BUILDS=$(jq -r '.jobs.check_builds' deploy-result.json)
+        BUILD_GO=$(jq -r '.jobs.build_go' deploy-result.json)
+        BUILD_DOCKER=$(jq -r '.jobs.build_docker' deploy-result.json)
+        DEPLOY_JOB=$(jq -r '.jobs.deploy' deploy-result.json)
+
+        if [ "$DEPLOYMENT_SUCCESS" = "true" ]; then
+          if [ "$TYPE" = "deploy_pr" ]; then
+            PR_BODY="## ✅ Deployment Successful
+
+        **URL:** ${APP_URL:-N/A}
+        **App ID:** ${APP_ID:-N/A}
+        **Migration ID:** ${MIGRATION_APP_ID:-N/A}
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Auto-termination:** Scheduled via the \`termination-delay\` environment wait timer"
+            jq -n \
+              --arg pr "$PR_NUMBER" \
+              --arg deployment "$DEPLOYMENT_ID" \
+              --arg url "$APP_URL" \
+              --arg app "$APP_ID" \
+              --arg run "$RUN_URL" \
+              '{
+                text: "✅ PR Deployment Successful",
+                attachments: [{
+                  color: "good",
+                  fields: [
+                    {title: "PR Number", value: $pr, short: true},
+                    {title: "Deployment ID", value: $deployment, short: true},
+                    {title: "Application URL", value: $url, short: false},
+                    {title: "App ID", value: $app, short: true},
+                    {title: "Workflow Run", value: $run, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          else
+            jq -n \
+              --arg sha "$GIT_SHA" \
+              --arg tag "$IMAGE_TAG" \
+              --arg url "$APP_URL" \
+              --arg run "$RUN_URL" \
+              '{
+                text: "✅ Production Deployment Successful",
+                attachments: [{
+                  color: "good",
+                  fields: [
+                    {title: "Commit", value: $sha, short: true},
+                    {title: "Image Tag", value: $tag, short: true},
+                    {title: "Application URL", value: $url, short: false},
+                    {title: "Workflow Run", value: $run, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          fi
+        else
+          FAILED_STEP="Unknown"
+          ERROR_MESSAGE="Workflow execution failed"
+          if [ "$CHECK_BUILDS" = "failure" ]; then
+            FAILED_STEP="Check build requirements"
+            ERROR_MESSAGE="Build requirement analysis failed."
+          elif [ "$BUILD_GO" = "failure" ]; then
+            FAILED_STEP="Build Go binary"
+            ERROR_MESSAGE="Go binary build failed."
+          elif [ "$BUILD_DOCKER" = "failure" ]; then
+            FAILED_STEP="Build Docker image"
+            ERROR_MESSAGE="Docker image build or push failed."
+          elif [ "$DEPLOY_JOB" = "failure" ]; then
+            FAILED_STEP="Deploy infrastructure"
+            ERROR_MESSAGE="Terraform deployment failed."
+          elif [ "$DEPLOY_JOB" = "skipped" ]; then
+            FAILED_STEP="Deploy skipped"
+            ERROR_MESSAGE="Deploy was skipped because an earlier job failed."
+          fi
+
+          if [ "$TYPE" = "deploy_pr" ]; then
+            PR_BODY="## ❌ Deployment Failed
+
+        **Workflow:** Deploy Budget App to DigitalOcean
+        **Step:** ${FAILED_STEP}
+        **Error:**
+        \`\`\`
+        ${ERROR_MESSAGE}
+        \`\`\`
+        **Cleanup:** Termination workflow will attempt to clean up partial resources"
+            jq -n \
+              --arg pr "$PR_NUMBER" \
+              --arg deployment "$DEPLOYMENT_ID" \
+              --arg step "$FAILED_STEP" \
+              --arg error "$ERROR_MESSAGE" \
+              --arg run "$RUN_URL" \
+              '{
+                text: "❌ PR Deployment Failed",
+                attachments: [{
+                  color: "danger",
+                  fields: [
+                    {title: "PR Number", value: $pr, short: true},
+                    {title: "Deployment ID", value: $deployment, short: true},
+                    {title: "Failed Step", value: $step, short: true},
+                    {title: "Error", value: $error, short: false},
+                    {title: "Workflow Run", value: $run, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          else
+            jq -n \
+              --arg sha "$GIT_SHA" \
+              --arg step "$FAILED_STEP" \
+              --arg error "$ERROR_MESSAGE" \
+              --arg run "$RUN_URL" \
+              '{
+                text: "❌ Production Deployment Failed",
+                attachments: [{
+                  color: "danger",
+                  fields: [
+                    {title: "Commit", value: $sha, short: true},
+                    {title: "Failed Step", value: $step, short: true},
+                    {title: "Error", value: $error, short: false},
+                    {title: "Workflow Run", value: $run, short: false}
+                  ]
+                }]
+              }' > slack-payload.json
+          fi
+        fi
+
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+        echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+        if [ "$TYPE" = "deploy_pr" ]; then
+          {
+            echo "pr_body<<EOF"
+            echo "$PR_BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Comment on PR
+      if: steps.kind.outputs.post_pr_comment == 'true' && steps.messages.outputs.skip != 'true' && steps.messages.outputs.pr_number != ''
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ steps.messages.outputs.pr_number }}
+        PR_BODY: ${{ steps.messages.outputs.pr_body }}
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const prNumber = parseInt(process.env.PR_NUMBER, 10);
+          const body = process.env.PR_BODY;
+          if (!prNumber || !body) {
+            core.info('Skipping PR comment - missing PR number or body');
+            return;
+          }
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            body
+          });
+
+    - name: Send Slack notification
+      if: steps.messages.outputs.skip != 'true'
+      continue-on-error: true
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ env.SLACK_WEBHOOK }}
+        payload-file-path: slack-payload.json
