@@ -36,6 +36,7 @@ The reusable module that handles:
 
 Creates a complete new deployment for each PR:
 - **Creates new database** cluster, database, and user
+- **Unique VPC CIDR per PR** (`10.<n>.0.0/24`) to avoid account-wide overlap
 - **Creates database schema** and grants permissions
 - **Runs schema migrations** (always executed via migration app)
 - Uses `budget-develop` project

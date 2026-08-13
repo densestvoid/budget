@@ -99,7 +99,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24'
+        go-version: '1.25'
     
     - name: Check build requirements
       id: check
@@ -342,16 +342,16 @@ jobs:
 
   build-docker:
     name: Build Docker Image
-    needs: [check-builds, build-go]
+    needs: [check-builds, build-go, go-checks]
     runs-on: ubuntu-latest
     if: |
       always() &&
       needs.check-builds.result == 'success' &&
+      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') &&
       needs.check-builds.outputs.need_docker_build == 'true' &&
       (
         needs.check-builds.outputs.need_go_build == 'false' ||
-        needs.build-go.result == 'success' ||
-        needs.build-go.result == 'skipped'
+        needs.build-go.result == 'success'
       )
     outputs:
       image_built: ${{ steps.build.outputs.image_built }}
@@ -447,9 +447,9 @@ jobs:
 
   deploy:
     name: Deploy to DigitalOcean
-    needs: [check-builds, build-docker]
+    needs: [check-builds, build-docker, go-checks]
     runs-on: ubuntu-latest
-    if: always() && (needs.check-builds.result == 'success' && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped'))
+    if: always() && needs.check-builds.result == 'success' && (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
     outputs:
       deployment_success: ${{ steps.deploy.outputs.deployment_success == 'true' }}
       app_url: ${{ steps.deploy.outputs.app_url }}
