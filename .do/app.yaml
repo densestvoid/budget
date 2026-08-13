@@ -1,0 +1,74 @@
+# DigitalOcean App Platform specification
+name: budget-app
+region: nyc1
+
+services:
+- name: web
+  source_dir: /
+  github:
+    repo: densestvoid/budget
+    branch: automated-deployment
+    deploy_on_push: false  # We control deployment via GitHub Actions
+  
+  image:
+    registry_type: GHCR
+    registry: ghcr.io
+    repository: densestvoid/budget/budget-app
+    tag: latest
+  
+  environment_slug: docker
+  instance_count: 1
+  instance_size_slug: basic-xxs  # $5/month
+  
+  envs:
+  - key: DATABASE_URL
+    value: postgres://budget_user:budget_password@postgres:5432/budget?sslmode=disable
+    type: SECRET
+    scope: RUN_TIME
+  
+  - key: PORT
+    value: "8080"
+    scope: RUN_TIME
+  
+  - key: ENV
+    value: production
+    scope: RUN_TIME
+  
+  - key: LOG_LEVEL
+    value: info
+    scope: RUN_TIME
+  
+  health_check:
+    http_path: "/health"
+  
+  http_port: 8080
+  
+  routes:
+  - path: /
+
+# PostgreSQL service (containerized for cost savings)
+- name: postgres
+  image:
+    registry_type: DOCKER_HUB
+    repository: postgres
+    tag: 16-alpine
+  
+  environment_slug: docker
+  instance_count: 1
+  instance_size_slug: basic-xxs  # $5/month
+  
+  envs:
+  - key: POSTGRES_DB
+    value: budget
+    scope: RUN_TIME
+  
+  - key: POSTGRES_USER
+    value: budget_user
+    scope: RUN_TIME
+  
+  - key: POSTGRES_PASSWORD
+    value: budget_password
+    type: SECRET
+    scope: RUN_TIME
+  
+  # No routes - internal service only

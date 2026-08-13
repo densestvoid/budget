@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+// Context key types to avoid collisions
+type contextKey string
+
+const (
+	accountKey contextKey = "account"
+)
+
 // AuthHandler handles authentication-related requests
 type AuthHandler struct {
 	store *data.Storage
@@ -39,9 +46,26 @@ type AuthResponse struct {
 	User  *data.Account `json:"user"`
 }
 
+// sessionCookie returns a session cookie with secure defaults for the environment.
+func sessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     "session_token",
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
+	}
+}
+
 // RegisterPage handles the registration page display
 func (h *AuthHandler) RegisterPage(w http.ResponseWriter, r *http.Request) {
-	templates.BaseLayoutWithAuth("Register - Budget App", false, templates.RegisterPage()).Render(w)
+	if err := templates.BaseLayoutWithAuth("Register - Budget App", false, templates.RegisterPage()).Render(w); err != nil {
+		log.Printf("Error rendering register page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // Register handles user registration from form submission
@@ -87,15 +111,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    session.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(24 * time.Hour.Seconds()),
-	})
+	http.SetCookie(w, sessionCookie(session.Token, int(24*time.Hour.Seconds())))
 
 	// Redirect to home page
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -132,15 +148,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    session.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(24 * time.Hour.Seconds()),
-	})
+	http.SetCookie(w, sessionCookie(session.Token, int(24*time.Hour.Seconds())))
 
 	// Redirect to home page
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -152,19 +160,13 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session_token")
 	if err == nil && cookie.Value != "" {
 		// Delete session from database
-		h.store.DeleteSession(cookie.Value)
+		if err := h.store.DeleteSession(cookie.Value); err != nil {
+			log.Printf("Error deleting session: %v", err)
+		}
 	}
 
 	// Clear cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session_token",
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   -1,
-	})
+	http.SetCookie(w, sessionCookie("", -1))
 
 	// Redirect to home page
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -175,7 +177,11 @@ func (h *AuthHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value("account").(*data.Account)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(account)
+	if err := json.NewEncoder(w).Encode(account); err != nil {
+		log.Printf("Error encoding account to JSON: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // AuthMiddleware authenticates requests using session tokens
@@ -201,7 +207,7 @@ func (h *AuthHandler) AuthMiddleware(next http.Handler) http.Handler {
 
 		// Add account to request context
 		ctx := r.Context()
-		ctx = context.WithValue(ctx, "account", account)
+		ctx = context.WithValue(ctx, accountKey, account)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -211,23 +217,24 @@ func (h *AuthHandler) OptionalAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Get session token from cookie
 		cookie, err := r.Cookie("session_token")
-		if err != nil {
-			log.Printf("No session cookie found: %v", err)
-		} else if cookie.Value == "" {
+		switch {
+		case err != nil:
+			log.Printf("No session cookie found")
+		case cookie.Value == "":
 			log.Printf("Session cookie is empty")
-		} else {
-			log.Printf("Found session token: %s", cookie.Value[:10]+"...")
+		default:
+			log.Printf("Session cookie present, validating session")
 			// Get account from session
 			account, err := h.store.GetAccountBySession(cookie.Value)
-			if err != nil {
+			switch {
+			case err != nil:
 				log.Printf("Error getting account from session: %v", err)
-			} else if account == nil {
+			case account == nil:
 				log.Printf("No account found for session token")
-			} else {
-				log.Printf("Found authenticated account: %s (%s)", account.Name, account.Email)
+			default:
 				// Add account to request context
 				ctx := r.Context()
-				ctx = context.WithValue(ctx, "account", account)
+				ctx = context.WithValue(ctx, accountKey, account)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -258,7 +265,7 @@ func (h *AuthHandler) AuthRequiredMiddleware(next http.Handler) http.Handler {
 
 		// Add account to request context
 		ctx := r.Context()
-		ctx = context.WithValue(ctx, "account", account)
+		ctx = context.WithValue(ctx, accountKey, account)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

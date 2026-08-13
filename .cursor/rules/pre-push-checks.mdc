@@ -1,0 +1,35 @@
+---
+description: Run CI-equivalent Go checks before pushing code changes
+alwaysApply: true
+---
+
+# Pre-push checks
+
+Before any `git push`, run the full CI-equivalent check suite:
+
+```bash
+go tool task ci-checks
+```
+
+## What ci-checks runs
+
+The `ci-checks` task in [`Taskfile.yml`](../../Taskfile.yml) mirrors the deploy workflow's Go validation:
+
+| Step | CI job | Command |
+|------|--------|---------|
+| `lint` | Vet | `go vet ./...` |
+| `lint` | Lint | `golangci-lint run` |
+| `lint` | Static-Analysis | `staticcheck ./...` |
+| `lint` | Security-Check | `gosec ./...` |
+| `lint` | Vulnerability-Check | `govulncheck ./...` |
+| `test` | — | `go test ./...` |
+| `build` | build-go | `go build` |
+
+## Rules
+
+1. Run `go tool task ci-checks` before every push that includes Go code changes.
+2. If any step fails, fix the issues locally. Do not push and wait for CI to report the same failures.
+3. Tool versions are pinned in `go.mod` (e.g. gosec). Use `go tool <name>`, not a globally installed binary.
+4. For targeted debugging, use individual tasks: `lint-gosec`, `lint-staticcheck`, `lint-golangci`, `lint-govulncheck`, or `lint`.
+
+See also [`executing-commands.mdc`](executing-commands.mdc) for Go tooling conventions.

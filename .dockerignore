@@ -1,0 +1,34 @@
+# Git and version control
+.git
+.github
+.gitignore
+
+# Development and documentation files
+README.md
+*.md
+docs/
+.env*
+.vscode
+.idea
+.DS_Store
+
+# Build artifacts and logs
+*.log
+tmp/
+dist/
+build/
+
+# Test files
+*_test.go
+testdata/
+test/
+coverage/
+
+# Terraform files (not needed in container)
+terraform/
+*.tf
+*.tfvars*
+
+# CI/CD artifacts
+.buildx-cache/
+node_modules/
