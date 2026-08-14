@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	g "github.com/maragudk/gomponents"
-	"github.com/maragudk/gomponents/html"
+	g "maragu.dev/gomponents"
+	"maragu.dev/gomponents/html"
 )
 
 const (
@@ -27,9 +27,9 @@ func addCategoryModal(categories []data.Category, currentParentID *int) g.Node {
 	return html.Div(
 		html.Class("modal fade"),
 		html.ID("addCategoryModal"),
-		html.DataAttr("tabindex", "-1"),
-		html.DataAttr("aria-labelledby", "addCategoryModalLabel"),
-		html.DataAttr("aria-hidden", "true"),
+		html.TabIndex("-1"),
+		html.Aria("labelledby", "addCategoryModalLabel"),
+		html.Aria("hidden", "true"),
 		html.Div(
 			html.Class("modal-dialog"),
 			html.Div(
@@ -40,8 +40,8 @@ func addCategoryModal(categories []data.Category, currentParentID *int) g.Node {
 					html.Button(
 						html.Class("btn-close"),
 						html.Type("button"),
-						html.DataAttr("bs-dismiss", "modal"),
-						html.DataAttr("aria-label", "Close"),
+						html.Data("bs-dismiss", "modal"),
+						html.Aria("label", "Close"),
 					),
 				),
 				html.Div(
@@ -65,7 +65,7 @@ func addCategoryModal(categories []data.Category, currentParentID *int) g.Node {
 						),
 						html.Div(
 							html.Class("d-flex justify-content-end gap-2"),
-							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.Data("bs-dismiss", "modal"), g.Text("Cancel")),
 							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Category")),
 						),
 					),
@@ -97,8 +97,8 @@ func HomePage() g.Node {
 						html.P(html.Class("card-text"), g.Text("Experience dynamic web interactions without writing JavaScript. HTMX allows you to access modern browser features directly from HTML.")),
 						html.Button(
 							html.Class("btn btn-primary"),
-							html.DataAttr("hx-get", "/api/health"),
-							html.DataAttr("hx-target", "#demo-output"),
+							html.Data("hx-get", "/api/health"),
+							html.Data("hx-target", "#demo-output"),
 							g.Text("Test HTMX"),
 						),
 						html.Div(
@@ -384,8 +384,8 @@ func CategoriesPage(categories []data.Category) g.Node {
 					html.Button(
 						html.Class("btn btn-secondary"),
 						html.Type("button"),
-						html.DataAttr("bs-toggle", "modal"),
-						html.DataAttr("bs-target", "#"+modalID),
+						html.Data("bs-toggle", "modal"),
+						html.Data("bs-target", "#"+modalID),
 						g.Text("Edit"),
 					),
 					g.El("form",
@@ -443,8 +443,8 @@ func CategoriesPage(categories []data.Category) g.Node {
 						html.Button(
 							html.Class("btn btn-primary ms-auto"),
 							html.Type("button"),
-							html.DataAttr("bs-toggle", "modal"),
-							html.DataAttr("bs-target", "#addCategoryModal"),
+							html.Data("bs-toggle", "modal"),
+							html.Data("bs-target", "#addCategoryModal"),
 							html.I(html.Class("bi bi-plus-circle me-1")),
 							g.Text("Add"),
 						),
@@ -504,8 +504,8 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 						html.Button(
 							html.Class("btn btn-primary ms-auto"),
 							html.Type("button"),
-							html.DataAttr("bs-toggle", "modal"),
-							html.DataAttr("bs-target", "#uploadCsvModal"),
+							html.Data("bs-toggle", "modal"),
+							html.Data("bs-target", "#uploadCsvModal"),
 							g.Text("Upload"),
 						),
 					),
@@ -536,9 +536,9 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 		html.Div(
 			html.Class("modal fade"),
 			html.ID("uploadCsvModal"),
-			html.DataAttr("tabindex", "-1"),
-			html.DataAttr("aria-labelledby", "uploadCsvModalLabel"),
-			html.DataAttr("aria-hidden", "true"),
+			html.TabIndex("-1"),
+			html.Aria("labelledby", "uploadCsvModalLabel"),
+			html.Aria("hidden", "true"),
 			html.Div(
 				html.Class("modal-dialog"),
 				html.Div(
@@ -549,8 +549,8 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 						html.Button(
 							html.Class("btn-close"),
 							html.Type("button"),
-							html.DataAttr("bs-dismiss", "modal"),
-							html.DataAttr("aria-label", "Close"),
+							html.Data("bs-dismiss", "modal"),
+							html.Aria("label", "Close"),
 						),
 					),
 					html.Div(
@@ -573,9 +573,9 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 		html.Div(
 			html.Class("modal fade"),
 			html.ID("editTransactionModal"),
-			html.DataAttr("tabindex", "-1"),
-			html.DataAttr("aria-labelledby", "editTransactionModalLabel"),
-			html.DataAttr("aria-hidden", "true"),
+			html.TabIndex("-1"),
+			html.Aria("labelledby", "editTransactionModalLabel"),
+			html.Aria("hidden", "true"),
 			html.Div(
 				html.Class("modal-dialog"),
 				html.Div(
@@ -586,8 +586,8 @@ func TransactionsPage(transactions []data.Transaction, categories []data.Categor
 						html.Button(
 							html.Class("btn-close"),
 							html.Type("button"),
-							html.DataAttr("bs-dismiss", "modal"),
-							html.DataAttr("aria-label", "Close"),
+							html.Data("bs-dismiss", "modal"),
+							html.Aria("label", "Close"),
 						),
 					),
 					html.Div(
@@ -656,8 +656,8 @@ func TransactionCardWithModal(t *data.Transaction, categories []data.Category, m
 			html.Div(
 				html.Class("card mb-2"),
 				html.ID(cardID),
-				html.DataAttr("bs-toggle", "modal"),
-				html.DataAttr("bs-target", "#"+modalID),
+				html.Data("bs-toggle", "modal"),
+				html.Data("bs-target", "#"+modalID),
 				g.Attr("style", "cursor: pointer;"),
 				html.Div(
 					html.Class("d-flex w-100 align-items-center py-3 gap-3 card-body"),
@@ -691,9 +691,9 @@ func TransactionCardWithModal(t *data.Transaction, categories []data.Category, m
 			html.Div(
 				html.Class("modal fade"),
 				html.ID(modalID),
-				html.DataAttr("tabindex", "-1"),
-				html.DataAttr("aria-labelledby", modalID+"Label"),
-				html.DataAttr("aria-hidden", "true"),
+				html.TabIndex("-1"),
+				html.Aria("labelledby", modalID+"Label"),
+				html.Aria("hidden", "true"),
 				html.Div(
 					html.Class("modal-dialog"),
 					html.Div(
@@ -704,8 +704,8 @@ func TransactionCardWithModal(t *data.Transaction, categories []data.Category, m
 							html.Button(
 								html.Class("btn-close"),
 								html.Type("button"),
-								html.DataAttr("bs-dismiss", "modal"),
-								html.DataAttr("aria-label", "Close"),
+								html.Data("bs-dismiss", "modal"),
+								html.Aria("label", "Close"),
 							),
 						),
 						html.Div(
@@ -766,14 +766,14 @@ func TransactionCardWithModal(t *data.Transaction, categories []data.Category, m
 									html.Button(
 										html.Type("button"),
 										html.Class("btn btn-outline-primary"),
-										html.DataAttr("bs-dismiss", "modal"),
+										html.Data("bs-dismiss", "modal"),
 										g.Attr("onclick", "setTimeout(function(){openAddRuleModalWithPrefill('"+strings.ReplaceAll(t.OriginalPayee, "'", "\\'")+"')}, 400);"),
 										g.Text("Create Rule from this Transaction"),
 									),
 								),
 								html.Div(
 									html.Class("d-flex justify-content-end gap-2"),
-									html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+									html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.Data("bs-dismiss", "modal"), g.Text("Cancel")),
 									html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 								),
 							),
@@ -826,8 +826,8 @@ func TransactionCardWithModalSelectable(t *data.Transaction, categories []data.C
 				g.Attr("hx-get", "/transactions/"+strconv.Itoa(t.ID)+"/edit"),
 				g.Attr("hx-target", "#editTransactionModalBody"),
 				g.Attr("hx-trigger", "click"),
-				html.DataAttr("bs-toggle", "modal"),
-				html.DataAttr("bs-target", "#editTransactionModal"),
+				html.Data("bs-toggle", "modal"),
+				html.Data("bs-target", "#editTransactionModal"),
 				html.Div(
 					html.Class("d-flex align-items-center gap-3"),
 					// First column: Payee and Category stacked, text only
@@ -896,8 +896,8 @@ func CategoriesHeaderSection() g.Node {
 				html.Button(
 					html.Class("btn btn-primary ms-auto"),
 					html.Type("button"),
-					html.DataAttr("bs-toggle", "modal"),
-					html.DataAttr("bs-target", "#addCategoryModal"),
+					html.Data("bs-toggle", "modal"),
+					html.Data("bs-target", "#addCategoryModal"),
 					html.I(html.Class("bi bi-plus-circle me-1")),
 					g.Text("Add"),
 				),
@@ -1000,8 +1000,8 @@ func CategoryCardOnly(c *data.Category, allCategories []data.Category) g.Node {
 				html.Button(
 					html.Class("btn btn-secondary"),
 					html.Type("button"),
-					html.DataAttr("bs-toggle", "modal"),
-					html.DataAttr("bs-target", "#editCategoryModal-"+strconv.Itoa(c.ID)),
+					html.Data("bs-toggle", "modal"),
+					html.Data("bs-target", "#editCategoryModal-"+strconv.Itoa(c.ID)),
 					g.Text("Edit"),
 				),
 				html.Button(
@@ -1026,9 +1026,9 @@ func CategoryCard(c *data.Category, allCategories []data.Category) g.Node {
 		html.Div(
 			html.Class("modal fade"),
 			html.ID("editCategoryModal-"+strconv.Itoa(c.ID)),
-			html.DataAttr("tabindex", "-1"),
-			html.DataAttr("aria-labelledby", "editCategoryModalLabel-"+strconv.Itoa(c.ID)),
-			html.DataAttr("aria-hidden", "true"),
+			html.TabIndex("-1"),
+			html.Aria("labelledby", "editCategoryModalLabel-"+strconv.Itoa(c.ID)),
+			html.Aria("hidden", "true"),
 			html.Div(
 				html.Class("modal-dialog"),
 				html.Div(
@@ -1039,8 +1039,8 @@ func CategoryCard(c *data.Category, allCategories []data.Category) g.Node {
 						html.Button(
 							html.Class("btn-close"),
 							html.Type("button"),
-							html.DataAttr("bs-dismiss", "modal"),
-							html.DataAttr("aria-label", "Close"),
+							html.Data("bs-dismiss", "modal"),
+							html.Aria("label", "Close"),
 						),
 					),
 					html.Div(
@@ -1064,7 +1064,7 @@ func CategoryCard(c *data.Category, allCategories []data.Category) g.Node {
 							),
 							html.Div(
 								html.Class("d-flex justify-content-end gap-2"),
-								html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+								html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.Data("bs-dismiss", "modal"), g.Text("Cancel")),
 								html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 							),
 						),
@@ -1157,8 +1157,8 @@ func RulesPage(rules []data.Rule, categories []data.Category) g.Node {
 					html.Button(
 						html.Class("btn btn-primary"),
 						html.Type("button"),
-						html.DataAttr("bs-toggle", "modal"),
-						html.DataAttr("bs-target", "#addRuleModal"),
+						html.Data("bs-toggle", "modal"),
+						html.Data("bs-target", "#addRuleModal"),
 						g.Text("Add Rule"),
 					),
 				),
@@ -1380,9 +1380,9 @@ func AddRuleModal(categories []data.Category) g.Node {
 	return html.Div(
 		html.Class("modal fade"),
 		html.ID("addRuleModal"),
-		html.DataAttr("tabindex", "-1"),
-		html.DataAttr("aria-labelledby", "addRuleModalLabel"),
-		html.DataAttr("aria-hidden", "true"),
+		html.TabIndex("-1"),
+		html.Aria("labelledby", "addRuleModalLabel"),
+		html.Aria("hidden", "true"),
 		html.Div(
 			html.Class("modal-dialog modal-lg"),
 			html.Div(
@@ -1393,8 +1393,8 @@ func AddRuleModal(categories []data.Category) g.Node {
 					html.Button(
 						html.Class("btn-close"),
 						html.Type("button"),
-						html.DataAttr("bs-dismiss", "modal"),
-						html.DataAttr("aria-label", "Close"),
+						html.Data("bs-dismiss", "modal"),
+						html.Aria("label", "Close"),
 					),
 				),
 				html.Div(
@@ -1424,7 +1424,7 @@ func AddRuleModal(categories []data.Category) g.Node {
 						),
 						html.Div(
 							html.Class("d-flex justify-content-end gap-2"),
-							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+							html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.Data("bs-dismiss", "modal"), g.Text("Cancel")),
 							html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Add Rule")),
 						),
 					),
@@ -1465,9 +1465,9 @@ func EditRuleModal(categories []data.Category) g.Node {
 	return html.Div(
 		html.Class("modal fade"),
 		html.ID("editRuleModal"),
-		html.DataAttr("tabindex", "-1"),
-		html.DataAttr("aria-labelledby", "editRuleModalLabel"),
-		html.DataAttr("aria-hidden", "true"),
+		html.TabIndex("-1"),
+		html.Aria("labelledby", "editRuleModalLabel"),
+		html.Aria("hidden", "true"),
 		html.Div(
 			html.Class("modal-dialog modal-lg"),
 			html.Div(
@@ -1478,8 +1478,8 @@ func EditRuleModal(categories []data.Category) g.Node {
 					html.Button(
 						html.Class("btn-close"),
 						html.Type("button"),
-						html.DataAttr("bs-dismiss", "modal"),
-						html.DataAttr("aria-label", "Close"),
+						html.Data("bs-dismiss", "modal"),
+						html.Aria("label", "Close"),
 					),
 				),
 				html.Div(
@@ -1800,8 +1800,8 @@ func buildDropdownButton(selectID string) g.Node {
 		html.Class("btn border dropdown-toggle w-100 d-flex justify-content-between align-items-center"),
 		html.Type("button"),
 		html.ID(selectID),
-		html.DataAttr("bs-toggle", "dropdown"),
-		html.DataAttr("bs-auto-close", "true"),
+		html.Data("bs-toggle", "dropdown"),
+		html.Data("bs-auto-close", "true"),
 		g.Attr("x-text", "selectedDisplay"),
 	)
 }

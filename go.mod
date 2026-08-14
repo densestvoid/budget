@@ -6,11 +6,11 @@ require (
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-chi/cors v1.2.2
 	github.com/lib/pq v1.12.3
-	github.com/maragudk/gomponents v0.20.2
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	golang.org/x/crypto v0.54.0
+	maragu.dev/gomponents v1.3.0
 )
 
 require (

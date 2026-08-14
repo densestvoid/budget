@@ -1,8 +1,8 @@
 package templates
 
 import (
-	g "github.com/maragudk/gomponents"
-	"github.com/maragudk/gomponents/html"
+	g "maragu.dev/gomponents"
+	"maragu.dev/gomponents/html"
 )
 
 // navigationSection creates the navigation menu items
@@ -87,8 +87,8 @@ func authenticationSection(isAuthenticated bool, formID string) g.Node {
 					html.Button(
 						html.Class("btn btn-primary btn-sm w-100 mb-2"),
 						html.Type("button"),
-						html.DataAttr("bs-toggle", "modal"),
-						html.DataAttr("bs-target", "#authModal"),
+						html.Data("bs-toggle", "modal"),
+						html.Data("bs-target", "#authModal"),
 						g.Text("Login / Register"),
 					),
 				}
@@ -137,9 +137,9 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 						html.Button(
 							html.Class("btn btn-link text-light d-lg-none"),
 							html.Type("button"),
-							html.DataAttr("bs-toggle", "offcanvas"),
-							html.DataAttr("bs-target", "#sidePane"),
-							html.DataAttr("aria-controls", "sidePane"),
+							html.Data("bs-toggle", "offcanvas"),
+							html.Data("bs-target", "#sidePane"),
+							html.Aria("controls", "sidePane"),
 							html.I(html.Class("bi bi-list")),
 						),
 						html.A(
@@ -200,8 +200,8 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 				html.Div(
 					html.Class("offcanvas offcanvas-start"),
 					html.ID("sidePane"),
-					html.DataAttr("tabindex", "-1"),
-					html.DataAttr("aria-labelledby", "sidePaneLabel"),
+					html.TabIndex("-1"),
+					html.Aria("labelledby", "sidePaneLabel"),
 
 					// Offcanvas header
 					html.Div(
@@ -214,8 +214,8 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 						html.Button(
 							html.Class("btn-close"),
 							html.Type("button"),
-							html.DataAttr("bs-dismiss", "offcanvas"),
-							html.DataAttr("aria-label", "Close"),
+							html.Data("bs-dismiss", "offcanvas"),
+							html.Aria("label", "Close"),
 						),
 					),
 
@@ -242,9 +242,9 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 				html.Div(
 					html.Class("modal fade"),
 					html.ID("authModal"),
-					html.DataAttr("tabindex", "-1"),
-					html.DataAttr("aria-labelledby", "authModalLabel"),
-					html.DataAttr("aria-hidden", "true"),
+					html.TabIndex("-1"),
+					html.Aria("labelledby", "authModalLabel"),
+					html.Aria("hidden", "true"),
 					html.Div(
 						html.Class("modal-dialog"),
 						html.Div(
@@ -259,8 +259,8 @@ func BaseLayoutWithAuth(title string, isAuthenticated bool, content ...g.Node) g
 								html.Button(
 									html.Class("btn-close"),
 									html.Type("button"),
-									html.DataAttr("bs-dismiss", "modal"),
-									html.DataAttr("aria-label", "Close"),
+									html.Data("bs-dismiss", "modal"),
+									html.Aria("label", "Close"),
 								),
 							),
 							html.Div(

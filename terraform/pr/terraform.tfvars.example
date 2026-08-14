@@ -5,9 +5,9 @@ do_token = "your-digitalocean-api-token-here"
 region = "nyc1"
 
 # Deployment identification
-deployment_id = "pr-1-automated-deployment"  # Format: pr-{number}-{branch}
+deployment_id = "pr-123"  # Format: pr-{number}
 
 # GitHub Integration
 # Note: github_repo is auto-detected from GITHUB_REPOSITORY environment variable
-docker_image_tag = "pr-1-automated-deployment"
+docker_image_tag = "pr-123"
 

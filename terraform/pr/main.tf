@@ -147,9 +147,9 @@ module "budget_app" {
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
 
-  domain = var.base_domain != "" ? {
-    hostname = "${var.deployment_id}.${var.base_domain}"
-    zone     = var.base_domain
+  domain = var.domain_name != "" ? {
+    hostname = "${var.deployment_id}.${var.domain_name}"
+    zone     = var.domain_name
   } : null
 
   # VPC configuration - use the VPC created above

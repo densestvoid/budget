@@ -11,7 +11,7 @@ The deployment uses **DigitalOcean App Platform** with **managed PostgreSQL**:
 - **App Platform** — migration pre-deploy job + web service (`basic-xxs`)
 - **Automatic HTTPS** — provided by App Platform
 - **GHCR** — container images built in CI and pushed to GitHub Container Registry
-- **Terraform state** — stored in AWS S3 (`densestvoid-terraform` bucket)
+- **Terraform state** — stored in AWS S3 (`densestvoid-terraform` bucket); terminate destroys whatever is recorded in state
 
 PR deployments auto-terminate after the `termination-delay` environment wait timer. Production is persistent.
 
@@ -81,7 +81,8 @@ The deploy workflow checks `GET /health` after deployment. A `200` or `204` resp
 | Terraform init fails | `TERRAFORM_AWS_S3_*` secrets and bucket access |
 | Docker image not found | GHCR auth, `packages: write` permission |
 | Migration fails | DigitalOcean App Platform migration job logs |
-| Auto-termination not running | `termination-delay` environment + wait timer |
+| Auto-termination not running | `termination-delay` environment + wait timer; terminate workflow must not use `branches-ignore: main` on `workflow_run` |
+| Terminate destroy failed | S3 tfstate retained — re-run terminate; teardown uses `terraform/pr-destroy` (`apply` on state orphans, not `terraform/pr` definitions) |
 | Wrong PR comment status | Recent workflow run logs for deploy job outputs |
 
 ## Related docs

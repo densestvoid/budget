@@ -48,7 +48,7 @@ on:
         required: false
         type: string
       domain_name:
-        description: 'Hostname for production, or base hostname for PR ({deployment_id}.{hostname})'
+        description: 'DO DNS zone (PR: {deployment_id}.{domain_name}; production: hostname). Optional.'
         required: false
         type: string
       git_ref:
@@ -96,28 +96,28 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
       run: |
+        set -eu -o pipefail
         echo "🧹 Force cleanup requested - destroying existing deployment if present..."
-        cd ${{ inputs.terraform_dir }}
-        
-        cat > terraform.tfvars << EOF
+        cd terraform/pr-destroy
+        cat > terraform.tfvars <<EOF
         do_token = "${{ secrets.DO_TOKEN }}"
-        region = "nyc1"
-        deployment_id = "${{ inputs.deployment_id }}"
-        docker_image_tag = "${{ inputs.deployment_id }}"
         EOF
-        
+
         if terraform init -backend-config="key=${{ inputs.backend_key }}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
           if terraform state list 2>/dev/null | grep -q .; then
-            echo "🗑️ Found resources in state - destroying..."
-            terraform destroy -auto-approve || echo "⚠️ Destroy failed - continuing in case resources were already removed"
+            echo "🗑️ Found resources in state - tearing down from state..."
+            if terraform apply -auto-approve; then
+              echo "🗑️ Teardown successful - removing state file from S3..."
+              aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}" || echo "ℹ️ State file not found in S3"
+            else
+              echo "⚠️ Teardown failed — S3 state retained for retry"
+              exit 1
+            fi
           else
-            echo "ℹ️ No resources in Terraform state"
+            echo "ℹ️ No resources in Terraform state - removing empty state file from S3..."
+            aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}" || echo "ℹ️ State file not found in S3"
           fi
-          
-          echo "🗑️ Removing state file from S3..."
-          aws s3 rm "s3://densestvoid-terraform/${{ inputs.backend_key }}" || echo "ℹ️ State file not found in S3"
         else
           echo "⚠️ Terraform init failed - state may not exist yet"
         fi
@@ -545,6 +545,32 @@ jobs:
         terraform_version: 1.5.7
         terraform_wrapper: false
     
+    - name: Write terraform.tfvars
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        cd ${{ inputs.terraform_dir }}
+        if [ "${{ inputs.environment }}" = "pr" ]; then
+          cat > terraform.tfvars <<EOF
+        do_token = "${{ secrets.DO_TOKEN }}"
+        docker_image_tag = "${{ needs.check-builds.outputs.image_tag }}"
+        deployment_id = "${{ inputs.deployment_id }}"
+        domain_name = "${{ inputs.domain_name }}"
+        EOF
+        else
+          cat > terraform.tfvars <<EOF
+        do_token = "${{ secrets.DO_TOKEN }}"
+        docker_image_tag = "${{ needs.check-builds.outputs.image_tag }}"
+        domain_name = "${{ inputs.domain_name }}"
+        EOF
+        fi
+
+        if [ -n "${{ inputs.domain_name }}" ]; then
+          echo "🌐 Custom domain: ${{ inputs.domain_name }}"
+        else
+          echo "ℹ️ No custom domain — app will use default ondigitalocean.app URL"
+        fi
+
     - name: Initialize Terraform with AWS S3 backend
       id: terraform_init
       env:
@@ -585,38 +611,6 @@ jobs:
           echo "init_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
-    
-    - name: Prepare Terraform configuration
-      env:
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-      run: |
-        cd ${{ inputs.terraform_dir }}
-        cat > terraform.tfvars << EOF
-        do_token = "${{ secrets.DO_TOKEN }}"
-        region = "nyc1"
-        docker_image_tag = "${{ needs.check-builds.outputs.image_tag }}"
-        EOF
-        
-        if [ "${{ inputs.environment }}" = "pr" ]; then
-          echo "deployment_id = \"${{ inputs.deployment_id }}\"" >> terraform.tfvars
-          if [ -n "${{ inputs.domain_name }}" ]; then
-            echo "base_domain = \"${{ inputs.domain_name }}\"" >> terraform.tfvars
-          fi
-        fi
-
-        if [ "${{ inputs.environment }}" = "production" ] && [ -n "${{ inputs.domain_name }}" ]; then
-          echo "domain_name = \"${{ inputs.domain_name }}\"" >> terraform.tfvars
-        fi
-
-        if [ -n "${{ inputs.domain_name }}" ]; then
-          echo "🌐 Custom domain: ${{ inputs.domain_name }} (DO-managed DNS zone + App Platform hostname)"
-        else
-          echo "ℹ️ No custom domain configured — app will use default ondigitalocean.app URL"
-        fi
-        
-        echo "✅ Terraform configuration prepared"
-        echo "ℹ️ GitHub repository auto-detected from GITHUB_REPOSITORY env var"
     
     - name: Import existing resources (optional)
       if: steps.terraform_init.outputs.is_redeployment == 'false'

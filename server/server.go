@@ -18,8 +18,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	_ "github.com/lib/pq"
-	g "github.com/maragudk/gomponents"
-	"github.com/maragudk/gomponents/html"
+	g "maragu.dev/gomponents"
+	"maragu.dev/gomponents/html"
 )
 
 type Server struct {
@@ -1140,7 +1140,7 @@ func (s *Server) editTransactionModalHandler(w http.ResponseWriter, r *http.Requ
 		),
 		html.Div(
 			html.Class("d-flex justify-content-end gap-2"),
-			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.Data("bs-dismiss", "modal"), g.Text("Cancel")),
 			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 		),
 	)
@@ -1724,7 +1724,7 @@ func (s *Server) editRuleHandler(w http.ResponseWriter, r *http.Request) {
 		templates.RuleFormFields(categories, rule, "edit"),
 		html.Div(
 			html.Class("d-flex justify-content-end gap-2"),
-			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.DataAttr("bs-dismiss", "modal"), g.Text("Cancel")),
+			html.Button(html.Type("button"), html.Class("btn btn-secondary"), html.Data("bs-dismiss", "modal"), g.Text("Cancel")),
 			html.Button(html.Type("submit"), html.Class("btn btn-primary"), g.Text("Save Changes")),
 		),
 		html.Script(g.Raw(`

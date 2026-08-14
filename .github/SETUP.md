@@ -27,10 +27,10 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `PRODUCTION_DOMAIN` | PR + production | App hostname and DO DNS zone (e.g. `budget.example.com`). Zone must exist in **Networking → Domains**. PR URLs use `{deployment_id}.{PRODUCTION_DOMAIN}`. Delegated NS at registrar must point at DO. |
+| `PRODUCTION_DOMAIN` | PR + production | DO DNS zone (e.g. `budget.example.com`). Passed to Terraform as `domain_name`. Zone must exist in **Networking → Domains**. PR URLs use `{deployment_id}.{domain_name}`. |
 | `TERMINATION_DELAY_MINUTES` | PR deploy (optional) | Overrides `termination-delay` environment wait timer when computing scheduled termination UTC in notifications |
 
-You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input.
+You can override per run via the production workflow's `domain_name` input (falls back to `PRODUCTION_DOMAIN`).
 
 ## Branch protection
 
@@ -98,10 +98,12 @@ Manual PR deploy does **not** run CI — use only for redeploy/debug.
 - `pr_number` — PR number (required)
 - `skip_environment_wait` — default **true** for immediate cleanup
 
+Terminate loads `pr/{id}.tfstate` from S3 and tears down whatever is recorded there via `terraform/pr-destroy` (providers only, no resource definitions). Terraform requires `apply` here, not `destroy`: `destroy` only removes resources still present in config, but pr-destroy has none — state entries are orphans removed by `apply`.
+
 **Deploy production** (Actions → *Deploy Prod* → Run workflow):
 
 - `ref` — branch or tag to deploy (default: `main`)
-- `domain_name` — optional custom domain (falls back to `PRODUCTION_DOMAIN`)
+- `domain_name` — optional workflow input; falls back to `PRODUCTION_DOMAIN`
 
 Manual production deploy does **not** run CI.
 

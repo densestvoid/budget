@@ -21,7 +21,7 @@ variable "region" {
 
 # Deployment identification
 variable "deployment_id" {
-  description = "Unique deployment ID for this PR (format: pr-{number}-{branch})"
+  description = "Unique deployment ID for this PR (format: pr-{number})"
   type        = string
 }
 
@@ -30,8 +30,8 @@ variable "docker_image_tag" {
   type        = string
 }
 
-variable "base_domain" {
-  description = "DO DNS zone and base hostname for PR apps ({deployment_id}.{base_domain}). Set via PRODUCTION_DOMAIN."
+variable "domain_name" {
+  description = "DO DNS zone for PR apps ({deployment_id}.{domain_name})."
   type        = string
   default     = ""
 }
