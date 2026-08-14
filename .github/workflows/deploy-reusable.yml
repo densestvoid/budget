@@ -809,33 +809,6 @@ jobs:
           echo "app_id=" >> $GITHUB_OUTPUT
           echo "migration_app_id=" >> $GITHUB_OUTPUT
         fi
-    
-    - name: Verify deployment health
-      env:
-        DO_TOKEN: ${{ secrets.DO_TOKEN }}
-      run: |
-        echo "🏥 Verifying deployment health..."
-        
-        if [ -n "${{ env.APP_URL }}" ]; then
-          echo "🌐 Application URL: ${{ env.APP_URL }}"
-          
-          # Wait for application to be ready
-          echo "⏳ Waiting for application to be ready..."
-          sleep 30
-          
-          # Check if application is responding
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.APP_URL }}/health" || echo "000")
-          echo "🏥 Health check response: $HTTP_CODE"
-          
-          if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Application is healthy and responding"
-          else
-            echo "⚠️ Application health check returned: $HTTP_CODE"
-              echo "This may be normal if the health endpoint is not implemented"
-          fi
-        else
-          echo "⚠️ No application URL available for health check"
-        fi
 
     - name: Resolve termination delay
       id: termination_delay
