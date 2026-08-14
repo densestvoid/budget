@@ -12,15 +12,13 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    # Notify on real deploy/terminate outcomes only. Skip when the upstream workflow
+    # did not run (conclusion skipped) or was cancelled. deploy-production is triggered
+    # by workflow_run (CI completion), so checking event == 'push' on the deploy run
+    # always fails and incorrectly skips production notifications.
     if: |
-      github.event.workflow_run.conclusion != 'cancelled' &&
-      (
-        github.event.workflow_run.path != '.github/workflows/deploy-production.yml' ||
-        (
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main'
-        )
-      )
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event.workflow_run.conclusion == 'failure'
     permissions:
       contents: read
       pull-requests: write
