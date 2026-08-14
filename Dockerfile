@@ -1,5 +1,5 @@
 # Build stage - only built when referenced (not when using --target production with USE_PREBUILT_BINARY=true)
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 

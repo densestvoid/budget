@@ -12,7 +12,15 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion != 'cancelled'
+    if: |
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      (
+        github.event.workflow_run.path != '.github/workflows/deploy-production.yml' ||
+        (
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main'
+        )
+      )
     permissions:
       contents: read
       pull-requests: write
@@ -283,6 +291,10 @@ jobs:
           fi
 
           if [ "$TYPE" = "deploy_pr" ]; then
+            CLEANUP_LINE=""
+            if [ "$DEPLOY_JOB" = "failure" ]; then
+              CLEANUP_LINE="**Cleanup:** Termination workflow will attempt to clean up partial resources"
+            fi
             PR_BODY="## ❌ Deployment Failed
 
         **Workflow:** Deploy PR
@@ -291,7 +303,7 @@ jobs:
         \`\`\`
         ${ERROR_MESSAGE}
         \`\`\`
-        **Cleanup:** Termination workflow will attempt to clean up partial resources"
+        ${CLEANUP_LINE}"
             jq -n \
               --arg pr "$PR_NUMBER" \
               --arg deployment "$DEPLOYMENT_ID" \
