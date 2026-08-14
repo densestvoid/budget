@@ -136,29 +136,29 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.26.6'
-    
-    - name: Check build requirements
+        fetch-depth: 0
+
+    - name: Compute Go build keys
+      id: build_key
+      uses: ./.github/actions/go-build-key
+
+    - name: Record build keys
       id: check
       run: |
         echo "🔍 Analyzing build requirements..."
-        
-        # Generate cache keys
-        GO_HASH=$(find . -name "*.go" -type f -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
-        DOCKER_HASH=$(find . -name "Dockerfile*" -o -name "*.go" -o -name "go.mod" -o -name "go.sum" | sort | xargs md5sum | md5sum | cut -d' ' -f1)
+
+        GO_HASH="${{ steps.build_key.outputs.go_build_key }}"
+        DOCKER_HASH="${{ steps.build_key.outputs.docker_build_key }}"
         IMAGE_TAG="${{ inputs.deployment_id }}-${DOCKER_HASH}"
-        
-        echo "go_hash=${GO_HASH}" >> $GITHUB_OUTPUT
-        echo "docker_hash=${DOCKER_HASH}" >> $GITHUB_OUTPUT
-        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-        
+
+        echo "go_hash=${GO_HASH}" >> "$GITHUB_OUTPUT"
+        echo "docker_hash=${DOCKER_HASH}" >> "$GITHUB_OUTPUT"
+        echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
         echo "📦 Image tag: ${IMAGE_TAG} (content hash; ignores caller image_tag input)"
-        echo "🔑 Go cache key: ${GO_HASH}"
-        echo "🔑 Docker cache key: ${DOCKER_HASH}"
+        echo "🔑 Go build key: ${GO_HASH}"
+        echo "🔑 Docker build key: ${DOCKER_HASH}"
+        echo "Go sources changed vs base: ${{ steps.build_key.outputs.go_sources_changed }}"
     
     - name: Check Go binary cache
       id: go_binary_cache_check
