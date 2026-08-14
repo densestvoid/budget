@@ -422,6 +422,9 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
     - name: Download Slack payload
       uses: actions/download-artifact@v8
       with:
