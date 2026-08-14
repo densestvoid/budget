@@ -12,15 +12,13 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    # Notify on real deploy/terminate outcomes only. Skip when the upstream workflow
+    # did not run (conclusion skipped) or was cancelled. deploy-production is triggered
+    # by workflow_run (CI completion), so checking event == 'push' on the deploy run
+    # always fails and incorrectly skips production notifications.
     if: |
-      github.event.workflow_run.conclusion != 'cancelled' &&
-      (
-        github.event.workflow_run.path != '.github/workflows/deploy-production.yml' ||
-        (
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main'
-        )
-      )
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event.workflow_run.conclusion == 'failure'
     permissions:
       contents: read
       pull-requests: write
@@ -62,7 +60,7 @@ jobs:
 
     - name: Download deploy-result artifact
       if: steps.kind.outputs.type == 'deploy_pr' || steps.kind.outputs.type == 'deploy_production'
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: deploy-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -71,7 +69,7 @@ jobs:
 
     - name: Download terminate-result artifact
       if: steps.kind.outputs.type == 'terminate'
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: terminate-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -370,7 +368,7 @@ jobs:
 
     - name: Comment on PR
       if: steps.kind.outputs.post_pr_comment == 'true' && steps.messages.outputs.skip != 'true' && steps.messages.outputs.pr_number != ''
-      uses: actions/github-script@v7
+      uses: actions/github-script@v8
       env:
         PR_NUMBER: ${{ steps.messages.outputs.pr_number }}
         PR_BODY: ${{ steps.messages.outputs.pr_body }}
@@ -393,7 +391,7 @@ jobs:
     - name: Send Slack notification
       if: steps.messages.outputs.skip != 'true'
       continue-on-error: true
-      uses: slackapi/slack-github-action@v2.1.1
+      uses: slackapi/slack-github-action@v3.0.1
       with:
         webhook-type: incoming-webhook
         webhook: ${{ env.SLACK_WEBHOOK }}

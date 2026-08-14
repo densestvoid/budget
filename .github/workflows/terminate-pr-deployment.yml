@@ -42,7 +42,7 @@ jobs:
     steps:
     - name: Download deploy-result artifact
       if: github.event_name == 'workflow_run'
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: deploy-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -115,12 +115,12 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         ref: ${{ needs.resolve.outputs.checkout_ref }}
 
     - name: Set up Terraform
-      uses: hashicorp/setup-terraform@v3
+      uses: hashicorp/setup-terraform@v4
       with:
         terraform_version: 1.5.7
 
