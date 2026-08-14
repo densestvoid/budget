@@ -35,6 +35,8 @@ locals {
   vpc_second   = floor(local.vpc_slot / 254) + 1
   vpc_third    = local.vpc_slot % 254
   vpc_ip_range = format("10.%d.%d.0/24", local.vpc_second, local.vpc_third)
+
+  app_hostname = var.base_domain != "" ? "${var.deployment_id}.${var.base_domain}" : ""
 }
 
 # Reference existing DigitalOcean project
@@ -146,6 +148,9 @@ module "budget_app" {
   project_name  = local.project_name
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
+
+  app_hostname = local.app_hostname
+  dns_zone     = var.dns_zone
 
   # VPC configuration - use the VPC created above
   vpc_id = digitalocean_vpc.budget_vpc.id

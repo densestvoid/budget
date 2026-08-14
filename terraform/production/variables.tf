@@ -25,7 +25,13 @@ variable "docker_image_tag" {
 }
 
 variable "domain_name" {
-  description = "Custom domain name pre-allocated in DigitalOcean (DNS managed outside Terraform). Leave empty to skip domain lookup."
+  description = "Production app hostname. DO-managed DNS when dns_zone is set."
+  type        = string
+  default     = ""
+}
+
+variable "dns_zone" {
+  description = "DigitalOcean DNS zone for automatic record management"
   type        = string
   default     = ""
 }

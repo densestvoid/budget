@@ -40,7 +40,7 @@ Creates a complete new deployment for each PR:
 - **Creates database schema** and grants permissions
 - **Runs schema migrations** (always executed via migration app)
 - Uses `budget-develop` project
-- No domain configuration (optional)
+- **Custom hostname** when `PRODUCTION_DOMAIN` + `DNS_ZONE` are set: `pr-{n}.{PRODUCTION_DOMAIN}` with DO-managed DNS
 - Backend state: `pr/{deployment_id}.tfstate`
 
 ### Usage
@@ -60,7 +60,7 @@ Deploys to production using long-living, pre-allocated resources:
 - **Dedicated VPC** at fixed `10.0.0.0/16` (PR deployments use `10.S.T.0/24` from PR number modulo)
 - **Uses existing database** (pre-allocated, never recreated)
 - **Runs schema migrations** (always executed via migration app)
-- **Uses pre-allocated domain** (DNS records preconfigured, not managed by Terraform)
+- **Uses pre-allocated domain** via App Platform when `domain_name` and `dns_zone` are set (DO-managed DNS)
 - Uses `budget-prod` project (all resources assigned to this project)
 - Backend state: `production/production.tfstate`
 
@@ -70,9 +70,7 @@ Deploys to production using long-living, pre-allocated resources:
    - Database is **never recreated** or modified by Terraform
    - Long-living and stable
    
-2. **Domain**: Optional custom domain via `domain_name` variable or `PRODUCTION_DOMAIN` repository variable
-   - DNS records are **preconfigured outside Terraform**
-   - When set, Terraform references the domain for outputs only
+2. **Domain**: Set `PRODUCTION_DOMAIN` and `DNS_ZONE` repository variables when using custom hostnames (DO-managed DNS via App Platform).
    
 3. **Migrations**: Always execute on every deployment
    - Schema migrations run via the migration app before the main app
@@ -94,7 +92,7 @@ terraform apply
 | Feature | PR Deployments | Production Deployments |
 |---------|---------------|----------------------|
 | Database | Creates new | Uses existing |
-| Domain | Optional | Pre-allocated (DNS preconfigured) |
+| Domain | `{deployment_id}.{PRODUCTION_DOMAIN}` when vars set | `PRODUCTION_DOMAIN` |
 | Schema Setup | Creates schema | Not needed (exists) |
 | Migrations | Always runs | Always runs |
 | Project | `budget-develop` | `budget-prod` |

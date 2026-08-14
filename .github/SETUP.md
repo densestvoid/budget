@@ -27,7 +27,9 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `PRODUCTION_DOMAIN` | Production (optional) | Custom domain pre-allocated in DigitalOcean (DNS managed outside Terraform) |
+| `PRODUCTION_DOMAIN` | PR + production | Hostname for production; PR deploys use `{deployment_id}.{PRODUCTION_DOMAIN}`. |
+| `DNS_ZONE` | PR + production | DigitalOcean DNS zone for App Platform–managed records. Must exist on your DO account. |
+| `TERMINATION_DELAY_MINUTES` | PR deploy (optional) | Overrides `termination-delay` environment wait timer when computing scheduled termination UTC in notifications |
 
 You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input.
 

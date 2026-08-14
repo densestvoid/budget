@@ -31,7 +31,8 @@ locals {
 # VPC is always provided by the parent configuration
 # This module expects vpc_id to always be set (not null)
 locals {
-  vpc_id = var.vpc_id
+  vpc_id         = var.vpc_id
+  app_public_url = var.app_hostname != "" ? "https://${var.app_hostname}" : ""
 }
 
 # Reference existing DigitalOcean project
@@ -116,11 +117,11 @@ resource "null_resource" "database_health_check" {
 # Schema migrations always execute
 resource "digitalocean_app" "budget_migrations" {
   depends_on = [null_resource.database_health_check]
-  
+
   spec {
     name   = "${var.deployment_id}-migrations"
     region = var.region
-    
+
     # Enable VPC networking for database access
     vpc {
       id = local.vpc_id
@@ -129,8 +130,8 @@ resource "digitalocean_app" "budget_migrations" {
     # Migration job - runs once and exits
     job {
       name = "migrate"
-      kind = "PRE_DEPLOY"  # Runs before main service deployment
-      
+      kind = "PRE_DEPLOY" # Runs before main service deployment
+
       image {
         registry_type = "GHCR"
         registry      = "ghcr.io"
@@ -167,11 +168,20 @@ resource "digitalocean_app" "budget_migrations" {
 # Create main application after migrations complete
 resource "digitalocean_app" "budget_app" {
   depends_on = [digitalocean_app.budget_migrations]
-  
+
   spec {
     name   = var.deployment_id
     region = var.region
-    
+
+    dynamic "domain" {
+      for_each = var.app_hostname != "" && var.dns_zone != "" ? [1] : []
+      content {
+        name = var.app_hostname
+        type = "PRIMARY"
+        zone = var.dns_zone
+      }
+    }
+
     # Enable VPC networking for database access
     vpc {
       id = local.vpc_id
@@ -181,7 +191,7 @@ resource "digitalocean_app" "budget_app" {
     service {
       name               = "web"
       instance_count     = 1
-      instance_size_slug = "basic-xxs"  # $5/month: 0.5 vCPU, 512MB RAM
+      instance_size_slug = "basic-xxs" # $5/month: 0.5 vCPU, 512MB RAM
 
       image {
         registry_type = "GHCR"
@@ -218,12 +228,12 @@ resource "digitalocean_app" "budget_app" {
 
       # Health check - faster since migrations handled by pre-deploy job
       health_check {
-        http_path                = "/health"
-        initial_delay_seconds    = 30
-        period_seconds           = 10
-        timeout_seconds          = 5
-        failure_threshold        = 3
-        success_threshold        = 1
+        http_path             = "/health"
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 3
+        success_threshold     = 1
       }
 
       # HTTP port
@@ -240,7 +250,7 @@ resource "digitalocean_project_resources" "budget_resources" {
     digitalocean_app.budget_app.urn
     # Note: VPC cannot be assigned to projects (not in supported resource types)
   ]
-  
+
   depends_on = [
     digitalocean_app.budget_migrations,
     digitalocean_app.budget_app

@@ -48,7 +48,11 @@ on:
         required: false
         type: string
       domain_name:
-        description: 'Custom domain for production (optional; DNS managed outside Terraform)'
+        description: 'Hostname for production, or base hostname for PR ({deployment_id}.{hostname})'
+        required: false
+        type: string
+      dns_zone:
+        description: 'DigitalOcean DNS zone for DO-managed records'
         required: false
         type: string
       git_ref:
@@ -598,10 +602,17 @@ jobs:
         
         if [ "${{ inputs.environment }}" = "pr" ]; then
           echo "deployment_id = \"${{ inputs.deployment_id }}\"" >> terraform.tfvars
+          if [ -n "${{ inputs.domain_name }}" ]; then
+            echo "base_domain = \"${{ inputs.domain_name }}\"" >> terraform.tfvars
+          fi
         fi
 
         if [ "${{ inputs.environment }}" = "production" ] && [ -n "${{ inputs.domain_name }}" ]; then
           echo "domain_name = \"${{ inputs.domain_name }}\"" >> terraform.tfvars
+        fi
+
+        if [ -n "${{ inputs.dns_zone }}" ]; then
+          echo "dns_zone = \"${{ inputs.dns_zone }}\"" >> terraform.tfvars
         fi
         
         echo "✅ Terraform configuration prepared"

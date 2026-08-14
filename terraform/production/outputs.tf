@@ -34,8 +34,8 @@ output "database_connection_string" {
 
 # Domain info
 output "domain_name" {
-  description = "Custom domain name when configured"
-  value       = var.domain_name != "" ? data.digitalocean_domain.existing_domain[0].name : ""
+  description = "Custom domain hostname when configured"
+  value       = module.budget_app.app_hostname
 }
 
 # Project info

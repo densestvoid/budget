@@ -1,12 +1,12 @@
 terraform {
   required_version = ">= 1.0"
-  
+
   backend "s3" {
     bucket = "densestvoid-terraform"
     key    = "production/production.tfstate"
-    region = "us-east-1"  # This will be overridden by -backend-config
+    region = "us-east-1" # This will be overridden by -backend-config
   }
-  
+
   required_providers {
     digitalocean = {
       source  = "digitalocean/digitalocean"
@@ -22,12 +22,12 @@ provider "digitalocean" {
 
 # Local values
 locals {
-  project_name = "budget-prod"
+  project_name  = "budget-prod"
   deployment_id = "production"
   # Hardcoded production values
   database_cluster_name = "production"
-  database_name = "production"
-  database_user_name = "production"
+  database_name         = "production"
+  database_user_name    = "production"
 }
 
 # Reference existing DigitalOcean project
@@ -53,7 +53,7 @@ resource "digitalocean_database_cluster" "budget_db" {
   private_network_uuid = digitalocean_vpc.budget_vpc.id
 
   tags = ["deployment:production"]
-  
+
   # Prevent destruction - this is a long-living database
   # Allow Terraform to manage database scaling (size, node_count)
   lifecycle {
@@ -65,7 +65,7 @@ resource "digitalocean_database_cluster" "budget_db" {
 resource "digitalocean_database_db" "budget_database" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = local.database_name
-  
+
   # Prevent destruction - this is a long-living database
   lifecycle {
     prevent_destroy = true
@@ -76,7 +76,7 @@ resource "digitalocean_database_db" "budget_database" {
 resource "digitalocean_database_user" "budget_user" {
   cluster_id = digitalocean_database_cluster.budget_db.id
   name       = local.database_user_name
-  
+
   # Prevent destruction
   lifecycle {
     prevent_destroy = true
@@ -90,7 +90,7 @@ resource "null_resource" "database_schema_setup" {
     digitalocean_database_db.budget_database,
     digitalocean_database_user.budget_user
   ]
-  
+
   provisioner "local-exec" {
     command = <<-EOT
       echo "🔍 Checking if database schema exists (first deployment check)..."
@@ -137,34 +137,37 @@ SQL
   }
 }
 
-# Reference existing domain when configured (pre-allocated, DNS records are preconfigured)
+# Reference existing DigitalOcean domain when configured without DO-managed zone (legacy / informational)
 data "digitalocean_domain" "existing_domain" {
-  count = var.domain_name != "" ? 1 : 0
+  count = var.domain_name != "" && var.dns_zone == "" ? 1 : 0
   name  = var.domain_name
 }
 
 # Use the budget-app module
 module "budget_app" {
   source = "../modules/budget-app"
-  
-  do_token         = var.do_token
-  region           = var.region
-  deployment_id    = local.deployment_id
-  project_name     = local.project_name
+
+  do_token      = var.do_token
+  region        = var.region
+  deployment_id = local.deployment_id
+  project_name  = local.project_name
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
-  
+
+  app_hostname = var.domain_name
+  dns_zone     = var.dns_zone
+
   # Database configuration
-  database_cluster_id   = digitalocean_database_cluster.budget_db.id
-  database_name         = digitalocean_database_db.budget_database.name
-  database_user_name    = digitalocean_database_user.budget_user.name
+  database_cluster_id    = digitalocean_database_cluster.budget_db.id
+  database_name          = digitalocean_database_db.budget_database.name
+  database_user_name     = digitalocean_database_user.budget_user.name
   database_user_password = digitalocean_database_user.budget_user.password
-  database_private_host = digitalocean_database_cluster.budget_db.private_host
-  database_port         = digitalocean_database_cluster.budget_db.port
-  
+  database_private_host  = digitalocean_database_cluster.budget_db.private_host
+  database_port          = digitalocean_database_cluster.budget_db.port
+
   # Use the same VPC as the database for private networking
   vpc_id = digitalocean_vpc.budget_vpc.id
-  
+
   # Ensure schema setup completes before module is instantiated (and migrations run)
   depends_on = [null_resource.database_schema_setup]
 }
@@ -176,12 +179,12 @@ resource "digitalocean_project_resources" "production_database" {
   resources = [
     digitalocean_database_cluster.budget_db.urn
   ]
-  
+
   depends_on = [
     digitalocean_database_cluster.budget_db
   ]
 }
 
-# Note: DNS records are pre-allocated and managed outside of Terraform
-# The domain is referenced above for informational purposes only
+# Note: When dns_zone is set, App Platform manages DNS records for app_hostname automatically.
+# The data source above is only used when dns_zone is empty (legacy external DNS).
 

@@ -1,7 +1,12 @@
 # App Platform outputs
 output "app_url" {
   description = "URL of the deployed application"
-  value       = digitalocean_app.budget_app.default_ingress
+  value       = local.app_public_url != "" ? local.app_public_url : digitalocean_app.budget_app.default_ingress
+}
+
+output "app_hostname" {
+  description = "Custom hostname when configured"
+  value       = var.app_hostname
 }
 
 output "app_id" {
