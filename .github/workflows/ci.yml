@@ -41,9 +41,9 @@ jobs:
     steps:
       - name: Report result
         run: |
-          if [ "${{ needs.go-build-key.outputs.go_sources_changed }}" != "true" ]; then
-            echo "Go sources unchanged (key=${{ needs.go-build-key.outputs.go_build_key }}) — skipped go-checks"
+          if [ "${{ needs.go-build-key.outputs.go_sources_changed }}" = "true" ]; then
+            echo "Go sources changed in this push — go-checks ran"
           else
-            echo "Go sources changed — go-checks completed successfully"
+            echo "Go sources unchanged in this push (key=${{ needs.go-build-key.outputs.go_build_key }}) — skipped go-checks"
           fi
           echo "All checks passed"
