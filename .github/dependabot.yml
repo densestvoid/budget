@@ -32,7 +32,17 @@ updates:
           - "*"
 
   - package-ecosystem: terraform
-    directory: /terraform
+    directory: /terraform/pr
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      terraform:
+        patterns:
+          - "*"
+
+  - package-ecosystem: terraform
+    directory: /terraform/production
     schedule:
       interval: weekly
       day: monday
