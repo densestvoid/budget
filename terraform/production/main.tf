@@ -39,7 +39,7 @@ data "digitalocean_project" "budget" {
 resource "digitalocean_vpc" "budget_vpc" {
   name     = local.deployment_id
   region   = var.region
-  ip_range = "172.16.0.0/16"
+  ip_range = "10.0.0.0/16"
 }
 
 # Create database cluster (creates on first deployment, manages existing on subsequent deployments)

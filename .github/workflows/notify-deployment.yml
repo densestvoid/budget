@@ -3,8 +3,8 @@ name: Notify Deployment
 on:
   workflow_run:
     workflows:
-      - Deploy Budget App to DigitalOcean
-      - Deploy to Production
+      - Deploy PR
+      - Deploy Prod
       - Terminate PR Deployment
     types:
       - completed
@@ -22,7 +22,7 @@ jobs:
       SLACK_WEBHOOK: >-
         ${{
           github.event.workflow_run.path == '.github/workflows/deploy-production.yml'
-          && secrets.SLACK_WEBHOOK_PRODUCTION || secrets.SLACK_WEBHOOK_PR
+          && secrets.SLACK_WEBHOOK_PROD || secrets.SLACK_WEBHOOK_PR
         }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
 
@@ -34,7 +34,7 @@ jobs:
         PATH="${{ github.event.workflow_run.path }}"
 
         case "$PATH" in
-          ".github/workflows/deploy.yml")
+          ".github/workflows/deploy-pr.yml")
             echo "type=deploy_pr" >> "$GITHUB_OUTPUT"
             echo "post_pr_comment=true" >> "$GITHUB_OUTPUT"
             ;;
@@ -54,7 +54,7 @@ jobs:
 
     - name: Download deploy-result artifact
       if: steps.kind.outputs.type == 'deploy_pr' || steps.kind.outputs.type == 'deploy_production'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v6
       with:
         name: deploy-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -63,7 +63,7 @@ jobs:
 
     - name: Download terminate-result artifact
       if: steps.kind.outputs.type == 'terminate'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v6
       with:
         name: terminate-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -215,7 +215,7 @@ jobs:
         BUILD_DOCKER=$(jq -r '.jobs.build_docker' deploy-result.json)
         DEPLOY_JOB=$(jq -r '.jobs.deploy' deploy-result.json)
 
-        if [ "$DEPLOYMENT_SUCCESS" = "true" ]; then
+        if [ "$DEPLOYMENT_SUCCESS" = "true" ] && [ "$DEPLOY_JOB" = "success" ]; then
           if [ "$TYPE" = "deploy_pr" ]; then
             PR_BODY="## ✅ Deployment Successful
 
@@ -285,7 +285,7 @@ jobs:
           if [ "$TYPE" = "deploy_pr" ]; then
             PR_BODY="## ❌ Deployment Failed
 
-        **Workflow:** Deploy Budget App to DigitalOcean
+        **Workflow:** Deploy PR
         **Step:** ${FAILED_STEP}
         **Error:**
         \`\`\`

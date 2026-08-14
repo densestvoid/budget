@@ -360,7 +360,7 @@ jobs:
     
     - name: Upload Go binary artifact
       if: steps.check_binary.outputs.binary_available == 'true' || steps.build.outputs.go_built == 'true'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: go-binary
         path: budget
@@ -404,7 +404,7 @@ jobs:
     
     - name: Download Go binary artifact
       if: needs.build-go.result == 'success'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v6
       with:
         name: go-binary
         path: .
@@ -606,7 +606,7 @@ jobs:
         echo "ℹ️ GitHub repository auto-detected from GITHUB_REPOSITORY env var"
     
     - name: Import existing resources (optional)
-      if: inputs.environment == 'pr' && steps.terraform_init.outputs.is_redeployment == 'false'
+      if: steps.terraform_init.outputs.is_redeployment == 'false'
       id: import_existing
       continue-on-error: true
       env:
@@ -840,7 +840,9 @@ jobs:
         MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
         IMAGE_TAG: ${{ needs.check-builds.outputs.image_tag }}
       run: |
-        if [ "${DEPLOYMENT_SUCCESS}" = "true" ]; then
+        if [ "${{ needs.deploy.result }}" != "success" ]; then
+          SUCCESS_JSON=false
+        elif [ "${DEPLOYMENT_SUCCESS}" = "true" ]; then
           SUCCESS_JSON=true
         else
           SUCCESS_JSON=false
@@ -871,7 +873,7 @@ jobs:
         cat deploy-result.json
 
     - name: Upload deploy-result artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: deploy-result
         path: deploy-result.json

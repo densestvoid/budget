@@ -13,7 +13,7 @@ Configure these under **Settings → Secrets and variables → Actions → Secre
 | `TERRAFORM_AWS_S3_ACCESS_KEY_SECRET` | PR + production | AWS secret key for Terraform state |
 | `TERRAFORM_AWS_S3_REGION` | PR + production | AWS region for the state bucket (e.g. `us-east-1`) |
 | `SLACK_WEBHOOK_PR` | PR deploy + terminate | Slack incoming webhook for PR notifications |
-| `SLACK_WEBHOOK_PRODUCTION` | Production | Slack incoming webhook for production notifications |
+| `SLACK_WEBHOOK_PROD` | Production | Slack incoming webhook for production notifications |
 
 ### Getting a DigitalOcean token
 
@@ -60,8 +60,8 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 | Workflow | File | Triggers |
 |----------|------|----------|
 | CI | `ci.yml` | PR open/sync/reopen; push to `main` |
-| Deploy Budget App to DigitalOcean | `deploy.yml` | After CI success on PR (non-`main` head); **manual** |
-| Deploy to Production | `deploy-production.yml` | After CI success on push to `main`; **manual** |
+| Deploy PR | `deploy-pr.yml` | After CI success on PR branch (non-`main`); **manual** |
+| Deploy Prod | `deploy-production.yml` | After CI success on push to `main`; **manual** |
 | Terminate PR Deployment | `terminate-pr-deployment.yml` | After PR deploy completes; **manual** |
 | Notify Deployment | `notify-deployment.yml` | After deploy or terminate completes (`workflow_run`) |
 | Deploy Budget App (Reusable) | `deploy-reusable.yml` | Called by deploy workflows (not run directly) |
@@ -79,7 +79,7 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 
 Workflows with `workflow_dispatch` must be run from a branch that contains the workflow file.
 
-**Deploy a PR** (Actions → *Deploy Budget App to DigitalOcean* → Run workflow):
+**Deploy a PR** (Actions → *Deploy PR* → Run workflow):
 
 - `pr_number` — PR number to deploy (required)
 - `ref` — optional git ref to build from
@@ -92,7 +92,7 @@ Manual PR deploy does **not** run CI — use only for redeploy/debug.
 - `pr_number` — PR number (required)
 - `skip_environment_wait` — default **true** for immediate cleanup
 
-**Deploy production** (Actions → *Deploy to Production* → Run workflow):
+**Deploy production** (Actions → *Deploy Prod* → Run workflow):
 
 - `ref` — branch or tag to deploy (default: `main`)
 - `domain_name` — optional custom domain (falls back to `PRODUCTION_DOMAIN`)

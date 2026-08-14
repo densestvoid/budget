@@ -14,7 +14,7 @@ Automated deployment to DigitalOcean App Platform via GitHub Actions.
 
 ### PR environment
 
-Actions → **Deploy Budget App to DigitalOcean** → Run workflow
+Actions → **Deploy PR** → Run workflow
 
 | Input | Required | Description |
 |-------|----------|-------------|
@@ -26,7 +26,7 @@ Manual deploy skips CI.
 
 ### Production
 
-Actions → **Deploy to Production** → Run workflow
+Actions → **Deploy Prod** → Run workflow
 
 | Input | Required | Description |
 |-------|----------|-------------|
@@ -67,7 +67,7 @@ Terraform only references the domain for outputs when configured.
 
 ```
 PR/main change → CI (go-checks)
-              → deploy.yml or deploy-production.yml
+              → deploy-pr.yml or deploy-production.yml
               → deploy-reusable.yml (build, Terraform, artifact)
               → notify-deployment.yml (PR comment + Slack)
               → terminate-pr-deployment.yml (PR only)

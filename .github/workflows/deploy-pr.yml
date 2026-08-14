@@ -1,6 +1,6 @@
-name: Deploy Budget App to DigitalOcean
+name: Deploy PR
 
-run-name: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
+run-name: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || github.event.workflow_run.head_branch || 'manual' }}
 
 on:
   workflow_run:
@@ -8,6 +8,8 @@ on:
       - CI
     types:
       - completed
+    branches-ignore:
+      - main
   workflow_dispatch:
     inputs:
       pr_number:
