@@ -793,6 +793,17 @@ jobs:
         APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
         APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
         MIGRATION_APP_ID=$(terraform output -raw migration_app_id 2>/dev/null || echo "")
+
+        # Prefer the configured custom domain for notifications. Terraform output still
+        # returns live_url on older revisions, and workflow_run uses workflow YAML from
+        # main while checkout may use the PR head (tfvars/domain wiring can diverge).
+        if [ -n "${{ inputs.domain_name }}" ]; then
+          if [ "${{ inputs.environment }}" = "pr" ]; then
+            APP_URL="https://${{ inputs.deployment_id }}.${{ inputs.domain_name }}"
+          else
+            APP_URL="https://${{ inputs.domain_name }}"
+          fi
+        fi
         
         echo "📋 Extracted outputs:"
         echo "APP_URL: '$APP_URL'"
@@ -892,7 +903,7 @@ jobs:
           "app_id": "${APP_ID}",
           "migration_app_id": "${MIGRATION_APP_ID}",
           "image_tag": "${IMAGE_TAG}",
-          "git_sha": "${{ github.sha }}",
+          "git_sha": "${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}",
           "termination_time": "${TERMINATION_TIME}",
           "termination_delay_minutes": "${TERMINATION_DELAY_MINUTES}",
           "jobs": {

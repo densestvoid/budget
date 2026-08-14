@@ -31,7 +31,7 @@ PR deployments auto-terminate after the `termination-delay` environment wait tim
 | PR updated (non-`main` head) | `ci.yml` → `deploy-pr.yml` | Ephemeral `pr-<number>` environment |
 | Push to `main` | `ci.yml` → `deploy-production.yml` | Production deployment |
 
-Notifications and PR teardown run via `workflow_run` listeners (`notify-deployment.yml`, `terminate-pr-deployment.yml`).
+Notifications run as final jobs inside the deploy and terminate workflows (Slack + PR comment on PR paths; Slack only for production). PR teardown is triggered by `workflow_run` on Deploy PR completion (`terminate-pr-deployment.yml`).
 
 ### Manual deployment
 

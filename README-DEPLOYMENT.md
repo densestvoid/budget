@@ -66,13 +66,13 @@ The DNS zone must exist in **DO Networking → Domains** before deploy. Terrafor
 ```
 PR/main change → CI (go-checks)
               → deploy-pr.yml or deploy-production.yml
-              → deploy-reusable.yml (build, Terraform, artifact)
-              → notify-deployment.yml (PR comment + Slack)
-              → terminate-pr-deployment.yml (PR only)
-              → notify-deployment.yml (terminate result)
+                   → deploy-reusable.yml (build, Terraform, deploy-result artifact)
+                   → notify job (PR comment + Slack, or Slack only for production)
+              → terminate-pr-deployment.yml (PR only, workflow_run after deploy)
+                   → notify job (termination Slack + PR comment)
 ```
 
-`deploy-reusable.yml` handles build caching, GHCR push, Terraform apply, and health checks. Notifications and teardown are separate `workflow_run` listeners.
+`deploy-reusable.yml` handles build caching, GHCR push, and Terraform apply. Notify and terminate are sibling or follow-on jobs in the same workflow runs (terminate still uses `workflow_run` to start after deploy).
 
 ## Local Terraform
 

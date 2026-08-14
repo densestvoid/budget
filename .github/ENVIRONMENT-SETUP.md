@@ -58,9 +58,9 @@ After setup, on a successful PR deploy you should see:
 
 1. CI completes (~few minutes)
 2. Deploy completes (~5–15 minutes)
-3. Notify posts deploy success
+3. Deploy PR run posts deploy success (Slack + PR comment)
 4. Terminate workflow shows waiting on `termination-delay`
-5. After the wait timer, terminate destroys resources and notify posts termination result
+5. After the wait timer, terminate destroys resources and posts termination result (Slack + PR comment)
 
 ## Cost Comparison
 
