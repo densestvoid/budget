@@ -31,7 +31,7 @@ Actions → **Deploy Prod** → Run workflow
 | Input | Required | Description |
 |-------|----------|-------------|
 | `ref` | No | Branch or tag (default: `main`) |
-| `domain_name` | No | Custom domain (default: `PRODUCTION_DOMAIN` variable) |
+| `domain_name` | No | Workflow input; defaults to `PRODUCTION_DOMAIN` repository variable |
 
 Manual production deploy skips CI.
 
@@ -48,14 +48,14 @@ Actions → **Terminate PR Deployment** → Run workflow
 
 | Environment | Terraform dir | DO project | Auto-terminate | Domain |
 |-------------|---------------|------------|----------------|--------|
-| PR | `terraform/pr` | `budget-develop` | Yes (`termination-delay` env) | `{deployment_id}.{PRODUCTION_DOMAIN}` when vars set |
-| Production | `terraform/production` | `budget-prod` | No | Optional (`PRODUCTION_DOMAIN` or workflow input) |
+| PR | `terraform/pr` | `budget-develop` | Yes (`termination-delay` env) | `{deployment_id}.{domain_name}` when `PRODUCTION_DOMAIN` set |
+| Production | `terraform/production` | `budget-prod` | No | Optional (`PRODUCTION_DOMAIN` or workflow `domain_name` input) |
 
 PR deploy runs only when the PR head branch is not `main`. Production deploy runs on push to `main`.
 
 ## Custom domain
 
-Set repository variable `PRODUCTION_DOMAIN` (hostname and DO DNS zone). App Platform creates DNS records automatically. PR URLs use `{deployment_id}.{PRODUCTION_DOMAIN}`.
+Set repository variable `PRODUCTION_DOMAIN` (DO DNS zone). Workflows pass it to Terraform as `domain_name`. PR URLs use `{deployment_id}.{domain_name}`.
 
 Override production hostname per run via the Deploy Prod workflow `domain_name` input.
 

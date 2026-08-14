@@ -1,7 +1,9 @@
 # App Platform outputs
 output "app_url" {
   description = "URL of the deployed application"
-  value       = digitalocean_app.budget_app.live_url != "" ? digitalocean_app.budget_app.live_url : digitalocean_app.budget_app.default_ingress
+  value = var.domain != null ? "https://${var.domain.hostname}" : (
+    digitalocean_app.budget_app.live_url != "" ? digitalocean_app.budget_app.live_url : digitalocean_app.budget_app.default_ingress
+  )
 }
 
 output "app_hostname" {

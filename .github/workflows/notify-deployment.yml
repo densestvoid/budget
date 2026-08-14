@@ -92,35 +92,38 @@ jobs:
           PR_NUMBER=$(jq -r '.pr_number' terminate-result.json)
           DEPLOYMENT_ID=$(jq -r '.deployment_id' terminate-result.json)
           REASON=$(jq -r '.reason' terminate-result.json)
+          INIT_SUCCESS=$(jq -r '.init_success // true' terminate-result.json)
           DESTROY_SUCCESS=$(jq -r '.destroy_success' terminate-result.json)
-          ALREADY=$(jq -r '.already_terminated' terminate-result.json)
           SKIPPED=$(jq -r '.skipped' terminate-result.json)
+          DESTROY_ERROR=$(jq -r '.destroy_error // empty' terminate-result.json)
+          STATE_COUNT=$(jq -r '.state_resource_count // 0' terminate-result.json)
 
           if [ "$SKIPPED" = "true" ]; then
-            echo "Termination skipped (e.g. app already removed) — no notification"
+            echo "Termination skipped — no resources in S3 state"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ "$ALREADY" = "true" ]; then
-            PR_BODY="## ✅ PR Deployment Already Terminated
+          if [ "$INIT_SUCCESS" = "false" ]; then
+            PR_BODY="## ❌ Termination Failed
 
         **Deployment:** ${DEPLOYMENT_ID}
-        **Reason:** ${REASON}"
+        **Reason:** ${REASON}
+        **Error:** Could not load Terraform state from S3. Check backend credentials and state key."
             jq -n \
-              --arg text "ℹ️ PR Deployment Already Terminated" \
               --arg pr "$PR_NUMBER" \
               --arg deployment "$DEPLOYMENT_ID" \
               --arg reason "$REASON" \
               --arg url "$RUN_URL" \
               '{
-                text: $text,
+                text: "❌ PR Deployment Termination Failed",
                 attachments: [{
-                  color: "warning",
+                  color: "danger",
                   fields: [
                     {title: "PR Number", value: $pr, short: true},
                     {title: "Deployment ID", value: $deployment, short: true},
                     {title: "Reason", value: $reason, short: true},
+                    {title: "Error", value: "Could not load Terraform state from S3", short: false},
                     {title: "Workflow Run", value: $url, short: false}
                   ]
                 }]
@@ -172,12 +175,16 @@ jobs:
 
         **Deployment:** ${DEPLOYMENT_ID}
         **Reason:** ${REASON}
-        **Error:** Cleanup/termination did not complete successfully. Check workflow logs."
+        **State resources:** ${STATE_COUNT}
+        **Error:** Cleanup/termination did not complete successfully. S3 state retained for retry.
+        **Details:** ${DESTROY_ERROR:-Check workflow logs.}"
             jq -n \
               --arg pr "$PR_NUMBER" \
               --arg deployment "$DEPLOYMENT_ID" \
               --arg reason "$REASON" \
               --arg url "$RUN_URL" \
+              --arg state_count "$STATE_COUNT" \
+              --arg details "${DESTROY_ERROR:-Check workflow logs.}" \
               '{
                 text: "❌ PR Deployment Termination Failed",
                 attachments: [{
@@ -186,6 +193,9 @@ jobs:
                     {title: "PR Number", value: $pr, short: true},
                     {title: "Deployment ID", value: $deployment, short: true},
                     {title: "Reason", value: $reason, short: true},
+                    {title: "State resources", value: $state_count, short: true},
+                    {title: "Error", value: "Cleanup did not complete. S3 state retained for retry.", short: false},
+                    {title: "Details", value: $details, short: false},
                     {title: "Workflow Run", value: $url, short: false}
                   ]
                 }]

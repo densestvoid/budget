@@ -16,6 +16,9 @@ terraform/
 │   ├── variables.tf         # PR input variables
 │   ├── outputs.tf           # PR outputs
 │   └── terraform.tfvars.example
+├── pr-destroy/              # State-only PR teardown (CI terminate workflow)
+│   ├── main.tf              # Providers only — no resource definitions
+│   └── variables.tf         # do_token only
 └── production/              # Production deployment configuration
     ├── main.tf              # Production-specific resources (uses existing DB)
     ├── variables.tf         # Production input variables
@@ -40,7 +43,7 @@ Creates a complete new deployment for each PR:
 - **Creates database schema** and grants permissions
 - **Runs schema migrations** (always executed via migration app)
 - Uses `budget-develop` project
-- **Custom hostname** when `PRODUCTION_DOMAIN` is set: `pr-{n}.{PRODUCTION_DOMAIN}` with DO-managed DNS
+- **Custom hostname** when `PRODUCTION_DOMAIN` is set: `{deployment_id}.{domain_name}` (e.g. `pr-123.budget.example.com`) with DO-managed DNS
 - Backend state: `pr/{deployment_id}.tfstate`
 
 ### Usage
@@ -53,6 +56,10 @@ terraform init
 terraform plan
 terraform apply
 ```
+
+## PR Teardown (`terraform/pr-destroy/`)
+
+Used by the terminate workflow only. Contains provider configuration but **no resource definitions**. CI loads `pr/{deployment_id}.tfstate` from S3 and runs `terraform apply`; with no resource blocks, every state entry is a config orphan and Terraform destroys it. (`terraform destroy` would be a no-op here — it only targets configured resources.)
 
 ## Production Deployments (`terraform/production/`)
 
@@ -70,7 +77,7 @@ Deploys to production using long-living, pre-allocated resources:
    - Database is **never recreated** or modified by Terraform
    - Long-living and stable
    
-2. **Domain**: Add the zone in **DO Networking → Domains** before deploy, then set `PRODUCTION_DOMAIN` to that name. App Platform creates records automatically; Terraform does not create or delete the zone.
+2. **Domain**: Add the zone in **DO Networking → Domains** before deploy, then set `PRODUCTION_DOMAIN`. App Platform creates records automatically; Terraform receives it as `domain_name`.
    
 3. **Migrations**: Always execute on every deployment
    - Schema migrations run via the migration app before the main app
@@ -92,7 +99,7 @@ terraform apply
 | Feature | PR Deployments | Production Deployments |
 |---------|---------------|----------------------|
 | Database | Creates new | Uses existing |
-| Domain | `{deployment_id}.{PRODUCTION_DOMAIN}` when vars set | `PRODUCTION_DOMAIN` |
+| Domain | `{deployment_id}.{domain_name}` when set | `PRODUCTION_DOMAIN` → `domain_name` |
 | Schema Setup | Creates schema | Not needed (exists) |
 | Migrations | Always runs | Always runs |
 | Project | `budget-develop` | `budget-prod` |
@@ -109,7 +116,7 @@ terraform apply
 
 ### PR Deployments
 
-- `deployment_id`: Unique identifier (e.g., `pr-123-feature-branch`)
+- `deployment_id`: Unique identifier (e.g., `pr-123`)
 - `github_repo`: GitHub repository
 - `docker_image_tag`: Docker image tag to deploy
 - `region`: DigitalOcean region

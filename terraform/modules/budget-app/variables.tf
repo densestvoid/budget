@@ -81,7 +81,7 @@ variable "domain" {
   default = null
 
   validation {
-    condition     = var.domain == null || (var.domain.hostname != "" && var.domain.zone != "")
+    condition     = var.domain == null ? true : (var.domain.hostname != "" && var.domain.zone != "")
     error_message = "domain.hostname and domain.zone must both be non-empty when domain is set."
   }
 }

@@ -8,8 +8,8 @@ on:
       - Deploy PR
     types:
       - completed
-    branches-ignore:
-      - main
+    # No branches filter: workflow_run head_branch is always the default branch (main)
+    # for downstream listeners. branches-ignore: main would block every auto-trigger.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -39,7 +39,6 @@ jobs:
       use_wait_timer: ${{ steps.resolve.outputs.use_wait_timer }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       deployment_id: ${{ steps.resolve.outputs.deployment_id }}
-      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
 
     steps:
     - name: Download deploy-result artifact
@@ -66,7 +65,6 @@ jobs:
           echo "use_wait_timer=${USE_WAIT}" >> "$GITHUB_OUTPUT"
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "deployment_id=pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -104,7 +102,6 @@ jobs:
         echo "should_run=true" >> "$GITHUB_OUTPUT"
         echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
         echo "deployment_id=${DEPLOYMENT_ID}" >> "$GITHUB_OUTPUT"
-        echo "checkout_ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   terminate:
     name: Terminate PR Deployment
@@ -118,164 +115,110 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
-      with:
-        ref: ${{ needs.resolve.outputs.checkout_ref }}
 
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v4
       with:
         terraform_version: 1.5.7
+        terraform_wrapper: false
 
-    - name: Resolve deployment outputs
-      id: outputs
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
-        AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
-      run: |
-        DEPLOYMENT_ID="${{ needs.resolve.outputs.deployment_id }}"
-        BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
-        APP_URL=""
-        APP_ID=""
-
-        cd terraform/pr
-        if terraform init -backend-config="key=${BACKEND_KEY}" -backend-config="region=${AWS_REGION}" >/dev/null 2>&1; then
-          APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
-          APP_ID=$(terraform output -raw app_id 2>/dev/null || echo "")
-        fi
-
-        if [ -z "$APP_ID" ]; then
-          APP_NAME="${DEPLOYMENT_ID}"
-          APP_ID=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-            "https://api.digitalocean.com/v2/apps" | \
-            jq -r ".apps[]? // empty | select(.spec.name == \"${APP_NAME}\") | .id" || echo "")
-        fi
-
-        echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUT"
-        echo "app_id=${APP_ID}" >> "$GITHUB_OUTPUT"
-
-    - name: Check app health before termination
-      id: health_check
-      if: needs.resolve.outputs.reason == 'scheduled'
-      run: |
-        APP_URL="${{ steps.outputs.outputs.app_url }}"
-        APP_ID="${{ steps.outputs.outputs.app_id }}"
-
-        if [ -z "$APP_URL" ]; then
-          echo "should_terminate=true" >> "$GITHUB_OUTPUT"
-          echo "health_status=unknown" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        if curl -f --connect-timeout 10 --max-time 15 "$APP_URL/health" >/dev/null 2>&1; then
-          echo "should_terminate=true" >> "$GITHUB_OUTPUT"
-          echo "health_status=healthy" >> "$GITHUB_OUTPUT"
-        else
-          if [ -n "$APP_ID" ]; then
-            response=$(curl -s -H "Authorization: Bearer ${{ env.DO_TOKEN }}" \
-              "https://api.digitalocean.com/v2/apps/$APP_ID")
-            if echo "$response" | jq -e '.app' >/dev/null 2>&1; then
-              echo "should_terminate=true" >> "$GITHUB_OUTPUT"
-              echo "health_status=unhealthy" >> "$GITHUB_OUTPUT"
-            else
-              echo "should_terminate=false" >> "$GITHUB_OUTPUT"
-              echo "health_status=missing" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "should_terminate=true" >> "$GITHUB_OUTPUT"
-            echo "health_status=unknown" >> "$GITHUB_OUTPUT"
-          fi
-        fi
-
-    - name: Set termination decision for non-scheduled runs
-      id: force_terminate
-      if: needs.resolve.outputs.reason != 'scheduled'
-      run: |
-        echo "should_terminate=true" >> "$GITHUB_OUTPUT"
-        echo "health_status=skipped" >> "$GITHUB_OUTPUT"
-
-    - name: Initialize Terraform with AWS S3 backend
+    - name: Load state and prepare destroy
       id: init
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
+        set -eu -o pipefail
         DEPLOYMENT_ID="${{ needs.resolve.outputs.deployment_id }}"
+        BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
 
-        cd terraform/pr
-        cat > terraform.tfvars << EOF
+        cd terraform/pr-destroy
+
+        cat > terraform.tfvars <<EOF
         do_token = "${{ env.DO_TOKEN }}"
-        region = "nyc1"
-        deployment_id = "${DEPLOYMENT_ID}"
-        github_repo = "${{ github.repository }}"
-        docker_image_tag = "${DEPLOYMENT_ID}"
-        github_token = "${{ secrets.GITHUB_TOKEN }}"
         EOF
 
-        BACKEND_KEY="pr/${DEPLOYMENT_ID}.tfstate"
-        if terraform init -backend-config="key=${BACKEND_KEY}" -backend-config="region=${{ secrets.TERRAFORM_AWS_S3_REGION }}"; then
+        if terraform init -backend-config="key=${BACKEND_KEY}" -backend-config="region=${AWS_REGION}"; then
           echo "init_success=true" >> "$GITHUB_OUTPUT"
-          RESOURCE_COUNT=$(terraform state list 2>/dev/null | wc -l)
-          if [ "$RESOURCE_COUNT" -eq 0 ]; then
-            echo "already_terminated=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "already_terminated=false" >> "$GITHUB_OUTPUT"
-          fi
         else
           echo "init_success=false" >> "$GITHUB_OUTPUT"
-          echo "already_terminated=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          echo "state_resource_count=0" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
 
-    - name: Destroy deployment
+        RESOURCE_COUNT=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+        echo "state_resource_count=${RESOURCE_COUNT}" >> "$GITHUB_OUTPUT"
+        echo "Resources in S3 state (${RESOURCE_COUNT}):"
+        terraform state list 2>/dev/null || true
+
+        if [ "$RESOURCE_COUNT" -eq 0 ]; then
+          echo "already_terminated=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "already_terminated=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Destroy from state
       id: destroy
       if: |
         steps.init.outputs.init_success == 'true' &&
-        steps.init.outputs.already_terminated == 'false' &&
-        (
-          steps.health_check.outputs.should_terminate == 'true' ||
-          steps.force_terminate.outputs.should_terminate == 'true'
-        )
+        steps.init.outputs.already_terminated == 'false'
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
         AWS_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
       run: |
+        set -eu -o pipefail
         DEPLOYMENT_ID="${{ needs.resolve.outputs.deployment_id }}"
-        cd terraform/pr
+        cd terraform/pr-destroy
 
-        if terraform destroy -auto-approve; then
+        DESTROY_LOG=$(mktemp)
+        # No resource blocks in pr-destroy: state entries are config orphans.
+        # terraform destroy only targets configured resources (none here), so apply is required.
+        if terraform apply -auto-approve 2>&1 | tee "$DESTROY_LOG"; then
           echo "destroy_success=true" >> "$GITHUB_OUTPUT"
           aws s3 rm "s3://densestvoid-terraform/pr/${DEPLOYMENT_ID}.tfstate" || true
         else
           echo "destroy_success=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          tail -30 "$DESTROY_LOG" > "${GITHUB_WORKSPACE}/destroy-error.txt"
+          echo "State teardown failed — S3 state retained for retry"
         fi
-
-    - name: Record skipped termination
-      id: skipped
-      if: steps.init.outputs.already_terminated == 'true' || steps.health_check.outputs.should_terminate == 'false'
-      run: |
-        echo "destroy_success=false" >> "$GITHUB_OUTPUT"
-        echo "skipped=true" >> "$GITHUB_OUTPUT"
 
     - name: Publish terminate result
       if: always()
       run: |
+        INIT_SUCCESS="${{ steps.init.outputs.init_success }}"
+        [ -z "$INIT_SUCCESS" ] && INIT_SUCCESS="false"
         DESTROY_SUCCESS="${{ steps.destroy.outputs.destroy_success }}"
         [ -z "$DESTROY_SUCCESS" ] && DESTROY_SUCCESS="false"
         ALREADY="${{ steps.init.outputs.already_terminated }}"
         [ -z "$ALREADY" ] && ALREADY="false"
-        SKIPPED="${{ steps.skipped.outputs.skipped }}"
-        [ "$SKIPPED" = "true" ] && SKIPPED_JSON=true || SKIPPED_JSON=false
+
+        STATE_COUNT="${{ steps.init.outputs.state_resource_count }}"
+        [ -z "$STATE_COUNT" ] && STATE_COUNT="0"
+
+        # Skip notification only when state loaded and is empty.
+        if [ "$INIT_SUCCESS" = "true" ] && [ "$ALREADY" = "true" ]; then
+          SKIPPED_JSON=true
+        else
+          SKIPPED_JSON=false
+        fi
+        [ "$INIT_SUCCESS" = "true" ] && IS_JSON=true || IS_JSON=false
         [ "$DESTROY_SUCCESS" = "true" ] && DS_JSON=true || DS_JSON=false
         [ "$ALREADY" = "true" ] && AT_JSON=true || AT_JSON=false
+
+        DESTROY_ERROR=""
+        if [ -f "${GITHUB_WORKSPACE}/destroy-error.txt" ]; then
+          DESTROY_ERROR=$(cat "${GITHUB_WORKSPACE}/destroy-error.txt")
+        fi
 
         jq -n \
           --arg pr_number "${{ needs.resolve.outputs.pr_number }}" \
           --arg deployment_id "${{ needs.resolve.outputs.deployment_id }}" \
           --arg reason "${{ needs.resolve.outputs.reason }}" \
+          --arg destroy_error "$DESTROY_ERROR" \
+          --argjson state_resource_count "$STATE_COUNT" \
+          --argjson init_success "$IS_JSON" \
           --argjson destroy_success "$DS_JSON" \
           --argjson already_terminated "$AT_JSON" \
           --argjson skipped "$SKIPPED_JSON" \
@@ -283,12 +226,15 @@ jobs:
             pr_number: $pr_number,
             deployment_id: $deployment_id,
             reason: $reason,
+            state_resource_count: $state_resource_count,
+            init_success: $init_success,
+            destroy_error: $destroy_error,
             destroy_success: $destroy_success,
             already_terminated: $already_terminated,
             skipped: $skipped
-          }' > terminate-result.json
+          }' > "${GITHUB_WORKSPACE}/terminate-result.json"
 
-        cat terminate-result.json
+        cat "${GITHUB_WORKSPACE}/terminate-result.json"
 
     - name: Upload terminate-result artifact
       if: always()
