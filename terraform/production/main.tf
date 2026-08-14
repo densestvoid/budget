@@ -80,6 +80,7 @@ resource "digitalocean_database_user" "budget_user" {
   # Prevent destruction
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [settings]
   }
 }
 

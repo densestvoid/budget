@@ -117,6 +117,10 @@ resource "null_resource" "database_health_check" {
 resource "digitalocean_app" "budget_migrations" {
   depends_on = [null_resource.database_health_check]
 
+  lifecycle {
+    ignore_changes = [spec[0].region]
+  }
+
   spec {
     name   = "${var.deployment_id}-migrations"
     region = var.region
@@ -128,8 +132,10 @@ resource "digitalocean_app" "budget_migrations" {
 
     # Migration job - runs once and exits
     job {
-      name = "migrate"
-      kind = "PRE_DEPLOY" # Runs before main service deployment
+      name               = "migrate"
+      kind               = "PRE_DEPLOY" # Runs before main service deployment
+      instance_count     = 1
+      instance_size_slug = "apps-s-1vcpu-0.5gb"
 
       image {
         registry_type = "GHCR"
@@ -176,6 +182,10 @@ resource "digitalocean_app" "budget_app" {
     digitalocean_app.budget_migrations,
     data.digitalocean_domain.zone,
   ]
+
+  lifecycle {
+    ignore_changes = [spec[0].region]
+  }
 
   spec {
     name   = var.deployment_id
@@ -257,11 +267,6 @@ resource "digitalocean_project_resources" "budget_resources" {
     digitalocean_app.budget_migrations.urn,
     digitalocean_app.budget_app.urn
     # Note: VPC cannot be assigned to projects (not in supported resource types)
-  ]
-
-  depends_on = [
-    digitalocean_app.budget_migrations,
-    digitalocean_app.budget_app
   ]
 }
 
