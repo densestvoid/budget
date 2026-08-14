@@ -81,7 +81,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
@@ -133,7 +133,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
         fetch-depth: 0
@@ -162,7 +162,7 @@ jobs:
     
     - name: Check Go binary cache
       id: go_binary_cache_check
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: budget
         key: go-binary-${{ steps.check.outputs.go_hash }}
@@ -287,13 +287,13 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Restore Go build cache
       id: cache
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/go-build
@@ -303,7 +303,7 @@ jobs:
     
     - name: Restore Go binary cache
       id: binary_cache
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: budget
         key: go-binary-${{ needs.check-builds.outputs.go_hash }}
@@ -345,7 +345,7 @@ jobs:
     
     - name: Cache Go build
       if: steps.build.outputs.go_built == 'true'
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/go-build
@@ -353,14 +353,14 @@ jobs:
     
     - name: Cache Go binary
       if: steps.build.outputs.go_built == 'true'
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: budget
         key: go-binary-${{ needs.check-builds.outputs.go_hash }}
     
     - name: Upload Go binary artifact
       if: steps.check_binary.outputs.binary_available == 'true' || steps.build.outputs.go_built == 'true'
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: go-binary
         path: budget
@@ -398,13 +398,13 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
     - name: Download Go binary artifact
       if: needs.build-go.result == 'success'
-      uses: actions/download-artifact@v7
+      uses: actions/download-artifact@v8
       with:
         name: go-binary
         path: .
@@ -415,7 +415,7 @@ jobs:
     
     - name: Restore Docker buildx cache
       id: docker_cache
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: /tmp/.buildx-cache
         key: docker-buildx-${{ needs.check-builds.outputs.docker_hash }}
@@ -475,7 +475,7 @@ jobs:
     
     - name: Cache Docker buildx cache
       if: steps.build.outputs.image_built == 'true'
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: /tmp/.buildx-cache
         key: docker-buildx-${{ needs.check-builds.outputs.docker_hash }}
@@ -499,7 +499,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
     
@@ -811,7 +811,7 @@ jobs:
     - name: Resolve termination delay
       id: termination_delay
       if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
@@ -902,7 +902,7 @@ jobs:
         cat deploy-result.json
 
     - name: Upload deploy-result artifact
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: deploy-result
         path: deploy-result.json
