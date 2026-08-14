@@ -243,3 +243,193 @@ jobs:
         name: terminate-result
         path: terminate-result.json
         retention-days: 7
+
+  prepare-notify:
+    name: Prepare Termination Notification
+    needs: [resolve, terminate]
+    if: |
+      always() &&
+      needs.resolve.outputs.should_run == 'true' &&
+      (needs.terminate.result == 'success' || needs.terminate.result == 'failure')
+    runs-on: ubuntu-latest
+    outputs:
+      should_deliver: ${{ steps.message.outputs.should_deliver }}
+      pr_number: ${{ steps.message.outputs.pr_number }}
+      pr_body: ${{ steps.message.outputs.pr_body }}
+    steps:
+    - name: Download terminate-result artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: terminate-result
+
+    - name: Build termination notification
+      id: message
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_PR }}
+      run: |
+        set -euo pipefail
+        if [ ! -f terminate-result.json ]; then
+          echo "No terminate-result artifact — termination was skipped"
+          echo "should_deliver=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        PR_NUMBER=$(jq -r '.pr_number' terminate-result.json)
+        DEPLOYMENT_ID=$(jq -r '.deployment_id' terminate-result.json)
+        REASON=$(jq -r '.reason' terminate-result.json)
+        INIT_SUCCESS=$(jq -r '.init_success // true' terminate-result.json)
+        DESTROY_SUCCESS=$(jq -r '.destroy_success' terminate-result.json)
+        SKIPPED=$(jq -r '.skipped' terminate-result.json)
+        DESTROY_ERROR=$(jq -r '.destroy_error // empty' terminate-result.json)
+        STATE_COUNT=$(jq -r '.state_resource_count // 0' terminate-result.json)
+
+        if [ "$SKIPPED" = "true" ]; then
+          echo "Termination skipped — no resources in S3 state"
+          echo "should_deliver=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$INIT_SUCCESS" = "false" ]; then
+          PR_BODY="## ❌ Termination Failed
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Reason:** ${REASON}
+        **Error:** Could not load Terraform state from S3. Check backend credentials and state key."
+          jq -n \
+            --arg pr "$PR_NUMBER" \
+            --arg deployment "$DEPLOYMENT_ID" \
+            --arg reason "$REASON" \
+            --arg url "$RUN_URL" \
+            '{
+              text: "❌ PR Deployment Termination Failed",
+              attachments: [{
+                color: "danger",
+                fields: [
+                  {title: "PR Number", value: $pr, short: true},
+                  {title: "Deployment ID", value: $deployment, short: true},
+                  {title: "Reason", value: $reason, short: true},
+                  {title: "Error", value: "Could not load Terraform state from S3", short: false},
+                  {title: "Workflow Run", value: $url, short: false}
+                ]
+              }]
+            }' > slack-payload.json
+        elif [ "$DESTROY_SUCCESS" = "true" ]; then
+          case "$REASON" in
+            scheduled)
+              PR_BODY="## ✅ Auto-Termination Completed
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Result:** Successfully destroyed after scheduled wait"
+              SLACK_TEXT="✅ PR Deployment Auto-Terminated"
+              ;;
+            failure_cleanup)
+              PR_BODY="## ✅ Failed Deployment Cleaned Up
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Result:** Partial resources destroyed after deploy failure"
+              SLACK_TEXT="✅ PR Deployment Cleaned Up After Failure"
+              ;;
+            *)
+              PR_BODY="## ✅ PR Deployment Terminated
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Result:** Successfully destroyed (manual)"
+              SLACK_TEXT="✅ PR Deployment Terminated (Manual)"
+              ;;
+          esac
+          jq -n \
+            --arg text "$SLACK_TEXT" \
+            --arg pr "$PR_NUMBER" \
+            --arg deployment "$DEPLOYMENT_ID" \
+            --arg reason "$REASON" \
+            --arg url "$RUN_URL" \
+            '{
+              text: $text,
+              attachments: [{
+                color: "good",
+                fields: [
+                  {title: "PR Number", value: $pr, short: true},
+                  {title: "Deployment ID", value: $deployment, short: true},
+                  {title: "Reason", value: $reason, short: true},
+                  {title: "Workflow Run", value: $url, short: false}
+                ]
+              }]
+            }' > slack-payload.json
+        else
+          PR_BODY="## ❌ Termination Failed
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Reason:** ${REASON}
+        **State resources:** ${STATE_COUNT}
+        **Error:** Cleanup/termination did not complete successfully. S3 state retained for retry.
+        **Details:** ${DESTROY_ERROR:-Check workflow logs.}"
+          jq -n \
+            --arg pr "$PR_NUMBER" \
+            --arg deployment "$DEPLOYMENT_ID" \
+            --arg reason "$REASON" \
+            --arg url "$RUN_URL" \
+            --arg state_count "$STATE_COUNT" \
+            --arg details "${DESTROY_ERROR:-Check workflow logs.}" \
+            '{
+              text: "❌ PR Deployment Termination Failed",
+              attachments: [{
+                color: "danger",
+                fields: [
+                  {title: "PR Number", value: $pr, short: true},
+                  {title: "Deployment ID", value: $deployment, short: true},
+                  {title: "Reason", value: $reason, short: true},
+                  {title: "State resources", value: $state_count, short: true},
+                  {title: "Error", value: "Cleanup did not complete. S3 state retained for retry.", short: false},
+                  {title: "Details", value: $details, short: false},
+                  {title: "Workflow Run", value: $url, short: false}
+                ]
+              }]
+            }' > slack-payload.json
+        fi
+
+        echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+        {
+          echo "pr_body<<EOF"
+          echo "$PR_BODY"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        SHOULD_DELIVER=false
+        if [ -n "$SLACK_WEBHOOK" ] && [ -f slack-payload.json ]; then
+          SHOULD_DELIVER=true
+        fi
+        if [ -n "$PR_NUMBER" ] && [ -n "$PR_BODY" ]; then
+          SHOULD_DELIVER=true
+        fi
+        echo "should_deliver=${SHOULD_DELIVER}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload Slack payload
+      if: steps.message.outputs.should_deliver == 'true' && hashFiles('slack-payload.json') != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: notify-payload
+        path: slack-payload.json
+        retention-days: 1
+
+  notify:
+    name: Notify Termination Result
+    needs: prepare-notify
+    if: needs.prepare-notify.outputs.should_deliver == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+    - name: Download Slack payload
+      uses: actions/download-artifact@v8
+      with:
+        name: notify-payload
+      continue-on-error: true
+
+    - uses: ./.github/actions/notify
+      with:
+        slack_webhook: ${{ secrets.SLACK_WEBHOOK_PR }}
+        pr_number: ${{ needs.prepare-notify.outputs.pr_number }}
+        pr_body: ${{ needs.prepare-notify.outputs.pr_body }}

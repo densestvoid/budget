@@ -198,3 +198,304 @@ jobs:
         name: deploy-result
         path: deploy-result.json
         retention-days: 7
+
+  prepare-notify-deploy:
+    name: Prepare Deploy Notification
+    needs: deploy
+    if: always() && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
+    runs-on: ubuntu-latest
+    outputs:
+      should_deliver: ${{ steps.message.outputs.should_deliver }}
+      pr_number: ${{ steps.message.outputs.pr_number }}
+      pr_body: ${{ steps.message.outputs.pr_body }}
+    steps:
+    - name: Download deploy-result artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: deploy-result
+
+    - name: Build PR deploy notification
+      id: message
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_PR }}
+      run: |
+        set -euo pipefail
+        if [ ! -f deploy-result.json ]; then
+          echo "No deploy-result artifact — deploy did not run"
+          echo "should_deliver=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        DEPLOYMENT_ID=$(jq -r '.deployment_id' deploy-result.json)
+        PR_NUMBER=$(jq -r '.pr_number // empty' deploy-result.json)
+        DEPLOYMENT_SUCCESS=$(jq -r '.deployment_success' deploy-result.json)
+        APP_URL=$(jq -r '.app_url // empty' deploy-result.json)
+        APP_ID=$(jq -r '.app_id // empty' deploy-result.json)
+        MIGRATION_APP_ID=$(jq -r '.migration_app_id // empty' deploy-result.json)
+        CHECK_BUILDS=$(jq -r '.jobs.check_builds' deploy-result.json)
+        BUILD_GO=$(jq -r '.jobs.build_go' deploy-result.json)
+        BUILD_DOCKER=$(jq -r '.jobs.build_docker' deploy-result.json)
+        DEPLOY_JOB=$(jq -r '.jobs.deploy' deploy-result.json)
+        TERMINATION_TIME=$(jq -r '.termination_time // empty' deploy-result.json)
+        TERMINATION_DELAY=$(jq -r '.termination_delay_minutes // empty' deploy-result.json)
+        SKIPPED=$(jq -r '.skipped // false' deploy-result.json)
+
+        if [ "$SKIPPED" = "true" ]; then
+          echo "Skipped deploy — handled by notify-skip job"
+          echo "should_deliver=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$DEPLOYMENT_SUCCESS" = "true" ] && [ "$DEPLOY_JOB" = "success" ]; then
+          if [ -n "$TERMINATION_TIME" ]; then
+            AUTO_TERM_LINE="**Auto-termination:** ${TERMINATION_TIME} UTC (${TERMINATION_DELAY:-?} min after deploy)"
+            TERM_SLACK="${TERMINATION_TIME} UTC"
+            if [ -n "$TERMINATION_DELAY" ]; then
+              TERM_SLACK="${TERM_SLACK} (${TERMINATION_DELAY} min)"
+            fi
+          else
+            AUTO_TERM_LINE="**Auto-termination:** Scheduled via the \`termination-delay\` environment wait timer"
+            TERM_SLACK="termination-delay wait timer"
+          fi
+          PR_BODY="## ✅ Deployment Successful
+
+        **URL:** ${APP_URL:-N/A}
+        **App ID:** ${APP_ID:-N/A}
+        **Migration ID:** ${MIGRATION_APP_ID:-N/A}
+        **Deployment:** ${DEPLOYMENT_ID}
+        ${AUTO_TERM_LINE}"
+          jq -n \
+            --arg pr "$PR_NUMBER" \
+            --arg deployment "$DEPLOYMENT_ID" \
+            --arg url "$APP_URL" \
+            --arg app "$APP_ID" \
+            --arg run "$RUN_URL" \
+            --arg term "$TERM_SLACK" \
+            '{
+              text: "✅ PR Deployment Successful",
+              attachments: [{
+                color: "good",
+                fields: [
+                  {title: "PR Number", value: $pr, short: true},
+                  {title: "Deployment ID", value: $deployment, short: true},
+                  {title: "Application URL", value: $url, short: false},
+                  {title: "App ID", value: $app, short: true},
+                  {title: "Terminates (UTC)", value: $term, short: true},
+                  {title: "Workflow Run", value: $run, short: false}
+                ]
+              }]
+            }' > slack-payload.json
+        else
+          FAILED_STEP="Unknown"
+          ERROR_MESSAGE="Workflow execution failed"
+          if [ "$CHECK_BUILDS" = "failure" ]; then
+            FAILED_STEP="Check build requirements"
+            ERROR_MESSAGE="Build requirement analysis failed."
+          elif [ "$BUILD_GO" = "failure" ]; then
+            FAILED_STEP="Build Go binary"
+            ERROR_MESSAGE="Go binary build failed."
+          elif [ "$BUILD_DOCKER" = "failure" ]; then
+            FAILED_STEP="Build Docker image"
+            ERROR_MESSAGE="Docker image build or push failed."
+          elif [ "$DEPLOY_JOB" = "failure" ]; then
+            FAILED_STEP="Deploy infrastructure"
+            ERROR_MESSAGE="Terraform deployment failed."
+          elif [ "$DEPLOY_JOB" = "skipped" ]; then
+            FAILED_STEP="Deploy skipped"
+            ERROR_MESSAGE="Deploy was skipped because an earlier job failed."
+          fi
+
+          CLEANUP_LINE=""
+          if [ "$DEPLOY_JOB" = "failure" ]; then
+            CLEANUP_LINE="**Cleanup:** Termination workflow will attempt to clean up partial resources"
+          fi
+          PR_BODY="## ❌ Deployment Failed
+
+        **Workflow:** Deploy PR
+        **Step:** ${FAILED_STEP}
+        **Error:**
+        \`\`\`
+        ${ERROR_MESSAGE}
+        \`\`\`
+        ${CLEANUP_LINE}"
+          jq -n \
+            --arg pr "$PR_NUMBER" \
+            --arg deployment "$DEPLOYMENT_ID" \
+            --arg step "$FAILED_STEP" \
+            --arg error "$ERROR_MESSAGE" \
+            --arg run "$RUN_URL" \
+            '{
+              text: "❌ PR Deployment Failed",
+              attachments: [{
+                color: "danger",
+                fields: [
+                  {title: "PR Number", value: $pr, short: true},
+                  {title: "Deployment ID", value: $deployment, short: true},
+                  {title: "Failed Step", value: $step, short: true},
+                  {title: "Error", value: $error, short: false},
+                  {title: "Workflow Run", value: $run, short: false}
+                ]
+              }]
+            }' > slack-payload.json
+        fi
+
+        echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+        {
+          echo "pr_body<<EOF"
+          echo "$PR_BODY"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        SHOULD_DELIVER=false
+        if [ -n "$SLACK_WEBHOOK" ] && [ -f slack-payload.json ]; then
+          SHOULD_DELIVER=true
+        fi
+        if [ -n "$PR_NUMBER" ] && [ -n "$PR_BODY" ]; then
+          SHOULD_DELIVER=true
+        fi
+        echo "should_deliver=${SHOULD_DELIVER}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload Slack payload
+      if: steps.message.outputs.should_deliver == 'true' && hashFiles('slack-payload.json') != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: notify-payload
+        path: slack-payload.json
+        retention-days: 1
+
+  notify-deploy:
+    name: Notify Deploy Result
+    needs: prepare-notify-deploy
+    if: needs.prepare-notify-deploy.outputs.should_deliver == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+    - name: Download Slack payload
+      uses: actions/download-artifact@v8
+      with:
+        name: notify-payload
+      continue-on-error: true
+
+    - uses: ./.github/actions/notify
+      with:
+        slack_webhook: ${{ secrets.SLACK_WEBHOOK_PR }}
+        pr_number: ${{ needs.prepare-notify-deploy.outputs.pr_number }}
+        pr_body: ${{ needs.prepare-notify-deploy.outputs.pr_body }}
+
+  prepare-notify-skip:
+    name: Prepare Deploy Skip Notification
+    needs: publish-skip-result
+    if: needs.publish-skip-result.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      should_deliver: ${{ steps.message.outputs.should_deliver }}
+      pr_number: ${{ steps.message.outputs.pr_number }}
+      pr_body: ${{ steps.message.outputs.pr_body }}
+    steps:
+    - name: Download deploy-result artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: deploy-result
+
+    - name: Build PR deploy skip notification
+      id: message
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_PR }}
+      run: |
+        set -euo pipefail
+        if [ ! -f deploy-result.json ]; then
+          echo "No deploy-result artifact"
+          echo "should_deliver=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        DEPLOYMENT_ID=$(jq -r '.deployment_id' deploy-result.json)
+        PR_NUMBER=$(jq -r '.pr_number // empty' deploy-result.json)
+        SKIP_REASON=$(jq -r '.skip_reason // empty' deploy-result.json)
+        CHANGED_DEPLOYABLE=$(jq -r '.changed_deployable_files // empty' deploy-result.json)
+        SKIPPED=$(jq -r '.skipped // false' deploy-result.json)
+
+        if [ "$SKIPPED" != "true" ]; then
+          echo "Not a skip result"
+          echo "should_deliver=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        PR_BODY="## ℹ️ PR Deploy Skipped
+
+        This branch has no Go, Docker, or Terraform changes relative to \`main\`. No PR environment will be created.
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Reason:** ${SKIP_REASON:-no_deployable_changes}"
+
+        CHANGED_SUMMARY="${CHANGED_DEPLOYABLE:-none}"
+        jq -n \
+          --arg pr "$PR_NUMBER" \
+          --arg deployment "$DEPLOYMENT_ID" \
+          --arg reason "${SKIP_REASON:-no_deployable_changes}" \
+          --arg changed "$CHANGED_SUMMARY" \
+          --arg run "$RUN_URL" \
+          '{
+            text: "ℹ️ PR Deploy Skipped",
+            attachments: [{
+              color: "warning",
+              fields: [
+                {title: "PR Number", value: $pr, short: true},
+                {title: "Deployment ID", value: $deployment, short: true},
+                {title: "Reason", value: $reason, short: true},
+                {title: "Deployable files changed", value: $changed, short: false},
+                {title: "Workflow Run", value: $run, short: false}
+              ]
+            }]
+          }' > slack-payload.json
+
+        echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+        {
+          echo "pr_body<<EOF"
+          echo "$PR_BODY"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        SHOULD_DELIVER=false
+        if [ -n "$SLACK_WEBHOOK" ] && [ -f slack-payload.json ]; then
+          SHOULD_DELIVER=true
+        fi
+        if [ -n "$PR_NUMBER" ] && [ -n "$PR_BODY" ]; then
+          SHOULD_DELIVER=true
+        fi
+        echo "should_deliver=${SHOULD_DELIVER}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload Slack payload
+      if: steps.message.outputs.should_deliver == 'true' && hashFiles('slack-payload.json') != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: notify-payload
+        path: slack-payload.json
+        retention-days: 1
+
+  notify-skip:
+    name: Notify Deploy Skip
+    needs: prepare-notify-skip
+    if: needs.prepare-notify-skip.outputs.should_deliver == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+    - name: Download Slack payload
+      uses: actions/download-artifact@v8
+      with:
+        name: notify-payload
+      continue-on-error: true
+
+    - uses: ./.github/actions/notify
+      with:
+        slack_webhook: ${{ secrets.SLACK_WEBHOOK_PR }}
+        pr_number: ${{ needs.prepare-notify-skip.outputs.pr_number }}
+        pr_body: ${{ needs.prepare-notify-skip.outputs.pr_body }}

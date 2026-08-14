@@ -1,0 +1,78 @@
+name: Notify
+description: Post Slack notification and/or PR comment from caller-supplied content.
+
+inputs:
+  slack_webhook:
+    description: Slack incoming webhook URL; omit to skip Slack
+    required: false
+    default: ''
+  slack_payload_file:
+    description: Path to Slack incoming-webhook JSON payload
+    required: false
+    default: slack-payload.json
+  pr_number:
+    description: PR/issue number for comment; omit to skip PR comment
+    required: false
+    default: ''
+  pr_body:
+    description: Markdown body for PR comment
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve delivery
+      id: delivery
+      shell: bash
+      run: |
+        PAYLOAD_FILE="${{ inputs.slack_payload_file }}"
+        [ -z "$PAYLOAD_FILE" ] && PAYLOAD_FILE="slack-payload.json"
+
+        SEND_SLACK=false
+        if [ -n "${{ inputs.slack_webhook }}" ] && [ -f "$PAYLOAD_FILE" ]; then
+          SEND_SLACK=true
+          echo "payload_file=${PAYLOAD_FILE}" >> "$GITHUB_OUTPUT"
+        fi
+
+        SEND_PR=false
+        if [ -n "${{ inputs.pr_number }}" ] && [ -n "${{ inputs.pr_body }}" ]; then
+          SEND_PR=true
+        fi
+
+        if [ "$SEND_SLACK" = false ] && [ "$SEND_PR" = false ]; then
+          echo "Nothing to deliver — skipping notify"
+        fi
+
+        echo "send_slack=${SEND_SLACK}" >> "$GITHUB_OUTPUT"
+        echo "send_pr=${SEND_PR}" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on PR
+      if: always() && steps.delivery.outputs.send_pr == 'true'
+      uses: actions/github-script@v9
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        PR_BODY: ${{ inputs.pr_body }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const prNumber = parseInt(process.env.PR_NUMBER, 10);
+          const body = process.env.PR_BODY;
+          if (!prNumber || !body) {
+            core.info('Skipping PR comment - missing PR number or body');
+            return;
+          }
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            body
+          });
+
+    - name: Send Slack notification
+      if: always() && steps.delivery.outputs.send_slack == 'true'
+      uses: slackapi/slack-github-action@v4.0.0
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ inputs.slack_webhook }}
+        payload-file-path: ${{ steps.delivery.outputs.payload_file }}

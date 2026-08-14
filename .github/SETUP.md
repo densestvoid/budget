@@ -65,7 +65,6 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 | Deploy PR | `deploy-pr.yml` | After CI success on PR branch (non-`main`); **manual** |
 | Deploy Prod | `deploy-production.yml` | After CI success on push to `main`; **manual** |
 | Terminate PR Deployment | `terminate-pr-deployment.yml` | After PR deploy completes; **manual** |
-| Notify Deployment | `notify-deployment.yml` | After deploy or terminate completes (`workflow_run`) |
 | Deploy Budget App (Reusable) | `deploy-reusable.yml` | Called by deploy workflows (not run directly) |
 
 ### Automatic triggers
@@ -73,7 +72,7 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 - **PR**: Push to a PR branch runs CI. When CI passes, PR deploy runs automatically **only if the branch has deployable changes relative to `main`** (Go sources, `go.mod`/`go.sum`, embedded migrations, Docker files, or Terraform). Docs-, workflow-, and config-only PRs skip deploy and post a skip notification (PR comment + Slack). Manual `workflow_dispatch` always deploys.
 - **Production**: Push to `main` runs CI. When CI passes, production deploy runs automatically.
 - **PR teardown**: When a PR deploy completes (success or failure), terminate runs — scheduled wait after success, immediate cleanup after failure. Skipped deploys do not trigger termination.
-- **Notifications**: Notify runs after every deploy and terminate completion (PR comment + Slack or Slack only).
+- **Notifications**: Slack and PR comments run as final jobs inside Deploy PR, Deploy Prod, and Terminate PR Deployment workflows (via `.github/actions/notify`).
 
 **Deployable paths** (branch diff vs `main`): `**/*.go`, `go.mod`, `go.sum`, `data/migrations/**`, `Dockerfile*`, `.dockerignore`, `terraform/**`.
 
@@ -110,10 +109,10 @@ Manual production deploy does **not** run CI.
 ## What each deployment does
 
 1. **CI** (`ci.yml`): Go checks (vet, lint, static analysis, security, vulnerabilities)
-2. **Deploy** (`deploy-reusable.yml`): detect build requirements, build/push Docker image when needed, Terraform apply, health check, publish `deploy-result` artifact
-3. **Notify** (`notify-deployment.yml`): PR comment and/or Slack on deploy success or failure
+2. **Deploy** (`deploy-reusable.yml`): detect build requirements, build/push Docker image when needed, Terraform apply, publish `deploy-result` artifact
+3. **Notify** (inline in deploy workflows): PR comment + Slack on deploy success, failure, or skip; production Slack only
 4. **Terminate** (`terminate-pr-deployment.yml`): destroy PR resources after success (with wait timer) or failure (immediate), plus manual cleanup
-5. **Notify** (again): PR comment and Slack when terminate/cleanup completes
+5. **Notify** (inline in terminate workflow): PR comment + Slack when terminate/cleanup completes
 
 ## Architecture
 
