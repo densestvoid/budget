@@ -36,7 +36,7 @@ The reusable module that handles:
 
 Creates a complete new deployment for each PR:
 - **Creates new database** cluster, database, and user
-- **Dedicated VPC per PR** with Terraform-allocated `10.S.0.0/24` CIDR (first unclaimed of 254 slots in-region; hash-rotated scan)
+- **Dedicated VPC per PR** with deterministic `10.S.T.0/24` CIDR (`pr_number % (254×254)` → S=1..254, T=0..253)
 - **Creates database schema** and grants permissions
 - **Runs schema migrations** (always executed via migration app)
 - Uses `budget-develop` project
@@ -57,7 +57,7 @@ terraform apply
 ## Production Deployments (`terraform/production/`)
 
 Deploys to production using long-living, pre-allocated resources:
-- **Dedicated VPC** at fixed `10.0.0.0/16` (PR deployments use `10.S.0.0/24`, `S = 1..254`)
+- **Dedicated VPC** at fixed `10.0.0.0/16` (PR deployments use `10.S.T.0/24` from PR number modulo)
 - **Uses existing database** (pre-allocated, never recreated)
 - **Runs schema migrations** (always executed via migration app)
 - **Uses pre-allocated domain** (DNS records preconfigured, not managed by Terraform)

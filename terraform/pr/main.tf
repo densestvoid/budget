@@ -12,10 +12,6 @@ terraform {
       source  = "digitalocean/digitalocean"
       version = "~> 2.0"
     }
-    http = {
-      source  = "hashicorp/http"
-      version = "~> 3.0"
-    }
     null = {
       source  = "hashicorp/null"
       version = "~> 3.0"
@@ -28,46 +24,17 @@ provider "digitalocean" {
   token = var.do_token
 }
 
-data "http" "vpcs" {
-  url = "https://api.digitalocean.com/v2/vpcs?per_page=200"
-  request_headers = {
-    Authorization = "Bearer ${var.do_token}"
-    Content-Type  = "application/json"
-  }
-}
-
 locals {
   project_name = "budget-develop"
 
-  vpcs_response = jsondecode(data.http.vpcs.response_body)
-  region_vpcs   = [for v in local.vpcs_response.vpcs : v if v.region == var.region]
-
-  existing_vpc_by_name = try(one([for v in local.region_vpcs : v if v.name == var.deployment_id]), null)
-
-  # Occupied 10.S.0.0/24 slots in this region (production uses 10.0.0.0/16; PR pool uses S = 1..254).
-  occupied_octets = distinct([
-    for v in local.region_vpcs :
-    tonumber(regex("^10\\.([0-9]+)\\.", v.ip_range)[0])
-    if can(regex("^10\\.([0-9]+)\\.", v.ip_range))
-  ])
-
-  candidate_octets = [for s in range(1, 255) : s]
-
-  # Hash-based scan offset spreads allocations across 254 slots; picks first unclaimed from offset.
-  octet_count  = length(local.candidate_octets)
-  start_index  = parseint(substr(md5(var.deployment_id), 0, 8), 16) % local.octet_count
-
-  rotated_octets = concat(
-    slice(local.candidate_octets, local.start_index, local.octet_count),
-    slice(local.candidate_octets, 0, local.start_index)
-  )
-
-  selected_octet = one([
-    for s in local.rotated_octets :
-    s if !contains(local.occupied_octets, s)
-  ])
-
-  vpc_ip_range = local.existing_vpc_by_name != null ? local.existing_vpc_by_name.ip_range : "10.${local.selected_octet}.0.0/24"
+  # PR pool: 254×254 /24 slots as 10.S.T.0/24 (S=1..254, T=0..253).
+  # Production uses 10.0.0.0/16 so S starts at 1.
+  pr_number    = tonumber(regex("^pr-(\\d+)$", var.deployment_id)[0])
+  vpc_slots    = 254 * 254
+  vpc_slot     = local.pr_number % local.vpc_slots
+  vpc_second   = floor(local.vpc_slot / 254) + 1
+  vpc_third    = local.vpc_slot % 254
+  vpc_ip_range = format("10.%d.%d.0/24", local.vpc_second, local.vpc_third)
 }
 
 # Reference existing DigitalOcean project
@@ -173,10 +140,10 @@ SQL
 module "budget_app" {
   source = "../modules/budget-app"
 
-  do_token         = var.do_token
-  region           = var.region
-  deployment_id    = var.deployment_id
-  project_name     = local.project_name
+  do_token      = var.do_token
+  region        = var.region
+  deployment_id = var.deployment_id
+  project_name  = local.project_name
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
 
