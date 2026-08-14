@@ -3,8 +3,8 @@ name: Notify Deployment
 on:
   workflow_run:
     workflows:
-      - Deploy Budget App to DigitalOcean
-      - Deploy to Production
+      - Deploy PR
+      - Deploy Prod
       - Terminate PR Deployment
     types:
       - completed
@@ -12,7 +12,15 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion != 'cancelled'
+    if: |
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      (
+        github.event.workflow_run.path != '.github/workflows/deploy-production.yml' ||
+        (
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main'
+        )
+      )
     permissions:
       contents: read
       pull-requests: write
@@ -22,7 +30,7 @@ jobs:
       SLACK_WEBHOOK: >-
         ${{
           github.event.workflow_run.path == '.github/workflows/deploy-production.yml'
-          && secrets.SLACK_WEBHOOK_PRODUCTION || secrets.SLACK_WEBHOOK_PR
+          && secrets.SLACK_WEBHOOK_PROD || secrets.SLACK_WEBHOOK_PR
         }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
 
@@ -34,7 +42,7 @@ jobs:
         PATH="${{ github.event.workflow_run.path }}"
 
         case "$PATH" in
-          ".github/workflows/deploy.yml")
+          ".github/workflows/deploy-pr.yml")
             echo "type=deploy_pr" >> "$GITHUB_OUTPUT"
             echo "post_pr_comment=true" >> "$GITHUB_OUTPUT"
             ;;
@@ -54,7 +62,7 @@ jobs:
 
     - name: Download deploy-result artifact
       if: steps.kind.outputs.type == 'deploy_pr' || steps.kind.outputs.type == 'deploy_production'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v6
       with:
         name: deploy-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -63,7 +71,7 @@ jobs:
 
     - name: Download terminate-result artifact
       if: steps.kind.outputs.type == 'terminate'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v6
       with:
         name: terminate-result
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -214,22 +222,35 @@ jobs:
         BUILD_GO=$(jq -r '.jobs.build_go' deploy-result.json)
         BUILD_DOCKER=$(jq -r '.jobs.build_docker' deploy-result.json)
         DEPLOY_JOB=$(jq -r '.jobs.deploy' deploy-result.json)
+        TERMINATION_TIME=$(jq -r '.termination_time // empty' deploy-result.json)
+        TERMINATION_DELAY=$(jq -r '.termination_delay_minutes // empty' deploy-result.json)
 
-        if [ "$DEPLOYMENT_SUCCESS" = "true" ]; then
+        if [ "$DEPLOYMENT_SUCCESS" = "true" ] && [ "$DEPLOY_JOB" = "success" ]; then
           if [ "$TYPE" = "deploy_pr" ]; then
+            if [ -n "$TERMINATION_TIME" ]; then
+              AUTO_TERM_LINE="**Auto-termination:** ${TERMINATION_TIME} UTC (${TERMINATION_DELAY:-?} min after deploy)"
+              TERM_SLACK="${TERMINATION_TIME} UTC"
+              if [ -n "$TERMINATION_DELAY" ]; then
+                TERM_SLACK="${TERM_SLACK} (${TERMINATION_DELAY} min)"
+              fi
+            else
+              AUTO_TERM_LINE="**Auto-termination:** Scheduled via the \`termination-delay\` environment wait timer"
+              TERM_SLACK="termination-delay wait timer"
+            fi
             PR_BODY="## ✅ Deployment Successful
 
         **URL:** ${APP_URL:-N/A}
         **App ID:** ${APP_ID:-N/A}
         **Migration ID:** ${MIGRATION_APP_ID:-N/A}
         **Deployment:** ${DEPLOYMENT_ID}
-        **Auto-termination:** Scheduled via the \`termination-delay\` environment wait timer"
+        ${AUTO_TERM_LINE}"
             jq -n \
               --arg pr "$PR_NUMBER" \
               --arg deployment "$DEPLOYMENT_ID" \
               --arg url "$APP_URL" \
               --arg app "$APP_ID" \
               --arg run "$RUN_URL" \
+              --arg term "$TERM_SLACK" \
               '{
                 text: "✅ PR Deployment Successful",
                 attachments: [{
@@ -239,6 +260,7 @@ jobs:
                     {title: "Deployment ID", value: $deployment, short: true},
                     {title: "Application URL", value: $url, short: false},
                     {title: "App ID", value: $app, short: true},
+                    {title: "Terminates (UTC)", value: $term, short: true},
                     {title: "Workflow Run", value: $run, short: false}
                   ]
                 }]
@@ -283,15 +305,19 @@ jobs:
           fi
 
           if [ "$TYPE" = "deploy_pr" ]; then
+            CLEANUP_LINE=""
+            if [ "$DEPLOY_JOB" = "failure" ]; then
+              CLEANUP_LINE="**Cleanup:** Termination workflow will attempt to clean up partial resources"
+            fi
             PR_BODY="## ❌ Deployment Failed
 
-        **Workflow:** Deploy Budget App to DigitalOcean
+        **Workflow:** Deploy PR
         **Step:** ${FAILED_STEP}
         **Error:**
         \`\`\`
         ${ERROR_MESSAGE}
         \`\`\`
-        **Cleanup:** Termination workflow will attempt to clean up partial resources"
+        ${CLEANUP_LINE}"
             jq -n \
               --arg pr "$PR_NUMBER" \
               --arg deployment "$DEPLOYMENT_ID" \

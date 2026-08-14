@@ -1,7 +1,6 @@
 # Budget App
 
 [![CI](https://github.com/densestvoid/budget/actions/workflows/ci.yml/badge.svg)](https://github.com/densestvoid/budget/actions/workflows/ci.yml)
-[![Deploy Budget App to DigitalOcean](https://github.com/densestvoid/budget/actions/workflows/deploy.yml/badge.svg)](https://github.com/densestvoid/budget/actions/workflows/deploy.yml)
 [![Deploy to Production](https://github.com/densestvoid/budget/actions/workflows/deploy-production.yml/badge.svg)](https://github.com/densestvoid/budget/actions/workflows/deploy-production.yml)
 
 A modern budget management web application built with Go, featuring Chi router, PostgreSQL, HTMX, Alpine.js, Bootstrap 5, and Gomponents.

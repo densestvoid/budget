@@ -1,6 +1,6 @@
-name: Deploy Budget App to DigitalOcean
+name: Deploy PR
 
-run-name: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
+run-name: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || github.event.workflow_run.head_branch || 'manual' }}
 
 on:
   workflow_run:
@@ -8,6 +8,8 @@ on:
       - CI
     types:
       - completed
+    branches-ignore:
+      - main
   workflow_dispatch:
     inputs:
       pr_number:
@@ -55,6 +57,8 @@ jobs:
       db_name: pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
       project_name: budget-develop
       pr_number: ${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
+      domain_name: ${{ vars.PRODUCTION_DOMAIN }}
+      dns_zone: ${{ vars.DNS_ZONE }}
       git_ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event.inputs.ref || '' }}
       force_cleanup: ${{ github.event.inputs.force_cleanup == true }}
     secrets:

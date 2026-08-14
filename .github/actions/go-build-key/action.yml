@@ -1,0 +1,130 @@
+name: Go build key
+description: >-
+  Content hashes for Go build and Docker image tagging, plus whether Go sources
+  changed in this push (PR head vs its parent, or push vs github.event.before).
+
+inputs:
+  base-sha:
+    description: >-
+      Optional SHA to compare against. Overrides automatic base detection.
+    required: false
+    default: ''
+
+outputs:
+  go_build_key:
+    description: Hash of *.go, go.mod, and go.sum at HEAD (cache key for Go binary)
+    value: ${{ steps.compute.outputs.go_build_key }}
+  docker_build_key:
+    description: Hash of Dockerfile(s), Go sources, go.mod, and go.sum at HEAD
+    value: ${{ steps.compute.outputs.docker_build_key }}
+  go_sources_changed:
+    description: 'true when go_build_key differs from the base revision'
+    value: ${{ steps.compute.outputs.go_sources_changed }}
+  base_go_build_key:
+    description: go_build_key at the base revision (empty when no base)
+    value: ${{ steps.compute.outputs.base_go_build_key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute build keys
+      id: compute
+      shell: bash
+      env:
+        INPUT_BASE_SHA: ${{ inputs.base-sha }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        EVENT_BEFORE: ${{ github.event.before }}
+        EVENT_SHA: ${{ github.sha }}
+        BASE_REF: ${{ github.base_ref }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+
+        hash_tree_at_sha() {
+          local sha="$1"
+          local pattern="$2"
+          git ls-tree -r --name-only "$sha" | grep -E "$pattern" | while IFS= read -r f; do
+            git show "$sha:$f" | md5sum
+          done | sort | md5sum | awk '{print $1}'
+        }
+
+        compute_go_build_key() {
+          find . \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+            -not -path './.git/*' -type f -exec md5sum {} \; | sort | md5sum | awk '{print $1}'
+        }
+
+        compute_docker_build_key() {
+          find . \( -name 'Dockerfile*' -o -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+            -not -path './.git/*' -type f -exec md5sum {} \; | sort | md5sum | awk '{print $1}'
+        }
+
+        GO_FILE_PATTERN='(\.go$|^go\.mod$|^go\.sum$)'
+        DOCKER_FILE_PATTERN='(Dockerfile|\.go$|^go\.mod$|^go\.sum$)'
+
+        HEAD_SHA=""
+        COMPARE_MODE="none"
+        BASE_SHA=""
+
+        if [ -n "$INPUT_BASE_SHA" ]; then
+          BASE_SHA="$INPUT_BASE_SHA"
+          HEAD_SHA="$EVENT_SHA"
+          COMPARE_MODE="input"
+        elif [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_HEAD_SHA" ]; then
+          git fetch origin "pull/${PR_NUMBER}/head" --depth=50 2>/dev/null \
+            || git fetch origin "$PR_HEAD_REF" --depth=50 2>/dev/null \
+            || true
+          HEAD_SHA="$PR_HEAD_SHA"
+          PARENT_SHA=$(git rev-parse "${PR_HEAD_SHA}^" 2>/dev/null || echo "")
+          if [ -n "$PARENT_SHA" ] && git cat-file -e "$PARENT_SHA^{commit}" 2>/dev/null; then
+            BASE_SHA="$PARENT_SHA"
+            COMPARE_MODE="pr_parent"
+          elif [ -n "$BASE_REF" ]; then
+            git fetch origin "$BASE_REF" --depth=50 2>/dev/null || true
+            BASE_SHA=$(git merge-base "$PR_HEAD_SHA" "origin/$BASE_REF" 2>/dev/null || echo "")
+            COMPARE_MODE="pr_merge_base"
+          fi
+        elif [ "$EVENT_NAME" = "push" ]; then
+          HEAD_SHA="$EVENT_SHA"
+          if [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$EVENT_BEFORE"
+            COMPARE_MODE="push_before"
+          fi
+        fi
+
+        if [ -n "$HEAD_SHA" ] && git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+          HEAD_KEY=$(hash_tree_at_sha "$HEAD_SHA" "$GO_FILE_PATTERN")
+          DOCKER_KEY=$(hash_tree_at_sha "$HEAD_SHA" "$DOCKER_FILE_PATTERN")
+        else
+          HEAD_KEY=$(compute_go_build_key)
+          DOCKER_KEY=$(compute_docker_build_key)
+          HEAD_SHA="working-tree"
+        fi
+
+        GO_CHANGED=true
+        BASE_KEY=""
+        if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+          BASE_KEY=$(hash_tree_at_sha "$BASE_SHA" "$GO_FILE_PATTERN")
+          if [ "$HEAD_KEY" = "$BASE_KEY" ]; then
+            GO_CHANGED=false
+          fi
+        fi
+
+        echo "go_build_key=$HEAD_KEY" >> "$GITHUB_OUTPUT"
+        echo "docker_build_key=$DOCKER_KEY" >> "$GITHUB_OUTPUT"
+        echo "base_go_build_key=$BASE_KEY" >> "$GITHUB_OUTPUT"
+        echo "go_sources_changed=$GO_CHANGED" >> "$GITHUB_OUTPUT"
+
+        echo "Compare mode: $COMPARE_MODE"
+        echo "Head SHA: ${HEAD_SHA:-unknown}"
+        echo "Go build key (head): $HEAD_KEY"
+        echo "Docker build key (head): $DOCKER_KEY"
+        if [ -n "$BASE_SHA" ]; then
+          echo "Base SHA: $BASE_SHA"
+          echo "Go build key (base): $BASE_KEY"
+        else
+          echo "No base SHA — treating Go sources as changed"
+        fi
+        echo "Go sources changed: $GO_CHANGED"

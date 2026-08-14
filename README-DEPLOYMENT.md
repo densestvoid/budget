@@ -14,7 +14,7 @@ Automated deployment to DigitalOcean App Platform via GitHub Actions.
 
 ### PR environment
 
-Actions → **Deploy Budget App to DigitalOcean** → Run workflow
+Actions → **Deploy PR** → Run workflow
 
 | Input | Required | Description |
 |-------|----------|-------------|
@@ -26,7 +26,7 @@ Manual deploy skips CI.
 
 ### Production
 
-Actions → **Deploy to Production** → Run workflow
+Actions → **Deploy Prod** → Run workflow
 
 | Input | Required | Description |
 |-------|----------|-------------|
@@ -48,18 +48,16 @@ Actions → **Terminate PR Deployment** → Run workflow
 
 | Environment | Terraform dir | DO project | Auto-terminate | Domain |
 |-------------|---------------|------------|----------------|--------|
-| PR | `terraform/pr` | `budget-develop` | Yes (`termination-delay` env) | App Platform default URL |
+| PR | `terraform/pr` | `budget-develop` | Yes (`termination-delay` env) | `{deployment_id}.{PRODUCTION_DOMAIN}` when vars set |
 | Production | `terraform/production` | `budget-prod` | No | Optional (`PRODUCTION_DOMAIN` or workflow input) |
 
 PR deploy runs only when the PR head branch is not `main`. Production deploy runs on push to `main`.
 
-## Custom domain (production)
+## Custom domain
 
-Production does not manage DNS in Terraform. To use a custom domain:
+Set repository variables `PRODUCTION_DOMAIN` (hostname) and `DNS_ZONE` (DO DNS zone name). App Platform creates DNS records automatically. PR URLs use `{deployment_id}.{PRODUCTION_DOMAIN}`.
 
-1. Add the domain in DigitalOcean
-2. Configure DNS records outside Terraform (pointing to App Platform)
-3. Set repository variable `PRODUCTION_DOMAIN` or pass `domain_name` when running the production workflow manually
+Override production hostname per run via the Deploy Prod workflow `domain_name` input.
 
 Terraform only references the domain for outputs when configured.
 
@@ -67,7 +65,7 @@ Terraform only references the domain for outputs when configured.
 
 ```
 PR/main change → CI (go-checks)
-              → deploy.yml or deploy-production.yml
+              → deploy-pr.yml or deploy-production.yml
               → deploy-reusable.yml (build, Terraform, artifact)
               → notify-deployment.yml (PR comment + Slack)
               → terminate-pr-deployment.yml (PR only)

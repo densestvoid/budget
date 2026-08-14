@@ -1,4 +1,4 @@
-name: Deploy to Production
+name: Deploy Prod
 
 run-name: deploy-production
 
@@ -8,6 +8,8 @@ on:
       - CI
     types:
       - completed
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       ref:
@@ -29,7 +31,7 @@ env:
 
 jobs:
   deploy:
-    name: Deploy to Production
+    name: Deploy Prod
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -51,6 +53,7 @@ jobs:
       db_name: production
       project_name: budget-prod
       domain_name: ${{ inputs.domain_name || vars.PRODUCTION_DOMAIN }}
+      dns_zone: ${{ vars.DNS_ZONE }}
       git_ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
     secrets:
       DO_TOKEN: ${{ secrets.DO_TOKEN }}
