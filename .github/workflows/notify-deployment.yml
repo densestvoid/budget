@@ -222,6 +222,54 @@ jobs:
         DEPLOY_JOB=$(jq -r '.jobs.deploy' deploy-result.json)
         TERMINATION_TIME=$(jq -r '.termination_time // empty' deploy-result.json)
         TERMINATION_DELAY=$(jq -r '.termination_delay_minutes // empty' deploy-result.json)
+        SKIPPED=$(jq -r '.skipped // false' deploy-result.json)
+        SKIP_REASON=$(jq -r '.skip_reason // empty' deploy-result.json)
+        CHANGED_DEPLOYABLE=$(jq -r '.changed_deployable_files // empty' deploy-result.json)
+
+        if [ "$SKIPPED" = "true" ]; then
+          if [ "$TYPE" != "deploy_pr" ]; then
+            echo "Skipped deploy notification only applies to PR deploys"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_BODY="## ℹ️ PR Deploy Skipped
+
+        This branch has no Go, Docker, or Terraform changes relative to \`main\`. No PR environment will be created.
+
+        **Deployment:** ${DEPLOYMENT_ID}
+        **Reason:** ${SKIP_REASON:-no_deployable_changes}"
+
+          CHANGED_SUMMARY="${CHANGED_DEPLOYABLE:-none}"
+          jq -n \
+            --arg pr "$PR_NUMBER" \
+            --arg deployment "$DEPLOYMENT_ID" \
+            --arg reason "${SKIP_REASON:-no_deployable_changes}" \
+            --arg changed "$CHANGED_SUMMARY" \
+            --arg run "$RUN_URL" \
+            '{
+              text: "ℹ️ PR Deploy Skipped",
+              attachments: [{
+                color: "warning",
+                fields: [
+                  {title: "PR Number", value: $pr, short: true},
+                  {title: "Deployment ID", value: $deployment, short: true},
+                  {title: "Reason", value: $reason, short: true},
+                  {title: "Deployable files changed", value: $changed, short: false},
+                  {title: "Workflow Run", value: $run, short: false}
+                ]
+              }]
+            }' > slack-payload.json
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          {
+            echo "pr_body<<EOF"
+            echo "$PR_BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         if [ "$DEPLOYMENT_SUCCESS" = "true" ] && [ "$DEPLOY_JOB" = "success" ]; then
           if [ "$TYPE" = "deploy_pr" ]; then

@@ -1,6 +1,6 @@
 name: Deploy PR
 
-run-name: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || github.event.workflow_run.head_branch || 'manual' }}
+run-name: pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
 
 on:
   workflow_run:
@@ -27,20 +27,100 @@ on:
         default: false
 
 concurrency:
-  group: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
+  group: deploy-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 env:
   DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
 jobs:
-  deploy:
-    name: Deploy to DigitalOcean
+  check-deploy-needed:
+    name: Check Deploy Requirements
+    runs-on: ubuntu-latest
+    # Manual dispatch always allowed. Auto deploy only for same-repo PRs (not forks).
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.head_branch != 'main')
+       github.event.workflow_run.head_branch != 'main' &&
+       (github.event.workflow_run.head_repository == null ||
+        github.event.workflow_run.head_repository.full_name == github.repository) &&
+       github.event.workflow_run.pull_requests[0].number != '')
+    outputs:
+      should_deploy: ${{ steps.manual.outputs.should_deploy || steps.gate.outputs.should_deploy }}
+      changed_files: ${{ steps.manual.outputs.changed_files || steps.gate.outputs.changed_files }}
+      compare_base: ${{ steps.manual.outputs.compare_base || steps.gate.outputs.compare_base }}
+    steps:
+    - name: Manual deploy — always proceed
+      if: github.event_name == 'workflow_dispatch'
+      id: manual
+      run: |
+        echo "Manual workflow_dispatch — deploy gate bypassed"
+        echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+        echo "changed_files=" >> "$GITHUB_OUTPUT"
+        echo "compare_base=" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout PR head
+      if: github.event_name == 'workflow_run'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
+        fetch-depth: 0
+
+    - name: Check branch for deployable changes
+      if: github.event_name == 'workflow_run'
+      id: gate
+      run: |
+        set -euo pipefail
+
+        is_deployable_path() {
+          case "$1" in
+            *.go|go.mod|go.sum) return 0 ;;
+            data/migrations/*) return 0 ;;
+            Dockerfile|.dockerignore) return 0 ;;
+            Dockerfile.*) return 0 ;;
+            terraform/*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+
+        git fetch origin main
+
+        if ! COMPARE_BASE=$(git merge-base HEAD origin/main); then
+          echo "Could not resolve merge-base with origin/main — defaulting to deploy"
+          echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          echo "changed_files=" >> "$GITHUB_OUTPUT"
+          echo "compare_base=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "Compare base (merge-base with main): ${COMPARE_BASE}"
+        echo "compare_base=${COMPARE_BASE}" >> "$GITHUB_OUTPUT"
+
+        DEPLOYABLE_FILES=()
+        while IFS= read -r file; do
+          [ -z "$file" ] && continue
+          if is_deployable_path "$file"; then
+            DEPLOYABLE_FILES+=("$file")
+          fi
+        done < <(git diff --name-only "$COMPARE_BASE" HEAD)
+
+        if [ "${#DEPLOYABLE_FILES[@]}" -gt 0 ]; then
+          echo "Deployable changes found on branch:"
+          printf '  - %s\n' "${DEPLOYABLE_FILES[@]}"
+          CHANGED=$(IFS=,; echo "${DEPLOYABLE_FILES[*]}")
+          echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          echo "changed_files=${CHANGED}" >> "$GITHUB_OUTPUT"
+        else
+          echo "No deployable changes relative to main — skipping PR deploy"
+          echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          echo "changed_files=" >> "$GITHUB_OUTPUT"
+        fi
+
+  deploy:
+    name: Deploy to DigitalOcean
+    needs: check-deploy-needed
+    if: needs.check-deploy-needed.outputs.should_deploy == 'true'
     permissions:
       contents: read
       packages: write
@@ -58,7 +138,6 @@ jobs:
       project_name: budget-develop
       pr_number: ${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number }}
       domain_name: ${{ vars.PRODUCTION_DOMAIN }}
-      dns_zone: ${{ vars.DNS_ZONE }}
       git_ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event.inputs.ref || '' }}
       force_cleanup: ${{ github.event.inputs.force_cleanup == true }}
     secrets:
@@ -66,3 +145,56 @@ jobs:
       TERRAFORM_AWS_S3_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY }}
       TERRAFORM_AWS_S3_ACCESS_KEY_SECRET: ${{ secrets.TERRAFORM_AWS_S3_ACCESS_KEY_SECRET }}
       TERRAFORM_AWS_S3_REGION: ${{ secrets.TERRAFORM_AWS_S3_REGION }}
+
+  publish-skip-result:
+    name: Publish Skip Result
+    needs: check-deploy-needed
+    if: |
+      needs.check-deploy-needed.outputs.should_deploy != 'true' &&
+      github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Build deploy-result.json
+      env:
+        PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        DEPLOYMENT_ID: pr-${{ github.event.workflow_run.pull_requests[0].number }}
+        GIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        CHANGED_FILES: ${{ needs.check-deploy-needed.outputs.changed_files }}
+        COMPARE_BASE: ${{ needs.check-deploy-needed.outputs.compare_base }}
+      run: |
+        cat > deploy-result.json << EOF
+        {
+          "environment": "pr",
+          "deployment_id": "${DEPLOYMENT_ID}",
+          "pr_number": "${PR_NUMBER}",
+          "deployment_success": false,
+          "skipped": true,
+          "skip_reason": "no_deployable_changes",
+          "changed_deployable_files": "${CHANGED_FILES}",
+          "compare_base": "${COMPARE_BASE}",
+          "app_url": "",
+          "app_id": "",
+          "migration_app_id": "",
+          "image_tag": "",
+          "git_sha": "${GIT_SHA}",
+          "termination_time": "",
+          "termination_delay_minutes": "",
+          "jobs": {
+            "pre_cleanup": "skipped",
+            "check_builds": "skipped",
+            "build_go": "skipped",
+            "build_docker": "skipped",
+            "deploy": "skipped"
+          }
+        }
+        EOF
+
+        echo "Deploy skipped — no deployable branch changes:"
+        cat deploy-result.json
+
+    - name: Upload deploy-result artifact
+      uses: actions/upload-artifact@v6
+      with:
+        name: deploy-result
+        path: deploy-result.json
+        retention-days: 7

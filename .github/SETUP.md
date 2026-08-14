@@ -27,8 +27,7 @@ Configure under **Settings → Secrets and variables → Actions → Variables**
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `PRODUCTION_DOMAIN` | PR + production | Hostname for production; PR deploys use `{deployment_id}.{PRODUCTION_DOMAIN}`. |
-| `DNS_ZONE` | PR + production | DigitalOcean DNS zone for App Platform–managed records. Must exist on your DO account. |
+| `PRODUCTION_DOMAIN` | PR + production | App hostname and DO DNS zone (e.g. `budget.example.com`). Zone must exist in **Networking → Domains**. PR URLs use `{deployment_id}.{PRODUCTION_DOMAIN}`. Delegated NS at registrar must point at DO. |
 | `TERMINATION_DELAY_MINUTES` | PR deploy (optional) | Overrides `termination-delay` environment wait timer when computing scheduled termination UTC in notifications |
 
 You can override `PRODUCTION_DOMAIN` per run via the production workflow's `domain_name` input.
@@ -55,7 +54,8 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 - Project `budget-prod` (production)
 - S3 bucket `densestvoid-terraform` for Terraform state
 - GHCR package access for `ghcr.io/<org>/budget/budget-app`
-- Optional: custom domain added in DigitalOcean (referenced via `PRODUCTION_DOMAIN`)
+- DNS zone for `PRODUCTION_DOMAIN` in **Networking → Domains** (create manually before first deploy with custom domain)
+- Optional: `PRODUCTION_DOMAIN` repository variable set to that zone name
 
 ## Workflows
 
@@ -70,10 +70,14 @@ See [ENVIRONMENT-SETUP.md](ENVIRONMENT-SETUP.md) for details.
 
 ### Automatic triggers
 
-- **PR**: Push to a PR branch runs CI. When CI passes, PR deploy runs automatically (head branch must not be `main`).
+- **PR**: Push to a PR branch runs CI. When CI passes, PR deploy runs automatically **only if the branch has deployable changes relative to `main`** (Go sources, `go.mod`/`go.sum`, embedded migrations, Docker files, or Terraform). Docs-, workflow-, and config-only PRs skip deploy and post a skip notification (PR comment + Slack). Manual `workflow_dispatch` always deploys.
 - **Production**: Push to `main` runs CI. When CI passes, production deploy runs automatically.
-- **PR teardown**: When a PR deploy completes, terminate runs — scheduled wait after success, immediate cleanup after failure.
+- **PR teardown**: When a PR deploy completes (success or failure), terminate runs — scheduled wait after success, immediate cleanup after failure. Skipped deploys do not trigger termination.
 - **Notifications**: Notify runs after every deploy and terminate completion (PR comment + Slack or Slack only).
+
+**Deployable paths** (branch diff vs `main`): `**/*.go`, `go.mod`, `go.sum`, `data/migrations/**`, `Dockerfile*`, `.dockerignore`, `terraform/**`.
+
+**Excluded** (no PR environment): `.github/**`, `**/*.md`, `.cursor/**`, local dev files (`Taskfile.yml`, `docker-compose.yml`, `.air.toml`), `config.yaml`, `env.example`, `.golangci.yml`, `scripts/**`, `.do/**`, `LICENSE`.
 
 `workflow_run` listener workflows must exist on the default branch to fire.
 

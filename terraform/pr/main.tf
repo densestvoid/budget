@@ -35,8 +35,6 @@ locals {
   vpc_second   = floor(local.vpc_slot / 254) + 1
   vpc_third    = local.vpc_slot % 254
   vpc_ip_range = format("10.%d.%d.0/24", local.vpc_second, local.vpc_third)
-
-  app_hostname = var.base_domain != "" ? "${var.deployment_id}.${var.base_domain}" : ""
 }
 
 # Reference existing DigitalOcean project
@@ -149,8 +147,10 @@ module "budget_app" {
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
 
-  app_hostname = local.app_hostname
-  dns_zone     = var.dns_zone
+  domain = var.base_domain != "" ? {
+    hostname = "${var.deployment_id}.${var.base_domain}"
+    zone     = var.base_domain
+  } : null
 
   # VPC configuration - use the VPC created above
   vpc_id = digitalocean_vpc.budget_vpc.id
@@ -163,6 +163,5 @@ module "budget_app" {
   database_private_host  = digitalocean_database_cluster.budget_db.private_host
   database_port          = digitalocean_database_cluster.budget_db.port
 
-  # Ensure schema setup completes before module is instantiated (and migrations run)
   depends_on = [null_resource.database_schema_setup]
 }

@@ -53,7 +53,6 @@ jobs:
       db_name: production
       project_name: budget-prod
       domain_name: ${{ inputs.domain_name || vars.PRODUCTION_DOMAIN }}
-      dns_zone: ${{ vars.DNS_ZONE }}
       git_ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
     secrets:
       DO_TOKEN: ${{ secrets.DO_TOKEN }}

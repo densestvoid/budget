@@ -20,7 +20,7 @@ PR deployments auto-terminate after the `termination-delay` environment wait tim
 ### Setup
 
 1. Add repository secrets (see [.github/SETUP.md](.github/SETUP.md))
-2. Set `PRODUCTION_DOMAIN` variable if using a custom production domain
+2. Add the DNS zone in **DigitalOcean → Networking → Domains** (must match `PRODUCTION_DOMAIN`), then set the `PRODUCTION_DOMAIN` repository variable
 3. Create the `termination-delay` GitHub environment
 4. Require **CI / Run Go Checks** in branch protection (not deploy workflows)
 
