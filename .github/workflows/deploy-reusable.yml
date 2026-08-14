@@ -51,10 +51,6 @@ on:
         description: 'Hostname for production, or base hostname for PR ({deployment_id}.{hostname})'
         required: false
         type: string
-      dns_zone:
-        description: 'DigitalOcean DNS zone for DO-managed records'
-        required: false
-        type: string
       git_ref:
         description: 'Git ref to checkout (optional; defaults to the triggering ref)'
         required: false
@@ -611,8 +607,10 @@ jobs:
           echo "domain_name = \"${{ inputs.domain_name }}\"" >> terraform.tfvars
         fi
 
-        if [ -n "${{ inputs.dns_zone }}" ]; then
-          echo "dns_zone = \"${{ inputs.dns_zone }}\"" >> terraform.tfvars
+        if [ -n "${{ inputs.domain_name }}" ]; then
+          echo "🌐 Custom domain: ${{ inputs.domain_name }} (DO-managed DNS zone + App Platform hostname)"
+        else
+          echo "ℹ️ No custom domain configured — app will use default ondigitalocean.app URL"
         fi
         
         echo "✅ Terraform configuration prepared"

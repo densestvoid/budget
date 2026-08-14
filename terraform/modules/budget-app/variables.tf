@@ -72,15 +72,17 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "app_hostname" {
-  description = "Custom hostname for the app (e.g. budget.example.com or pr-11.budget.example.com). Leave empty for default ondigitalocean.app URL."
-  type        = string
-  default     = ""
-}
+variable "domain" {
+  description = "Custom hostname in a pre-existing DO DNS zone (Networking → Domains). Omit for default ondigitalocean.app URL."
+  type = object({
+    hostname = string
+    zone     = string
+  })
+  default = null
 
-variable "dns_zone" {
-  description = "DigitalOcean DNS zone for automatic record management (e.g. example.com). Required when app_hostname is set."
-  type        = string
-  default     = ""
+  validation {
+    condition     = var.domain == null || (var.domain.hostname != "" && var.domain.zone != "")
+    error_message = "domain.hostname and domain.zone must both be non-empty when domain is set."
+  }
 }
 

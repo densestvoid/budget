@@ -1,6 +1,6 @@
 name: Terminate PR Deployment
 
-run-name: terminate-pr-${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number || 'run' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('pr-{0}', github.event.inputs.pr_number) || github.event.workflow_run.name }}
 
 on:
   workflow_run:
@@ -8,6 +8,8 @@ on:
       - Deploy PR
     types:
       - completed
+    branches-ignore:
+      - main
   workflow_dispatch:
     inputs:
       pr_number:
@@ -21,7 +23,7 @@ on:
         default: true
 
 concurrency:
-  group: terminate-pr-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number || 'unknown' }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('terminate-pr-{0}', github.event.inputs.pr_number) || format('terminate-{0}', github.event.workflow_run.name) }}
   cancel-in-progress: true
 
 env:

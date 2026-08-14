@@ -31,8 +31,7 @@ locals {
 # VPC is always provided by the parent configuration
 # This module expects vpc_id to always be set (not null)
 locals {
-  vpc_id         = var.vpc_id
-  app_public_url = var.app_hostname != "" ? "https://${var.app_hostname}" : ""
+  vpc_id = var.vpc_id
 }
 
 # Reference existing DigitalOcean project
@@ -165,20 +164,29 @@ resource "digitalocean_app" "budget_migrations" {
   }
 }
 
+# Pre-existing DO DNS zone; must be created manually under Networking → Domains.
+data "digitalocean_domain" "zone" {
+  count = var.domain != null ? 1 : 0
+  name  = var.domain.zone
+}
+
 # Create main application after migrations complete
 resource "digitalocean_app" "budget_app" {
-  depends_on = [digitalocean_app.budget_migrations]
+  depends_on = [
+    digitalocean_app.budget_migrations,
+    data.digitalocean_domain.zone,
+  ]
 
   spec {
     name   = var.deployment_id
     region = var.region
 
     dynamic "domain" {
-      for_each = var.app_hostname != "" && var.dns_zone != "" ? [1] : []
+      for_each = var.domain != null ? [var.domain] : []
       content {
-        name = var.app_hostname
+        name = domain.value.hostname
         type = "PRIMARY"
-        zone = var.dns_zone
+        zone = domain.value.zone
       }
     }
 

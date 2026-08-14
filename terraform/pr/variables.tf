@@ -31,13 +31,7 @@ variable "docker_image_tag" {
 }
 
 variable "base_domain" {
-  description = "Base hostname for PR apps. PR URL becomes {deployment_id}.{base_domain}."
-  type        = string
-  default     = ""
-}
-
-variable "dns_zone" {
-  description = "DigitalOcean DNS zone for automatic record management"
+  description = "DO DNS zone and base hostname for PR apps ({deployment_id}.{base_domain}). Set via PRODUCTION_DOMAIN."
   type        = string
   default     = ""
 }

@@ -25,13 +25,7 @@ variable "docker_image_tag" {
 }
 
 variable "domain_name" {
-  description = "Production app hostname. DO-managed DNS when dns_zone is set."
-  type        = string
-  default     = ""
-}
-
-variable "dns_zone" {
-  description = "DigitalOcean DNS zone for automatic record management"
+  description = "Production hostname and DO DNS zone (e.g. budget.example.com). Zone must exist in DO Networking → Domains."
   type        = string
   default     = ""
 }

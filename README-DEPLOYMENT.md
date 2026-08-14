@@ -55,11 +55,11 @@ PR deploy runs only when the PR head branch is not `main`. Production deploy run
 
 ## Custom domain
 
-Set repository variables `PRODUCTION_DOMAIN` (hostname) and `DNS_ZONE` (DO DNS zone name). App Platform creates DNS records automatically. PR URLs use `{deployment_id}.{PRODUCTION_DOMAIN}`.
+Set repository variable `PRODUCTION_DOMAIN` (hostname and DO DNS zone). App Platform creates DNS records automatically. PR URLs use `{deployment_id}.{PRODUCTION_DOMAIN}`.
 
 Override production hostname per run via the Deploy Prod workflow `domain_name` input.
 
-Terraform only references the domain for outputs when configured.
+The DNS zone must exist in **DO Networking → Domains** before deploy. Terraform attaches the hostname and App Platform creates records in that zone.
 
 ## Pipeline overview
 

@@ -137,12 +137,6 @@ SQL
   }
 }
 
-# Reference existing DigitalOcean domain when configured without DO-managed zone (legacy / informational)
-data "digitalocean_domain" "existing_domain" {
-  count = var.domain_name != "" && var.dns_zone == "" ? 1 : 0
-  name  = var.domain_name
-}
-
 # Use the budget-app module
 module "budget_app" {
   source = "../modules/budget-app"
@@ -154,8 +148,10 @@ module "budget_app" {
   # github_repo is auto-detected from GITHUB_REPOSITORY env var in the module
   docker_image_tag = var.docker_image_tag
 
-  app_hostname = var.domain_name
-  dns_zone     = var.dns_zone
+  domain = var.domain_name != "" ? {
+    hostname = var.domain_name
+    zone     = var.domain_name
+  } : null
 
   # Database configuration
   database_cluster_id    = digitalocean_database_cluster.budget_db.id
@@ -168,7 +164,6 @@ module "budget_app" {
   # Use the same VPC as the database for private networking
   vpc_id = digitalocean_vpc.budget_vpc.id
 
-  # Ensure schema setup completes before module is instantiated (and migrations run)
   depends_on = [null_resource.database_schema_setup]
 }
 
@@ -185,6 +180,5 @@ resource "digitalocean_project_resources" "production_database" {
   ]
 }
 
-# Note: When dns_zone is set, App Platform manages DNS records for app_hostname automatically.
-# The data source above is only used when dns_zone is empty (legacy external DNS).
+# When domain_name is set, App Platform manages DNS records in the pre-existing DO zone.
 
