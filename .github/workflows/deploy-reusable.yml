@@ -490,6 +490,8 @@ jobs:
       app_url: ${{ steps.deploy.outputs.app_url }}
       app_id: ${{ steps.deploy.outputs.app_id }}
       migration_app_id: ${{ steps.deploy.outputs.migration_app_id }}
+      termination_time: ${{ steps.termination_time.outputs.termination_time }}
+      termination_delay_minutes: ${{ steps.termination_time.outputs.termination_delay_minutes }}
     
     permissions:
       contents: read
@@ -824,6 +826,47 @@ jobs:
           echo "⚠️ No application URL available for health check"
         fi
 
+    - name: Resolve termination delay
+      id: termination_delay
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const delayFromVar = '${{ vars.TERMINATION_DELAY_MINUTES }}'.trim();
+
+          if (delayFromVar) {
+            core.setOutput('minutes', delayFromVar);
+            core.info(`Using TERMINATION_DELAY_MINUTES repository variable: ${delayFromVar} minutes`);
+            return;
+          }
+
+          try {
+            const { data } = await github.rest.repos.getEnvironment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment_name: 'termination-delay'
+            });
+            const waitRule = data.protection_rules?.find(rule => rule.type === 'wait_timer');
+            const minutes = waitRule?.wait_timer ?? 30;
+            core.setOutput('minutes', String(minutes));
+            core.info(`Using termination-delay environment wait timer: ${minutes} minutes`);
+          } catch (error) {
+            core.warning(`Could not read termination-delay environment wait timer, defaulting to 30 minutes: ${error.message}`);
+            core.setOutput('minutes', '30');
+          }
+
+    - name: Calculate termination time
+      id: termination_time
+      if: steps.deploy.outputs.deployment_success == 'true' && inputs.environment == 'pr'
+      env:
+        DELAY_MINUTES: ${{ steps.termination_delay.outputs.minutes }}
+      run: |
+        TERMINATION_TIME=$(date -d "+${DELAY_MINUTES} minutes" -u +'%Y-%m-%dT%H:%M:%SZ')
+        echo "termination_time=${TERMINATION_TIME}" >> "$GITHUB_OUTPUT"
+        echo "termination_delay_minutes=${DELAY_MINUTES}" >> "$GITHUB_OUTPUT"
+        echo "Auto-termination scheduled at ${TERMINATION_TIME} UTC (${DELAY_MINUTES} minutes from deploy completion)"
+
   publish-results:
     name: Publish Deploy Result
     needs: [pre-cleanup, check-builds, build-go, build-docker, deploy]
@@ -839,6 +882,8 @@ jobs:
         APP_ID: ${{ needs.deploy.outputs.app_id }}
         MIGRATION_APP_ID: ${{ needs.deploy.outputs.migration_app_id }}
         IMAGE_TAG: ${{ needs.check-builds.outputs.image_tag }}
+        TERMINATION_TIME: ${{ needs.deploy.outputs.termination_time }}
+        TERMINATION_DELAY_MINUTES: ${{ needs.deploy.outputs.termination_delay_minutes }}
       run: |
         if [ "${{ needs.deploy.result }}" != "success" ]; then
           SUCCESS_JSON=false
@@ -859,6 +904,8 @@ jobs:
           "migration_app_id": "${MIGRATION_APP_ID}",
           "image_tag": "${IMAGE_TAG}",
           "git_sha": "${{ github.sha }}",
+          "termination_time": "${TERMINATION_TIME}",
+          "termination_delay_minutes": "${TERMINATION_DELAY_MINUTES}",
           "jobs": {
             "pre_cleanup": "${{ needs.pre-cleanup.result }}",
             "check_builds": "${{ needs.check-builds.result }}",

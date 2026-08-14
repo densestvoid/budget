@@ -222,22 +222,35 @@ jobs:
         BUILD_GO=$(jq -r '.jobs.build_go' deploy-result.json)
         BUILD_DOCKER=$(jq -r '.jobs.build_docker' deploy-result.json)
         DEPLOY_JOB=$(jq -r '.jobs.deploy' deploy-result.json)
+        TERMINATION_TIME=$(jq -r '.termination_time // empty' deploy-result.json)
+        TERMINATION_DELAY=$(jq -r '.termination_delay_minutes // empty' deploy-result.json)
 
         if [ "$DEPLOYMENT_SUCCESS" = "true" ] && [ "$DEPLOY_JOB" = "success" ]; then
           if [ "$TYPE" = "deploy_pr" ]; then
+            if [ -n "$TERMINATION_TIME" ]; then
+              AUTO_TERM_LINE="**Auto-termination:** ${TERMINATION_TIME} UTC (${TERMINATION_DELAY:-?} min after deploy)"
+              TERM_SLACK="${TERMINATION_TIME} UTC"
+              if [ -n "$TERMINATION_DELAY" ]; then
+                TERM_SLACK="${TERM_SLACK} (${TERMINATION_DELAY} min)"
+              fi
+            else
+              AUTO_TERM_LINE="**Auto-termination:** Scheduled via the \`termination-delay\` environment wait timer"
+              TERM_SLACK="termination-delay wait timer"
+            fi
             PR_BODY="## ✅ Deployment Successful
 
         **URL:** ${APP_URL:-N/A}
         **App ID:** ${APP_ID:-N/A}
         **Migration ID:** ${MIGRATION_APP_ID:-N/A}
         **Deployment:** ${DEPLOYMENT_ID}
-        **Auto-termination:** Scheduled via the \`termination-delay\` environment wait timer"
+        ${AUTO_TERM_LINE}"
             jq -n \
               --arg pr "$PR_NUMBER" \
               --arg deployment "$DEPLOYMENT_ID" \
               --arg url "$APP_URL" \
               --arg app "$APP_ID" \
               --arg run "$RUN_URL" \
+              --arg term "$TERM_SLACK" \
               '{
                 text: "✅ PR Deployment Successful",
                 attachments: [{
@@ -247,6 +260,7 @@ jobs:
                     {title: "Deployment ID", value: $deployment, short: true},
                     {title: "Application URL", value: $url, short: false},
                     {title: "App ID", value: $app, short: true},
+                    {title: "Terminates (UTC)", value: $term, short: true},
                     {title: "Workflow Run", value: $run, short: false}
                   ]
                 }]
