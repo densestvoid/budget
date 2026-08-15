@@ -88,7 +88,7 @@ Workflows with `workflow_dispatch` must be run from a branch that contains the w
 
 - `pr_number` — PR number to deploy (required)
 - `ref` — optional git ref to build from
-- `force_cleanup` — destroy existing PR resources before deploying
+- `force_cleanup` — destroy existing PR resources recorded in S3 state before deploying (does not recover from manually deleted state files)
 
 Manual PR deploy does **not** run CI — use only for redeploy/debug.
 
