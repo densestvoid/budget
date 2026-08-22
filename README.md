@@ -19,9 +19,9 @@ A modern budget management web application built with Go, featuring Chi router, 
 
 ## Prerequisites
 
-- Go 1.24 or later
-- PostgreSQL
-- Docker (optional)
+- Go 1.26 or later
+- PostgreSQL (for local development without Docker)
+- Docker (recommended for local development)
 
 ## Quick Start
 
@@ -31,25 +31,18 @@ A modern budget management web application built with Go, featuring Chi router, 
    cd budget
    ```
 
-2. **Set up the database**
+2. **Start the full dev stack (recommended)**
    ```bash
-   # Using Docker Compose (recommended)
-   go tool task docker-run
-   
-   # Or manually start PostgreSQL and run migrations
-   go tool task migrate-up
+   go tool task dev
    ```
 
-3. **Run the application**
+   This starts PostgreSQL, runs Goose migrations, and launches the app via Docker Compose.
+
+3. **Or run locally without Docker**
    ```bash
-   # Development mode with live reload
-   go tool task watch
-   
-   # Or standard development mode
-   go tool task dev
-   
-   # Or build and run
-   go tool task run
+   # Start PostgreSQL, then run migrations and the app on the host
+   go tool task migrate-up
+   go tool task dev-local
    ```
 
 4. **Access the application**
@@ -64,7 +57,8 @@ A modern budget management web application built with Go, featuring Chi router, 
 # Build and run
 go tool task build      # Build the application
 go tool task run        # Run the built application
-go tool task dev        # Run in development mode
+go tool task dev        # Run with Docker Compose (postgres, migrations, app)
+go tool task dev-local  # Run locally without Docker (requires local postgres)
 go tool task watch      # Run with live reload using Air
 
 # Database operations
@@ -83,8 +77,8 @@ go tool task lint-govulncheck # Run govulncheck
 go tool task test       # Run tests
 
 # Docker
-go tool task docker-build # Build Docker image
-go tool task docker-run   # Run with Docker Compose
+go tool task docker-build # Build production Docker image
+go tool task docker-run   # Alias for dev (Docker Compose)
 
 # Utilities
 go tool task clean      # Clean build artifacts
@@ -177,8 +171,9 @@ budget/
 │   └── css/
 │       └── app.css
 ├── config.yaml            # Default configuration
-├── docker-compose.yml     # Docker Compose setup
-├── Dockerfile             # Docker image definition
+├── docker-compose.yml     # Local dev stack (postgres, migrations, app)
+├── Dockerfile             # Production Docker image definition
+├── Dockerfile.migrate     # Docker image for running migrations in compose
 ├── go.mod                 # Go module file
 ├── go.sum                 # Go module checksums
 ├── main.go                # Application entry point
@@ -227,12 +222,14 @@ go run main.go migrate status
 ### Using Docker Compose
 
 ```bash
-# Start all services (PostgreSQL + App)
-go tool task docker-run
+# Start all services (PostgreSQL, migrations, app)
+go tool task dev
 
 # Or manually
 docker-compose up --build
 ```
+
+The compose stack runs in order: Postgres becomes healthy, the migrate service applies pending Goose migrations, then the app starts. The app service uses the `builder` stage from `Dockerfile` so `go run` works with the mounted source tree.
 
 ### Building Docker Image
 
@@ -242,7 +239,7 @@ go tool task docker-build
 
 ## Technologies
 
-- **Go 1.24+**: Backend language
+- **Go 1.26+**: Backend language
 - **Chi**: HTTP router and middleware
 - **PostgreSQL**: Database
 - **Goose**: Embedded database migrations
