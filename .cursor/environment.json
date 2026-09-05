@@ -1,0 +1,16 @@
+{
+  "name": "Budget App",
+  "install": "./.cursor/install.sh",
+  "start": "./.cursor/start.sh",
+  "terminals": [
+    {
+      "name": "budget-app",
+      "command": "go tool air",
+      "description": "Budget web server with live reload (Air). Serves the app on http://localhost:8080 and rebuilds on file changes."
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 8080 },
+    { "name": "postgres", "port": 5432 }
+  ]
+}
