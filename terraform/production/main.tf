@@ -84,60 +84,6 @@ resource "digitalocean_database_user" "budget_user" {
   }
 }
 
-# Create budget schema and grant privileges using null_resource
-resource "null_resource" "database_schema_setup" {
-  depends_on = [
-    digitalocean_database_cluster.budget_db,
-    digitalocean_database_db.budget_database,
-    digitalocean_database_user.budget_user
-  ]
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "🔍 Checking if database schema exists (first deployment check)..."
-      
-      # Install postgresql-client if not available
-      which psql || (echo "Installing postgresql-client..." && apt-get update && apt-get install -y postgresql-client)
-      
-      # Connect as admin user to check if schema exists
-      ADMIN_URL="postgres://${digitalocean_database_cluster.budget_db.user}:${digitalocean_database_cluster.budget_db.password}@${digitalocean_database_cluster.budget_db.host}:${digitalocean_database_cluster.budget_db.port}/${digitalocean_database_db.budget_database.name}?sslmode=require"
-      
-      # Check if budget schema exists
-      SCHEMA_EXISTS=$(psql "$ADMIN_URL" -tAc "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'budget');" 2>/dev/null || echo "f")
-      
-      if [ "$SCHEMA_EXISTS" = "t" ]; then
-        echo "✅ Budget schema already exists - skipping schema setup (not first deployment)"
-        echo "ℹ️ Schema migrations will run via migration app"
-      else
-        echo "🗄️ First deployment detected - setting up database schema and permissions..."
-        
-        psql "$ADMIN_URL" <<SQL
-          -- Create budget schema
-          CREATE SCHEMA budget;
-          
-          -- Grant all privileges on budget schema ONLY to our user
-          GRANT ALL PRIVILEGES ON SCHEMA budget TO "${digitalocean_database_user.budget_user.name}";
-          
-          -- Set default privileges for future tables in budget schema
-          ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON TABLES TO "${digitalocean_database_user.budget_user.name}";
-          ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON SEQUENCES TO "${digitalocean_database_user.budget_user.name}";
-          ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT ALL ON FUNCTIONS TO "${digitalocean_database_user.budget_user.name}";
-          
-          -- Make budget user the owner of budget schema
-          ALTER SCHEMA budget OWNER TO "${digitalocean_database_user.budget_user.name}";
-SQL
-        
-        if [ $? -eq 0 ]; then
-          echo "✅ Database schema and permissions configured successfully (first deployment)"
-        else
-          echo "❌ Failed to configure database schema and permissions"
-          exit 1
-        fi
-      fi
-    EOT
-  }
-}
-
 # Use the budget-app module
 module "budget_app" {
   source = "../modules/budget-app"
@@ -161,11 +107,11 @@ module "budget_app" {
   database_user_password = digitalocean_database_user.budget_user.password
   database_private_host  = digitalocean_database_cluster.budget_db.private_host
   database_port          = digitalocean_database_cluster.budget_db.port
+  database_admin_user     = digitalocean_database_cluster.budget_db.user
+  database_admin_password = digitalocean_database_cluster.budget_db.password
 
   # Use the same VPC as the database for private networking
   vpc_id = digitalocean_vpc.budget_vpc.id
-
-  depends_on = [null_resource.database_schema_setup]
 }
 
 # Assign database cluster to the budget-prod project

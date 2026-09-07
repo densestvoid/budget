@@ -153,6 +153,13 @@ resource "digitalocean_app" "budget_migrations" {
       }
 
       env {
+        key   = "BUDGET_DATABASE_ADMIN_URL"
+        value = "postgres://${var.database_admin_user}:${var.database_admin_password}@${var.database_private_host}:${var.database_port}/${var.database_name}?sslmode=require"
+        scope = "RUN_TIME"
+        type  = "SECRET"
+      }
+
+      env {
         key   = "BUDGET_ENV"
         value = "production"
         scope = "RUN_TIME"
@@ -258,6 +265,27 @@ resource "digitalocean_app" "budget_app" {
       http_port = 8080
     }
   }
+}
+
+# Restrict public database access to App Platform components only.
+# Private VPC connections are used for runtime database traffic.
+resource "digitalocean_database_firewall" "budget_db" {
+  cluster_id = var.database_cluster_id
+
+  rule {
+    type  = "app"
+    value = digitalocean_app.budget_migrations.id
+  }
+
+  rule {
+    type  = "app"
+    value = digitalocean_app.budget_app.id
+  }
+
+  depends_on = [
+    digitalocean_app.budget_migrations,
+    digitalocean_app.budget_app,
+  ]
 }
 
 # Assign resources to the existing project

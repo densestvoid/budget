@@ -16,6 +16,11 @@ func runMigration(operation func(*data.Storage) error, operationName string) err
 		dsn = defaultLocalDSN
 	}
 
+	adminDSN := viper.GetString("DATABASE_ADMIN_URL")
+	if err := data.BootstrapSchema(dsn, adminDSN); err != nil {
+		return fmt.Errorf("database bootstrap failed: %w", err)
+	}
+
 	// Initialize migrations
 	data.InitMigrations()
 

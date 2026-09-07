@@ -69,7 +69,9 @@ The deploy workflow checks `GET /health` after deployment. A `200` or `204` resp
 
 ## Security
 
-- Database accessible only via VPC private networking
+- Database traffic uses VPC private networking (`private_host`); App Platform components run in the same VPC
+- Public database access is restricted via `digitalocean_database_firewall` to App Platform apps only
+- First-deploy schema bootstrap runs in the migration job (not from CI/Terraform) using a one-time admin connection over the private endpoint
 - No SSH access — fully managed platform
 - PR resources destroyed after 30 minutes
 - Production database has `prevent_destroy` in Terraform

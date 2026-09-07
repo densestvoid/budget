@@ -67,6 +67,17 @@ variable "database_port" {
   type        = number
 }
 
+variable "database_admin_user" {
+  description = "Cluster admin username for first-deploy schema bootstrap (migration job only)"
+  type        = string
+}
+
+variable "database_admin_password" {
+  description = "Cluster admin password for first-deploy schema bootstrap (migration job only)"
+  type        = string
+  sensitive   = true
+}
+
 variable "vpc_id" {
   description = "VPC ID for private networking (must be provided by parent configuration)"
   type        = string

@@ -133,7 +133,7 @@ PR deployments are ephemeral (duration set by the `termination-delay` environmen
 ## Security
 
 - Secrets are only available inside GitHub Actions
-- Database runs on a private VPC endpoint
+- Database runs on a private VPC endpoint; public access is limited to App Platform apps via firewall rules
 - No SSH or droplet access — fully managed App Platform
 - PR deployments are destroyed automatically
 
